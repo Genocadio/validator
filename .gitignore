@@ -1,0 +1,55 @@
+gitignore
+# IDE specific files
+*.iml
+.gradle
+/local.properties
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+
+# Compiled AAR libraries (if you have them locally)
+app/libs/*.aar
+
+# macOS specific files
+.DS_Store
+
+# Build output
+/build
+
+# Captures (e.g., screenshots, emulator snapshots)
+/captures
+
+# External native build output
+.externalNativeBuild
+.cxx
+
+# Local properties (sensitive information, API keys, etc.)
+local.properties
+
+# Android Studio profiling data
+*.hprof
+*.snapshot
+
+# Keystore files (should never be committed)
+*.jks
+*.keystore
+
+# Signed APKs and bundles
+*.apk
+*.aab
+
+# Lint results
+lint-results-*.xml
+lint-results-*.html
+
+# Test reports
+/app/build/reports/
+/app/build/test-results/
+
+# Gradle build caches
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar # Keep the wrapper jar

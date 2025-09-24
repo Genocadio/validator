@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:gravity="center"
+    android:background="#2196F3"
+    android:padding="32dp">
+
+    <!-- Ticket Icon -->
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="🎫"
+        android:textSize="64sp"
+        android:layout_marginBottom="24dp" />
+
+    <!-- Ticket Display Text -->
+    <TextView
+        android:id="@+id/ticketDisplayText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Existing Ticket Found!"
+        android:textSize="24sp"
+        android:textStyle="bold"
+        android:textColor="@android:color/white"
+        android:gravity="center"
+        android:layout_marginBottom="16dp" />
+
+    <!-- Route Information -->
+    <TextView
+        android:id="@+id/routeInfoText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="From A to B"
+        android:textSize="18sp"
+        android:textColor="@android:color/white"
+        android:gravity="center"
+        android:layout_marginBottom="8dp" />
+
+    <!-- Price Information -->
+    <TextView
+        android:id="@+id/priceInfoText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="$50 RWF"
+        android:textSize="20sp"
+        android:textStyle="bold"
+        android:textColor="@android:color/white"
+        android:gravity="center"
+        android:layout_marginBottom="16dp" />
+
+    <!-- Ticket Number -->
+    <TextView
+        android:id="@+id/ticketNumberText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Ticket #123456"
+        android:textSize="22sp"
+        android:textStyle="bold"
+        android:textColor="#FFEB3B"
+        android:gravity="center"
+        android:layout_marginBottom="8dp" />
+
+    <!-- QR Code Information -->
+    <TextView
+        android:id="@+id/qrCodeText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="QR: TICKET:123456:BOOKING:abc123"
+        android:textSize="12sp"
+        android:textColor="#E3F2FD"
+        android:gravity="center"
+        android:layout_marginBottom="16dp" />
+
+    <!-- NFC Card Info -->
+    <TextView
+        android:id="@+id/nfcCardInfoText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="NFC Card: 12345678"
+        android:textSize="14sp"
+        android:textColor="#E3F2FD"
+        android:gravity="center"
+        android:layout_marginBottom="32dp" />
+
+    <!-- Status Information -->
+    <TextView
+        android:id="@+id/statusInfoText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Status: USED"
+        android:textSize="16sp"
+        android:textStyle="bold"
+        android:textColor="#4CAF50"
+        android:gravity="center"
+        android:layout_marginBottom="32dp" />
+
+    <!-- Tap for next booking hint -->
+    <TextView
+        android:id="@+id/nextBookingHintText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Tap another card for new booking"
+        android:textSize="14sp"
+        android:textColor="#E3F2FD"
+        android:gravity="center"
+        android:alpha="0.8" />
+
+</LinearLayout>
+
+
