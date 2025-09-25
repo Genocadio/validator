@@ -1,7 +1,6 @@
 package com.gocavgo.validator
 
 import android.annotation.SuppressLint
-import android.content.ComponentCallbacks2
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.drawable.VectorDrawable
@@ -48,7 +47,6 @@ import com.here.sdk.maploader.MapLoaderError
 import com.here.sdk.maploader.MapLoaderException
 import com.here.sdk.maploader.PersistentMapStatus
 import com.here.sdk.maploader.PersistentMapRepairError
-import com.here.sdk.maploader.RepairPersistentMapCallback
 import com.here.sdk.maploader.Region
 import com.here.sdk.maploader.RegionId
 import com.here.sdk.mapview.ImageFormat
@@ -108,7 +106,6 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import androidx.core.content.ContextCompat.getColor
 
 class Navigator : AppCompatActivity() {
 
@@ -277,7 +274,7 @@ class Navigator : AppCompatActivity() {
             mqttService = MqttService.getInstance()
 
             // Initialize trip progress tracker with MQTT service
-            tripProgressTracker = TripProgressTracker(tripId, databaseManager, lifecycleScope, mqttService)
+            tripProgressTracker = TripProgressTracker(tripId, databaseManager, lifecycleScope, this@Navigator, mqttService)
 
             logTripInfo()
             initializeNetworkMonitoring()
@@ -706,7 +703,7 @@ class Navigator : AppCompatActivity() {
     private fun showTicketValidationLoading() {
         // Show loading in input field
         inputDisplay?.let { display ->
-            display.text = "Validating..."
+            "Validating...".also { display.text = it }
             display.setTextColor("#FFFFFF".toColorInt()) // White text for better visibility
             display.background = ContextCompat.getDrawable(this, R.drawable.input_field_loading_background)
             // Use normal text size since we reduced padding
@@ -715,7 +712,7 @@ class Navigator : AppCompatActivity() {
         
         // Show loading status in top section
         validationStatusText?.let { statusText ->
-            statusText.text = "Validating..."
+            "Validating...".also { statusText.text = it }
             statusText.setTextColor("#FF8C00".toColorInt()) // Orange color for loading
             statusText.visibility = android.view.View.VISIBLE
         }
@@ -735,7 +732,7 @@ class Navigator : AppCompatActivity() {
         
         // Show success status in top section
         validationStatusText?.let { statusText ->
-            statusText.text = "✓ VALID TICKET"
+            "✓ VALID TICKET".also { statusText.text = it }
             statusText.setTextColor("#00AA00".toColorInt()) // Green color for success
             statusText.visibility = android.view.View.VISIBLE
         }
@@ -757,7 +754,7 @@ class Navigator : AppCompatActivity() {
     private fun showTicketValidationError(errorMessage: String) {
         // Clear input field and reset to normal state
         inputDisplay?.let { display ->
-            display.text = ""
+            display.text = errorMessage
             display.setTextColor("#000000".toColorInt()) // Black color for normal state
             display.background = ContextCompat.getDrawable(this, R.drawable.input_field_background)
             display.textSize = 24f
@@ -765,7 +762,7 @@ class Navigator : AppCompatActivity() {
         
         // Show error status in top section
         validationStatusText?.let { statusText ->
-            statusText.text = "❌ INVALID TICKET"
+            "❌ INVALID TICKET".also { statusText.text = it }
             statusText.setTextColor("#FF0000".toColorInt()) // Red color for error
             statusText.visibility = android.view.View.VISIBLE
         }
@@ -938,27 +935,6 @@ class Navigator : AppCompatActivity() {
         }
     }
 
-
-    private fun calculateTripPrice(): String {
-        tripResponse?.let { trip ->
-            // Trip price is from origin to final destination
-            val destination = trip.route.destination
-            val allWaypoints = trip.waypoints.sortedBy { it.order }
-
-            // Find the last waypoint before destination
-            val lastWaypoint = allWaypoints.lastOrNull()
-
-            return if (lastWaypoint != null) {
-                // Use the last waypoint's price as the trip price
-                "${lastWaypoint.price.toInt()} RWF"
-            } else {
-                // If no waypoints, use a default trip price
-                "500 RWF" // Default trip price
-            }
-        }
-        return "Unknown"
-    }
-
     private fun updateWaypointsDisplay() {
         tripResponse?.let { trip ->
             waypointsContainer?.removeAllViews()
@@ -968,7 +944,7 @@ class Navigator : AppCompatActivity() {
 
             if (availableDestinations.isEmpty()) {
                 val noWaypointsText = android.widget.TextView(this).apply {
-                    text = "No available destinations"
+                    "No available destinations".also { text = it }
                     textSize = 16f
                     setTextColor("#666666".toColorInt())
                     gravity = android.view.Gravity.CENTER
@@ -1109,7 +1085,7 @@ class Navigator : AppCompatActivity() {
         // Set waypoint name with flag icon
         val destinationDisplayName = getLocationDisplayName(destination.location)
         val flagIcon = if (destination.isFinalDestination) "🏁" else "🚩"
-        nameText.text = "$flagIcon $destinationDisplayName"
+        "$flagIcon $destinationDisplayName".also { nameText.text = it }
 
         // Calculate and display price
         val price = calculateDestinationPrice(destination)
@@ -1132,28 +1108,6 @@ class Navigator : AppCompatActivity() {
         return waypointView
     }
 
-    private fun getRouteContext(currentIndex: Int, targetIndex: Int): String {
-        if (currentIndex < 0 || targetIndex < 0) return ""
-
-        val currentWaypoint = tripResponse?.waypoints?.sortedBy { it.order }?.getOrNull(currentIndex)
-        val targetWaypoint = tripResponse?.waypoints?.sortedBy { it.order }?.getOrNull(targetIndex)
-
-        return when {
-            currentIndex == -1 -> {
-                // At origin
-                val origin = tripResponse?.route?.origin?.let { getLocationDisplayName(it) } ?: "Origin"
-                val targetName = targetWaypoint?.location?.let { getLocationDisplayName(it) } ?: "Destination"
-                "($origin → $targetName)"
-            }
-            currentIndex < targetIndex -> {
-                // Forward segment
-                val currentName = currentWaypoint?.location?.let { getLocationDisplayName(it) } ?: "Current"
-                val targetName = targetWaypoint?.location?.let { getLocationDisplayName(it) } ?: "Destination"
-                "($currentName → $targetName)"
-            }
-            else -> ""
-        }
-    }
 
     private fun calculateDestinationPrice(destination: AvailableDestination): String {
         tripResponse?.let { trip ->
@@ -1190,39 +1144,8 @@ class Navigator : AppCompatActivity() {
         return "${destination.price.toInt()} RWF"
     }
 
-    private fun calculatePrice(waypoint: TripWaypoint): String {
-        tripResponse?.let { trip ->
-            val currentLocation = getCurrentLocationName()
-            val origin = trip.route.origin.google_place_name
-            val destination = trip.route.destination.google_place_name
-
-            // Get all waypoints sorted by order
-            val allWaypoints = trip.waypoints.sortedBy { it.order }
-            val currentWaypointIndex = getCurrentWaypointIndex()
-
-            return when {
-                // If we're at origin, show full price from origin to this waypoint
-                currentLocation == origin -> {
-                    "${waypoint.price.toInt()} RWF"
-                }
-
-                // If we're at an intermediate waypoint, calculate segment price
-                currentWaypointIndex >= 0 -> {
-                    val segmentPrice = calculateSegmentPrice(currentWaypointIndex, waypoint, allWaypoints)
-                    "${segmentPrice.toInt()} RWF"
-                }
-
-                // Fallback to waypoint's base price
-                else -> "${waypoint.price.toInt()} RWF"
-            }
-        }
-
-        return "${waypoint.price.toInt()} RWF"
-    }
-
     private fun getCurrentWaypointIndex(): Int {
         tripResponse?.let { trip ->
-            val currentLocation = getCurrentLocationName()
             val allWaypoints = trip.waypoints.sortedBy { it.order }
 
             // Find the last passed waypoint index
@@ -1235,31 +1158,6 @@ class Navigator : AppCompatActivity() {
             }
         }
         return -1
-    }
-
-    private fun calculateSegmentPrice(currentIndex: Int, targetWaypoint: TripWaypoint, allWaypoints: List<TripWaypoint>): Double {
-        // Calculate price from current waypoint to target waypoint
-        // This is done by subtracting the current waypoint's price from the target waypoint's price
-
-        val currentWaypoint = allWaypoints[currentIndex]
-        val targetIndex = allWaypoints.indexOf(targetWaypoint)
-
-        if (targetIndex <= currentIndex) {
-            Log.w(TAG, "Invalid segment: target index $targetIndex <= current index $currentIndex")
-            return 0.0 // Invalid segment
-        }
-
-        // Price from current to target = target price - current price
-        val segmentPrice = targetWaypoint.price - currentWaypoint.price
-
-        Log.d(TAG, "=== SEGMENT PRICE CALCULATION ===")
-        Log.d(TAG, "Current waypoint: ${currentWaypoint.location.google_place_name} (${currentWaypoint.price} RWF)")
-        Log.d(TAG, "Target waypoint: ${targetWaypoint.location.google_place_name} (${targetWaypoint.price} RWF)")
-        Log.d(TAG, "Segment price: ${targetWaypoint.price} - ${currentWaypoint.price} = $segmentPrice RWF")
-        Log.d(TAG, "=================================")
-
-        // Ensure price is not negative
-        return maxOf(0.0, segmentPrice)
     }
 
     private fun showWaypointSelectionDialog(nfcId: String) {
@@ -1404,30 +1302,6 @@ class Navigator : AppCompatActivity() {
         }
     }
 
-    private fun showBookingConfirmation(nfcId: String, fromLocation: String, toLocation: String, price: String) {
-        try {
-            // Dismiss any existing booking dialog
-            currentBookingDialog?.dismiss()
-
-            // Create and show new booking confirmation dialog
-            currentBookingDialog = BookingConfirmationDialog.newInstance(
-                nfcId = nfcId,
-                fromLocation = fromLocation,
-                toLocation = toLocation,
-                price = price,
-                onNewBookingRequested = {
-                    // This will be called when a new NFC card is tapped during confirmation
-                    Log.d(TAG, "New booking requested during confirmation")
-                }
-            )
-
-            currentBookingDialog?.show(supportFragmentManager, "BookingConfirmationDialog")
-            Log.d(TAG, "Booking confirmation dialog shown")
-
-        } catch (e: Exception) {
-            Log.e(TAG, "Error showing booking confirmation: ${e.message}", e)
-        }
-    }
 
     private fun showBookingConfirmationWithTicket(
         nfcId: String,
@@ -1522,6 +1396,7 @@ class Navigator : AppCompatActivity() {
         updateSpeedDisplay(speed, accuracy)
     }
 
+    @SuppressLint("DefaultLocale")
     private fun updateSpeedDisplay(speedInMetersPerSecond: Double, accuracyInMetersPerSecond: Double) {
         try {
             // Convert m/s to km/h
@@ -1555,11 +1430,6 @@ class Navigator : AppCompatActivity() {
         }
     }
 
-    private fun showSpeedDisplay(show: Boolean) {
-        handler.post {
-            speedDisplayContainer?.visibility = if (show) android.view.View.VISIBLE else android.view.View.GONE
-        }
-    }
 
     private fun resetSpeedDisplay() {
         handler.post {
@@ -1571,26 +1441,6 @@ class Navigator : AppCompatActivity() {
         speedAccuracy = 0.0
     }
 
-    /**
-     * Get current speed in km/h
-     */
-    fun getCurrentSpeedKmh(): Double {
-        return currentSpeedKmh
-    }
-
-    /**
-     * Get current speed accuracy in km/h
-     */
-    fun getCurrentSpeedAccuracyKmh(): Double {
-        return speedAccuracy
-    }
-
-    /**
-     * Get current speed in m/s
-     */
-    fun getCurrentSpeedMs(): Double {
-        return currentSpeedKmh / 3.6
-    }
 
     private fun initializeComponents() {
         initializeRoutingEngine()
@@ -1864,10 +1714,6 @@ class Navigator : AppCompatActivity() {
                     Log.w(TAG, "Persistent map data is corrupted, attempting repair...")
                     attemptMapRepair(downloader)
                 }
-                PersistentMapStatus.PENDING_UPDATE-> {
-                    Log.w(TAG, "Persistent map data is inconsistent, attempting repair...")
-                    attemptMapRepair(downloader)
-                }
                 else -> {
                     Log.w(TAG, "Unknown persistent map status: $persistentMapStatus")
                     attemptMapRepair(downloader)
@@ -1903,35 +1749,33 @@ class Navigator : AppCompatActivity() {
         // Show repair dialog
         mapDownloadDialog?.showRepairing(repairRetryCount, MAX_REPAIR_RETRIES)
         
-        downloader.repairPersistentMap(object : RepairPersistentMapCallback {
-            override fun onCompleted(persistentMapRepairError: PersistentMapRepairError?) {
-                isRepairInProgress = false
-                
-                if (persistentMapRepairError == null) {
-                    Log.d(TAG, "=== MAP REPAIR SUCCESSFUL ===")
-                    Log.d(TAG, "Map data repair completed successfully!")
-                    Log.d(TAG, "=============================")
-                    
-                    // Reset retry count on success
-                    repairRetryCount = 0
-                    
-                    // Show success and proceed
-                    mapDownloadDialog?.showRepairSuccess()
-                    
-                    // Re-check map data after successful repair
-                    handler.postDelayed({
-                        checkExistingMapData()
-                    }, 1000)
-                    
-                } else {
-                    Log.e(TAG, "=== MAP REPAIR FAILED ===")
-                    Log.e(TAG, "Repair error: ${persistentMapRepairError.name}")
-                    Log.e(TAG, "=========================")
-                    
-                    handleRepairError(persistentMapRepairError, downloader)
-                }
+        downloader.repairPersistentMap { persistentMapRepairError ->
+            isRepairInProgress = false
+
+            if (persistentMapRepairError == null) {
+                Log.d(TAG, "=== MAP REPAIR SUCCESSFUL ===")
+                Log.d(TAG, "Map data repair completed successfully!")
+                Log.d(TAG, "=============================")
+
+                // Reset retry count on success
+                repairRetryCount = 0
+
+                // Show success and proceed
+                mapDownloadDialog?.showRepairSuccess()
+
+                // Re-check map data after successful repair
+                handler.postDelayed({
+                    checkExistingMapData()
+                }, 1000)
+
+            } else {
+                Log.e(TAG, "=== MAP REPAIR FAILED ===")
+                Log.e(TAG, "Repair error: ${persistentMapRepairError.name}")
+                Log.e(TAG, "=========================")
+
+                handleRepairError(persistentMapRepairError, downloader)
             }
-        })
+        }
     }
 
     /**
@@ -2359,9 +2203,6 @@ class Navigator : AppCompatActivity() {
         }
     }
 
-    private fun getCurrentLocation(): Location? {
-        return locationEngine?.lastKnownLocation
-    }
 
     private fun startLocationEngineAndWaitForLocation() {
         locationEngine?.let { engine ->
@@ -2860,7 +2701,7 @@ class Navigator : AppCompatActivity() {
                         Log.w(TAG, "Waypoint index: ${milestone.waypointIndex}")
                         Log.w(TAG, "Original coordinates: ${milestone.originalCoordinates}")
 
-                        handleMissedWaypoint(milestone)
+                        handleMissedWaypoint()
                         updateWaypointMarker(milestone.waypointIndex!!, false)
                         updateTripWaypointStatus(milestone.waypointIndex!!, false)
                     }
@@ -2978,7 +2819,6 @@ class Navigator : AppCompatActivity() {
 
     private fun updateWaypointMarker(waypointIndex: Int, reached: Boolean) {
         if (waypointIndex < waypointMarkers.size) {
-            val marker = waypointMarkers[waypointIndex]
             Log.d(
                 TAG,
                 "Updated marker for waypoint $waypointIndex - ${if (reached) "reached" else "missed"}"
@@ -2986,7 +2826,7 @@ class Navigator : AppCompatActivity() {
         }
     }
 
-    private fun handleMissedWaypoint(milestone: Milestone) {
+    private fun handleMissedWaypoint() {
         Log.w(TAG, "=== HANDLING MISSED WAYPOINT ===")
         Log.w(TAG, "Consider recalculating route to include missed waypoint")
 
@@ -3352,8 +3192,8 @@ class Navigator : AppCompatActivity() {
             
             // Update dialog to show resumed state
             mapDownloadDialog?.let { dialog ->
-                dialog.statusText?.text = "Downloading map data..."
-                dialog.detailsText?.text = "Map download resumed. Downloading Rwanda map data for offline navigation..."
+                "Downloading map data...".also { dialog.statusText?.text = it }
+                "Map download resumed. Downloading Rwanda map data for offline navigation...".also { dialog.detailsText?.text = it }
             }
             
             Log.d(TAG, "==============================")
@@ -3436,42 +3276,8 @@ class Navigator : AppCompatActivity() {
         Log.d(TAG, "=============================")
     }
     
-    /**
-     * Manually trigger map update download
-     */
-    fun triggerMapUpdate() {
-        rwandaRegion?.let { region ->
-            Log.d(TAG, "Manually triggering map update download")
-            downloadRetryCount = 0 // Reset retry count for manual update
-            downloadRwandaMapWithRetry(region)
-        } ?: run {
-            Log.w(TAG, "No updated region available for download")
-        }
-    }
-    
-    /**
-     * Set download progress callback for UI updates
-     */
-    fun setDownloadProgressCallback(callback: (Int) -> Unit) {
-        downloadProgressCallback = callback
-    }
-    
-    /**
-     * Get current download status
-     */
-    fun getDownloadStatus(): Map<String, Any> {
-        return mapOf(
-            "isDownloadInProgress" to isDownloadInProgress,
-            "isMapDataReady" to isMapDataReady,
-            "downloadRetryCount" to downloadRetryCount,
-            "maxRetries" to MAX_DOWNLOAD_RETRIES,
-            "lastUpdateCheck" to lastUpdateCheckTime,
-            "hasRwandaRegion" to (rwandaRegion != null),
-            "isRepairInProgress" to isRepairInProgress,
-            "repairRetryCount" to repairRetryCount,
-            "maxRepairRetries" to MAX_REPAIR_RETRIES
-        )
-    }
+
+
     
     /**
      * Proceed with map download if needed (fallback method)
@@ -3531,7 +3337,7 @@ class Navigator : AppCompatActivity() {
     /**
      * Handle camera toggle button press from XML layout
      */
-    fun onCameraTogglePressed(view: android.view.View) {
+    fun onCameraTogglePressed() {
         if (showMap && visualNavigator != null) {
             isCameraBehaviorEnabled = !isCameraBehaviorEnabled
 
@@ -3552,47 +3358,18 @@ class Navigator : AppCompatActivity() {
     /**
      * Handle back button press from XML layout
      */
-    fun onBackPressed(view: android.view.View) {
+    @SuppressLint("GestureBackNavigation")
+    override fun onBackPressed() {
+        super.onBackPressed()
         Log.d(TAG, "Back button pressed, finishing Navigator activity")
         finish()
     }
-    
-    /**
-     * Test method to show map download dialog (for testing purposes)
-     */
-    fun testMapDownloadDialog(view: android.view.View) {
-        showMapDownloadDialog()
-        mapDownloadDialog?.showCheckingForUpdates()
-    }
 
-    /**
-     * Test method for numeric input (for testing purposes)
-     */
-    fun testNumericInput(view: android.view.View) {
-        Log.d(TAG, "=== TESTING NUMERIC INPUT ===")
-        Log.d(TAG, "Current input: $currentInput")
-        Log.d(TAG, "Input length: ${currentInput.length}")
-        Log.d(TAG, "Max digits: $maxDigits")
-        Log.d(TAG, "=============================")
-    }
 
-    /**
-     * Test method to trigger map repair (for testing purposes)
-     */
-    fun testMapRepair(view: android.view.View) {
-        Log.d(TAG, "=== TESTING MAP REPAIR ===")
-        mapDownloader?.let { downloader ->
-            Log.d(TAG, "Triggering map repair test...")
-            attemptMapRepair(downloader)
-        } ?: run {
-            Log.w(TAG, "Map downloader not available for repair test")
-        }
-        Log.d(TAG, "==========================")
-    }
 
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
-        if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {
+        if (level >= TRIM_MEMORY_RUNNING_CRITICAL) {
             handleLowMemory()
         }
     }
@@ -3702,7 +3479,7 @@ class Navigator : AppCompatActivity() {
             }
         }
         // Only refresh network status if we don't have initial state from MainActivity
-        if (isNetworkConnected == false && currentConnectionType == "UNKNOWN") {
+        if (!isNetworkConnected && currentConnectionType == "UNKNOWN") {
             Log.d(TAG, "No initial network state from MainActivity, refreshing...")
             refreshNetworkStatus()
         } else {
@@ -3868,7 +3645,7 @@ class Navigator : AppCompatActivity() {
                     mqttService?.checkAndFixInconsistentState()
                     
                     // Only try to reconnect if we haven't tried recently
-                    val lastReconnectAttempt = lastMqttReconnectAttempt ?: 0L
+                    val lastReconnectAttempt = lastMqttReconnectAttempt
                     if (currentTime - lastReconnectAttempt > 30000) { // Wait 30 seconds between reconnect attempts
                         Log.d(TAG, "Attempting MQTT reconnection...")
                         mqttService?.forceReconnect()
@@ -3974,6 +3751,7 @@ class Navigator : AppCompatActivity() {
         }
     }
 
+    @SuppressLint("UnspecifiedRegisterReceiverFlag")
     private fun registerBookingBundleReceiver() {
         try {
             if (bookingBundleReceiver != null) return
@@ -3982,7 +3760,7 @@ class Navigator : AppCompatActivity() {
                     Log.d(TAG, "Broadcast received: ${intent?.action}")
                     if (intent == null) return
                     
-                    if (intent.action == com.gocavgo.validator.service.MqttService.ACTION_BOOKING_BUNDLE_SAVED) {
+                    if (intent.action == MqttService.ACTION_BOOKING_BUNDLE_SAVED) {
                         val tripId = intent.getStringExtra("trip_id") ?: "unknown"
                         val passengerName = intent.getStringExtra("passenger_name") ?: "Passenger"
                         val pickup = intent.getStringExtra("pickup") ?: "Unknown"
@@ -4072,20 +3850,7 @@ class Navigator : AppCompatActivity() {
         }
     }
 
-    /**
-     * Test method to simulate a booking bundle notification - for debugging
-     */
-    private fun testBookingBundleNotification() {
-        Log.d(TAG, "Testing booking bundle notification...")
-        showBookingBundleOverlay(
-            passengerName = "Test Passenger",
-            pickup = "Test Pickup Location",
-            dropoff = "Test Dropoff Location", 
-            numTickets = 2,
-            isPaid = true
-        )
-        playBundleNotificationSound()
-    }
+
 
     private fun playBundleNotificationSound() {
         try {
@@ -4123,7 +3888,7 @@ class Navigator : AppCompatActivity() {
             
             // Last resort: Try system beep
             try {
-                val audioManager = getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager
+                val audioManager = getSystemService(AUDIO_SERVICE) as android.media.AudioManager
                 audioManager.playSoundEffect(android.media.AudioManager.FX_KEY_CLICK)
             } catch (beepError: Exception) {
                 Log.e(TAG, "Even system beep failed: ${beepError.message}")

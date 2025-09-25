@@ -102,6 +102,9 @@ class DatabaseManager(context: Context) {
     
     suspend fun getTicketByNumber(ticketNumber: String) = bookingService.getTicketByNumber(ticketNumber)
     
+    suspend fun countPaidPassengersForWaypoint(tripId: Int, waypointLocationName: String) = 
+        bookingService.countPaidPassengersForWaypoint(tripId, waypointLocationName)
+    
     companion object {
         @Volatile
         private var INSTANCE: DatabaseManager? = null

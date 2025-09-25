@@ -1,7 +1,6 @@
 package com.gocavgo.validator.service
 
 import android.annotation.SuppressLint
-import android.app.Application
 import android.content.Context
 import android.util.Log
 import com.hivemq.client.mqtt.MqttClient
@@ -12,7 +11,6 @@ import com.hivemq.client.mqtt.mqtt5.message.publish.Mqtt5PublishResult
 import com.hivemq.client.mqtt.datatypes.MqttQos
 import com.hivemq.client.mqtt.MqttGlobalPublishFilter
 import kotlinx.serialization.encodeToString
-import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import com.gocavgo.validator.dataclass.*
 import kotlinx.serialization.Serializable
@@ -60,6 +58,7 @@ class MqttService private constructor(
         // Broadcast action for UI when a booking bundle is saved locally
         const val ACTION_BOOKING_BUNDLE_SAVED = "com.gocavgo.validator.BOOKING_BUNDLE_SAVED"
 
+        @SuppressLint("StaticFieldLeak")
         @Volatile
         private var INSTANCE: MqttService? = null
 
@@ -117,7 +116,6 @@ class MqttService private constructor(
     // Heartbeat management
     private var heartbeatJob: Job? = null
     private var reconnectJob: Job? = null
-    private var networkMonitorJob: Job? = null
     
     // Connection credentials
     private var username: String? = null
@@ -161,6 +159,7 @@ class MqttService private constructor(
     )
 
     // Serializable data class for heartbeat messages
+    @SuppressLint("UnsafeOptInUsageError")
     @Serializable
     data class HeartbeatMessage(
         val vehicle_id: String,
@@ -170,6 +169,7 @@ class MqttService private constructor(
     )
 
     // Serializable data class for waypoint reached notifications
+    @SuppressLint("UnsafeOptInUsageError")
     @Serializable
     data class WaypointReachedNotification(
         val trip_id: String,
@@ -181,6 +181,7 @@ class MqttService private constructor(
     )
 
     // Serializable data class for heartbeat responses
+    @SuppressLint("UnsafeOptInUsageError")
     @Serializable
     data class HeartbeatResponseMessage(
         val vehicle_id: String,
@@ -190,6 +191,7 @@ class MqttService private constructor(
     )
 
     // Serializable data class for trip assignment confirmations
+    @SuppressLint("UnsafeOptInUsageError")
     @Serializable
     data class TripAssignmentConfirmation(
         val trip_id: String,
@@ -1017,14 +1019,31 @@ class MqttService private constructor(
         Log.d(TAG, "Trip ID: ${tripResponse.id}")
         // If live-calculated remaining time/distance are not provided, fall back to any values stored on the trip/waypoints
         val (finalRemainingTime, finalRemainingDistance) = run {
+            Log.d(TAG, "--- FALLBACK LOGIC FOR REMAINING TIME/DISTANCE ---")
+            Log.d(TAG, "Live remaining time: ${remainingTimeToDestination?.let { formatDuration(it) } ?: "null"}")
+            Log.d(TAG, "Live remaining distance: ${remainingDistanceToDestination?.let { String.format("%.1f", it) } ?: "null"}m")
+            
             val nextOrFirstUnpassed = tripResponse.waypoints.firstOrNull { it.is_next }
                 ?: tripResponse.waypoints.firstOrNull { !it.is_passed }
+            
+            Log.d(TAG, "Next/first unpassed waypoint: ${nextOrFirstUnpassed?.location?.google_place_name ?: "null"}")
+            Log.d(TAG, "Waypoint remaining_time: ${nextOrFirstUnpassed?.remaining_time?.let { formatDuration(it) } ?: "null"}")
+            Log.d(TAG, "Waypoint remaining_distance: ${nextOrFirstUnpassed?.remaining_distance?.let { String.format("%.1f", it) } ?: "null"}m")
+            
+            // Log all waypoints for debugging
+            Log.d(TAG, "All waypoints in trip:")
+            tripResponse.waypoints.forEachIndexed { index, waypoint ->
+                Log.d(TAG, "  [$index] ID:${waypoint.id}, Name:${waypoint.location.google_place_name}, is_next:${waypoint.is_next}, is_passed:${waypoint.is_passed}, remaining_time:${waypoint.remaining_time?.let { formatDuration(it) } ?: "null"}, remaining_distance:${waypoint.remaining_distance?.let { String.format("%.1f", it) } ?: "null"}m")
+            }
 
             val time = remainingTimeToDestination
                 ?: nextOrFirstUnpassed?.remaining_time
 
             val dist = remainingDistanceToDestination
                 ?: nextOrFirstUnpassed?.remaining_distance
+
+            Log.d(TAG, "Final fallback result: time=${time?.let { formatDuration(it) } ?: "null"}, distance=${dist?.let { String.format("%.1f", it) } ?: "null"}m")
+            Log.d(TAG, "-----------------------------------------------")
 
             Pair(time, dist)
         }

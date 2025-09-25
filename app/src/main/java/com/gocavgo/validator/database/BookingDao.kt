@@ -38,9 +38,22 @@ interface BookingDao {
     
     @Query("DELETE FROM bookings WHERE id = :bookingId")
     suspend fun deleteBookingById(bookingId: String)
-    
+
     @Query("UPDATE bookings SET status = :status, updated_at = :updatedAt WHERE id = :bookingId")
     suspend fun updateBookingStatus(bookingId: String, status: BookingStatus, updatedAt: Long)
+    
+    /**
+     * Count paid passengers for a specific trip and dropoff location
+     * Counts bookings that have COMPLETED payment and valid tickets
+     */
+    @Query("""
+        SELECT COUNT(b.id) FROM bookings b 
+        INNER JOIN payments p ON b.id = p.booking_id 
+        INNER JOIN tickets t ON b.id = t.booking_id 
+        WHERE b.trip_id = :tripId 
+        AND b.dropoff_location_id = :dropoffLocationName 
+        AND p.status = 'COMPLETED'
+        AND b.status != 'CANCELLED'
+    """)
+    suspend fun countPaidPassengersForLocation(tripId: Int, dropoffLocationName: String): Int
 }
-
-

@@ -1,7 +1,9 @@
 package com.gocavgo.validator.dataclass
 
+import android.annotation.SuppressLint
 import kotlinx.serialization.Serializable
 
+@SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class TripBooking(
     val id: String,

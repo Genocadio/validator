@@ -1,7 +1,9 @@
 package com.gocavgo.validator.dataclass
 
+import android.annotation.SuppressLint
 import kotlinx.serialization.Serializable
 
+@SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class PaginationInfo(
     val page: Int,

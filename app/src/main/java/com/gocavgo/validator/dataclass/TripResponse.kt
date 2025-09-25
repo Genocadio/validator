@@ -1,8 +1,10 @@
 package com.gocavgo.validator.dataclass
 
 
+import android.annotation.SuppressLint
 import kotlinx.serialization.Serializable
 
+@SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class TripResponse(
     val id: Int,
@@ -22,6 +24,7 @@ data class TripResponse(
     val waypoints: List<TripWaypoint>
 )
 
+@SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class VehicleInfo(
     val id: Int,
@@ -36,12 +39,14 @@ data class VehicleInfo(
     val last_location_update: Long? = null
 )
 
+@SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class DriverInfo(
     val name: String,
     val phone: String
 )
 
+@SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class TripRoute(
     val id: Int,
@@ -49,6 +54,7 @@ data class TripRoute(
     val destination: SavePlaceResponse
 )
 
+@SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class TripWaypoint(
     val id: Int,
@@ -64,6 +70,7 @@ data class TripWaypoint(
     val location: SavePlaceResponse
 )
 
+@SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class WaypointProgress(
     val waypointId: Int,
@@ -82,6 +89,7 @@ data class WaypointProgress(
     val speedAccuracyInMetersPerSecond: Double? = null
 )
 
+@SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class PaginatedTripsResponse(
     val trips: List<TripResponse>,

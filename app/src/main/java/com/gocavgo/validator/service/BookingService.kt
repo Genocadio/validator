@@ -271,6 +271,20 @@ class BookingService(private val context: Context) {
     }
     
     /**
+     * Count paid passengers for a waypoint location
+     */
+    suspend fun countPaidPassengersForWaypoint(tripId: Int, waypointLocationName: String): Int = withContext(Dispatchers.IO) {
+        try {
+            val count = bookingDao.countPaidPassengersForLocation(tripId, waypointLocationName)
+            Log.d("BookingService", "Paid passengers for waypoint '$waypointLocationName' in trip $tripId: $count")
+            return@withContext count
+        } catch (e: Exception) {
+            Log.e("BookingService", "Error counting paid passengers for waypoint: ${e.message}", e)
+            return@withContext 0
+        }
+    }
+    
+    /**
      * Checks if there's an existing booking with CARD payment and matching NFC tag ID
      */
     suspend fun getExistingBookingByNfcTag(nfcTagId: String): ExistingBookingResult = withContext(Dispatchers.IO) {

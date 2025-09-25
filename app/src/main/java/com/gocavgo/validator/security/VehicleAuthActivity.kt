@@ -92,10 +92,9 @@ class VehicleAuthActivity : AppCompatActivity() {
         // Get vehicle info from security manager
         val vehicleInfo = securityManager.getVehicleInfo()
         if (vehicleInfo != null) {
-            tvRegisteredCompany?.text = "Company: ${vehicleInfo.companyName ?: "Unknown Company"}"
-            tvRegisteredLicense?.text = "License Plate: ${vehicleInfo.licensePlate ?: "Unknown"}"
-            tvRegistrationDate?.text =
-                "Registered: ${vehicleInfo.registrationDateTime ?: "Unknown"}"
+            "Company: ${vehicleInfo.companyName ?: "Unknown Company"}".also { tvRegisteredCompany?.text = it }
+            "License Plate: ${vehicleInfo.licensePlate ?: "Unknown"}".also { tvRegisteredLicense?.text = it }
+            "Registered: ${vehicleInfo.registrationDateTime ?: "Unknown"}".also { tvRegistrationDate?.text = it }
 
             Toast.makeText(
                 this,
@@ -154,12 +153,12 @@ class VehicleAuthActivity : AppCompatActivity() {
                 try {
                     val capacityInt = capacity.toInt()
                     val vehicleType = determineVehicleType(capacityInt)
-                    tvVehicleType?.text = "Vehicle Type: $vehicleType"
+                    "Vehicle Type: $vehicleType".also { tvVehicleType?.text = it }
                 } catch (e: NumberFormatException) {
-                    tvVehicleType?.text = "Vehicle Type: Invalid capacity"
+                    "Vehicle Type: Invalid capacity".also { tvVehicleType?.text = it }
                 }
             } else {
-                tvVehicleType?.text = "Vehicle Type: Enter capacity"
+                "Vehicle Type: Enter capacity".also { tvVehicleType?.text = it }
             }
         }
     }

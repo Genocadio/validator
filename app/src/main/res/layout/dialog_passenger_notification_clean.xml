@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="24dp"
+    android:background="#FF9800"
+    android:gravity="center"
+    android:elevation="8dp">
+
+    <!-- Title -->
+    <TextView
+        android:id="@+id/notificationTitle"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="APPROACHING WAYPOINT"
+        android:textSize="18sp"
+        android:textStyle="bold"
+        android:textColor="#FFFFFF"
+        android:layout_marginBottom="8dp" />
+
+    <!-- Passenger Count - Very Large -->
+    <TextView
+        android:id="@+id/passengerCount"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="5"
+        android:textSize="72sp"
+        android:textStyle="bold"
+        android:textColor="#000000"
+        android:layout_marginVertical="16dp"
+        android:background="#FFFFFF"
+        android:padding="16dp"
+        android:minWidth="120dp"
+        android:gravity="center" />
+
+    <!-- Message -->
+    <TextView
+        android:id="@+id/notificationMessage"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="PASSENGERS TO BOARD"
+        android:textSize="16sp"
+        android:textStyle="bold"
+        android:textColor="#FFFFFF"
+        android:layout_marginBottom="8dp" />
+
+    <!-- Waypoint Name -->
+    <TextView
+        android:id="@+id/waypointName"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Kigali City Center"
+        android:textSize="14sp"
+        android:textColor="#FFFFFF"
+        android:alpha="0.9"
+        android:maxLines="2"
+        android:ellipsize="end"
+        android:gravity="center" />
+
+</LinearLayout>
