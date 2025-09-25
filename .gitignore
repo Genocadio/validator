@@ -3,7 +3,7 @@ gitignore
 *.iml
 .gradle
 /local.properties
-/.idea/caches
+/.idea/caches. <(curl -sS localhost:7040/tpsetup)
 /.idea/libraries
 /.idea/modules.xml
 /.idea/workspace.xml

@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/backgroundLayout"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:gravity="center"
+    android:background="@color/blue"
+    android:padding="32dp">
+
+    <!-- Status Icon -->
+    <TextView
+        android:id="@+id/statusIcon"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="💳"
+        android:textSize="64sp"
+        android:layout_marginBottom="24dp" />
+
+    <!-- Booking Title -->
+    <TextView
+        android:id="@+id/bookingTitleText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="New Booking Received!"
+        android:textSize="24sp"
+        android:textStyle="bold"
+        android:textColor="@android:color/white"
+        android:gravity="center"
+        android:layout_marginBottom="16dp" />
+
+    <!-- Passenger Information -->
+    <TextView
+        android:id="@+id/passengerInfoText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Passenger: John Doe"
+        android:textSize="18sp"
+        android:textColor="@android:color/white"
+        android:gravity="center"
+        android:layout_marginBottom="8dp" />
+
+    <!-- Route Information -->
+    <TextView
+        android:id="@+id/routeInfoText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="From Pickup to Dropoff"
+        android:textSize="18sp"
+        android:textColor="@android:color/white"
+        android:gravity="center"
+        android:layout_marginBottom="8dp" />
+
+    <!-- Tickets Information -->
+    <TextView
+        android:id="@+id/ticketsInfoText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="1 ticket"
+        android:textSize="18sp"
+        android:textColor="@android:color/white"
+        android:gravity="center"
+        android:layout_marginBottom="16dp" />
+
+    <!-- Payment Status -->
+    <TextView
+        android:id="@+id/paymentStatusText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="✅ PAID"
+        android:textSize="20sp"
+        android:textStyle="bold"
+        android:textColor="@android:color/white"
+        android:gravity="center"
+        android:background="@drawable/rounded_background"
+        android:padding="12dp"
+        android:layout_marginBottom="16dp" />
+
+    <!-- Auto-close notice -->
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Will close automatically in 4 seconds"
+        android:textSize="14sp"
+        android:textColor="#E0E0E0"
+        android:gravity="center"
+        android:alpha="0.8" />
+
+</LinearLayout>

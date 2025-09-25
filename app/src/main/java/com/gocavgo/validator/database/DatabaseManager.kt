@@ -49,6 +49,25 @@ class DatabaseManager(context: Context) {
     suspend fun updateWaypointStatus(tripId: Int, waypointId: Int, isPassed: Boolean) = 
         tripRepository.updateWaypointStatus(tripId, waypointId, isPassed)
     
+    // Waypoint remaining progress persistence
+    suspend fun updateWaypointRemaining(
+        tripId: Int,
+        waypointId: Int,
+        remainingTimeSeconds: Long?,
+        remainingDistanceMeters: Double?
+    ) {
+        try {
+            tripRepository.updateWaypointRemaining(tripId, waypointId, remainingTimeSeconds, remainingDistanceMeters)
+            android.util.Log.d(
+                "DatabaseManager",
+                "Persisted remaining progress: trip=$tripId, waypoint=$waypointId, time=${remainingTimeSeconds}, distance=${remainingDistanceMeters}"
+            )
+        } catch (e: Exception) {
+            android.util.Log.e("DatabaseManager", "Failed to persist remaining progress: ${e.message}", e)
+            throw e
+        }
+    }
+    
     // Vehicle location tracking
     suspend fun updateVehicleCurrentLocation(vehicleId: Int, latitude: Double, longitude: Double, speed: Double) =
         tripRepository.updateVehicleCurrentLocation(vehicleId, latitude, longitude, speed)

@@ -167,7 +167,7 @@ class TripProgressTracker(
 
             val sectionProgressList = routeProgress.sectionProgress
 
-            if (sectionProgressList.isNotEmpty()) {
+                if (sectionProgressList.isNotEmpty()) {
                 val currentSectionProgress = sectionProgressList[0]
 
                 // Safe access to section progress properties
@@ -194,6 +194,30 @@ class TripProgressTracker(
 
                 // Store the most recent route progress data for MQTT calculations
                 lastRouteProgressData = Pair(remainingDistance, remainingDuration)
+
+                // Also persist destination-level remaining metrics for convenience
+                coroutineScope.launch {
+                    try {
+                        // If trip has no intermediate waypoints, persist to a synthetic destination placeholder (-1)
+                        if (currentTrip?.waypoints?.isEmpty() == true) {
+                            // No waypoint to write; skip
+                        } else {
+                            // Persist on the next waypoint entry for durability/fallback in MQTT
+                            val nextIndex = getNextWaypointIndex()
+                            val wp = getWaypointByIndex(nextIndex)
+                            if (wp != null) {
+                                databaseManager.updateWaypointRemaining(
+                                    tripId = tripId,
+                                    waypointId = wp.id,
+                                    remainingTimeSeconds = remainingDuration,
+                                    remainingDistanceMeters = remainingDistance
+                                )
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to persist destination remaining metrics: ${e.message}", e)
+                    }
+                }
 
                 // Get current waypoint information
                 val currentWaypointIndex = getCurrentWaypointIndex(currentSectionProgress)
@@ -261,6 +285,21 @@ class TripProgressTracker(
                         )
                         waypointProgressMap[waypoint.id] = waypointProgress
                         Log.d(TAG, "Stored progress for waypoint: ${waypoint.location.google_place_name}")
+
+                        // Persist remaining progress for resilience
+                        coroutineScope.launch {
+                            try {
+                                databaseManager.updateWaypointRemaining(
+                                    tripId = tripId,
+                                    waypointId = waypoint.id,
+                                    remainingTimeSeconds = waypointProgress.remainingTimeInSeconds,
+                                    remainingDistanceMeters = waypointProgress.remainingDistanceInMeters
+                                )
+                                Log.d(TAG, "DB persist success for waypoint ${waypoint.id}: time=${waypointProgress.remainingTimeInSeconds}, dist=${String.format("%.1f", waypointProgress.remainingDistanceInMeters)}")
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Failed to persist waypoint remaining progress: ${e.message}", e)
+                            }
+                        }
                     }
 
                     // Log progress for all unpassed waypoints

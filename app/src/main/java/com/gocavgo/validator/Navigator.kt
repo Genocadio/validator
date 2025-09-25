@@ -104,6 +104,11 @@ import androidx.core.graphics.toColorInt
 import com.gocavgo.validator.dataclass.SavePlaceResponse
 import com.gocavgo.validator.dataclass.TripWaypoint
 import com.here.sdk.maploader.SDKCache
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import androidx.core.content.ContextCompat.getColor
 
 class Navigator : AppCompatActivity() {
 
@@ -223,6 +228,9 @@ class Navigator : AppCompatActivity() {
     private val DEVIATION_THRESHOLD_METERS = 50
     private val MIN_DEVIATION_EVENTS = 3
 
+    // Receiver for booking bundle saved events
+    private var bookingBundleReceiver: BroadcastReceiver? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -289,6 +297,12 @@ class Navigator : AppCompatActivity() {
                 initializeNFCReader()
                 Log.d(TAG, "NFC reader initialized after trip data loaded")
             }
+
+            // Register receiver for booking bundle saved overlay
+            registerBookingBundleReceiver()
+            
+            // Also register direct callback with MQTT service for more reliable notifications
+            registerMqttBookingBundleCallback()
         }
     }
 
@@ -3608,6 +3622,21 @@ class Navigator : AppCompatActivity() {
         handler.removeCallbacksAndMessages(null)
         stopCurrentNavigation()
 
+        // Unregister booking bundle receiver
+        try {
+            bookingBundleReceiver?.let { unregisterReceiver(it) }
+            bookingBundleReceiver = null
+        } catch (e: Exception) {
+            Log.w(TAG, "Error unregistering booking bundle receiver: ${e.message}")
+        }
+        
+        // Unregister MQTT callback
+        try {
+            mqttService?.setBookingBundleCallback(null)
+        } catch (e: Exception) {
+            Log.w(TAG, "Error unregistering MQTT booking bundle callback: ${e.message}")
+        }
+
         // Reset trip progress tracker
         tripProgressTracker?.reset()
 
@@ -3942,6 +3971,163 @@ class Navigator : AppCompatActivity() {
         } catch (e: Exception) {
             Log.e(TAG, "Error updating trip status to in_progress: ${e.message}", e)
             callback(false)
+        }
+    }
+
+    private fun registerBookingBundleReceiver() {
+        try {
+            if (bookingBundleReceiver != null) return
+            bookingBundleReceiver = object : BroadcastReceiver() {
+                override fun onReceive(context: Context?, intent: Intent?) {
+                    Log.d(TAG, "Broadcast received: ${intent?.action}")
+                    if (intent == null) return
+                    
+                    if (intent.action == com.gocavgo.validator.service.MqttService.ACTION_BOOKING_BUNDLE_SAVED) {
+                        val tripId = intent.getStringExtra("trip_id") ?: "unknown"
+                        val passengerName = intent.getStringExtra("passenger_name") ?: "Passenger"
+                        val pickup = intent.getStringExtra("pickup") ?: "Unknown"
+                        val dropoff = intent.getStringExtra("dropoff") ?: "Unknown"
+                        val numTickets = intent.getIntExtra("num_tickets", 1)
+                        val isPaid = intent.getBooleanExtra("is_paid", false)
+                        
+                        Log.d(TAG, "Booking bundle broadcast received for trip $tripId: $passengerName, $pickup -> $dropoff, $numTickets tickets, paid: $isPaid")
+                        
+                        runOnUiThread {
+                            try {
+                                showBookingBundleOverlay(passengerName, pickup, dropoff, numTickets, isPaid)
+                                playBundleNotificationSound()
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Error handling booking bundle broadcast: ${e.message}", e)
+                            }
+                        }
+                    }
+                }
+            }
+            val filter = IntentFilter(com.gocavgo.validator.service.MqttService.ACTION_BOOKING_BUNDLE_SAVED)
+            registerReceiver(bookingBundleReceiver, filter)
+            Log.d(TAG, "Registered booking bundle receiver")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to register booking bundle receiver: ${e.message}", e)
+        }
+    }
+
+    private fun showBookingBundleOverlay(
+        passengerName: String,
+        pickup: String,
+        dropoff: String,
+        numTickets: Int,
+        isPaid: Boolean
+    ) {
+        try {
+            Log.d(TAG, "Showing booking bundle overlay for: $passengerName, $pickup -> $dropoff, tickets: $numTickets, paid: $isPaid")
+            
+            // Dismiss any existing booking bundle dialog
+            val existingDialog = supportFragmentManager.findFragmentByTag("BookingBundleDialog")
+            if (existingDialog is BookingBundleDialog) {
+                existingDialog.dismiss()
+            }
+            
+            // Create and show new dialog
+            val dialog = BookingBundleDialog.newInstance(
+                passengerName = passengerName,
+                pickupLocation = pickup,
+                dropoffLocation = dropoff,
+                numTickets = numTickets,
+                isPaid = isPaid
+            )
+            
+            dialog.show(supportFragmentManager, "BookingBundleDialog")
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "Error showing booking bundle overlay: ${e.message}", e)
+            
+            // Fallback to simple toast notification
+            try {
+                val status = if (isPaid) "PAID" else "UNPAID"
+                val message = "$passengerName: $pickup → $dropoff ($numTickets tickets, $status)"
+                android.widget.Toast.makeText(this, "New Booking: $message", android.widget.Toast.LENGTH_LONG).show()
+            } catch (fallbackError: Exception) {
+                Log.e(TAG, "Even fallback toast failed: ${fallbackError.message}")
+            }
+        }
+    }
+    
+    private fun registerMqttBookingBundleCallback() {
+        try {
+            mqttService?.setBookingBundleCallback { tripId, passengerName, pickup, dropoff, numTickets, isPaid ->
+                Log.d(TAG, "MQTT callback received for booking bundle: trip=$tripId, passenger=$passengerName")
+                
+                runOnUiThread {
+                    try {
+                        showBookingBundleOverlay(passengerName, pickup, dropoff, numTickets, isPaid)
+                        playBundleNotificationSound()
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error handling MQTT booking bundle callback: ${e.message}", e)
+                    }
+                }
+            }
+            Log.d(TAG, "MQTT booking bundle callback registered")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to register MQTT booking bundle callback: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Test method to simulate a booking bundle notification - for debugging
+     */
+    private fun testBookingBundleNotification() {
+        Log.d(TAG, "Testing booking bundle notification...")
+        showBookingBundleOverlay(
+            passengerName = "Test Passenger",
+            pickup = "Test Pickup Location",
+            dropoff = "Test Dropoff Location", 
+            numTickets = 2,
+            isPaid = true
+        )
+        playBundleNotificationSound()
+    }
+
+    private fun playBundleNotificationSound() {
+        try {
+            Log.d(TAG, "Playing booking bundle notification sound")
+            
+            // Try notification sound first
+            val notificationUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+            val ringtone = RingtoneManager.getRingtone(this, notificationUri)
+            
+            if (ringtone != null) {
+                ringtone.play()
+                
+                // Auto-stop after 2 seconds to prevent long sounds
+                handler.postDelayed({
+                    try {
+                        if (ringtone.isPlaying) {
+                            ringtone.stop()
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Error stopping ringtone: ${e.message}")
+                    }
+                }, 2000)
+                
+            } else {
+                Log.w(TAG, "Notification ringtone is null, trying alarm sound")
+                
+                // Fallback to alarm sound if notification is not available
+                val alarmUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                val alarmRingtone = RingtoneManager.getRingtone(this, alarmUri)
+                alarmRingtone?.play()
+            }
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "Error playing notification sound: ${e.message}")
+            
+            // Last resort: Try system beep
+            try {
+                val audioManager = getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager
+                audioManager.playSoundEffect(android.media.AudioManager.FX_KEY_CLICK)
+            } catch (beepError: Exception) {
+                Log.e(TAG, "Even system beep failed: ${beepError.message}")
+            }
         }
     }
 }

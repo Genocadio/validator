@@ -28,6 +28,7 @@ import com.gocavgo.validator.database.BookingEntity
 import com.gocavgo.validator.database.PaymentEntity
 import com.gocavgo.validator.database.TicketEntity
 import com.gocavgo.validator.network.NetworkMonitor
+import android.content.Intent
 
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CompletableFuture
@@ -55,6 +56,9 @@ class MqttService private constructor(
         private const val FOREGROUND_RECONNECT_DELAY_MS = 2000L
         private const val MAX_QUEUE_SIZE = 100
         private const val MAX_RECONNECT_BACKOFF_MS = 60000L // Max 1 minute between attempts
+
+        // Broadcast action for UI when a booking bundle is saved locally
+        const val ACTION_BOOKING_BUNDLE_SAVED = "com.gocavgo.validator.BOOKING_BUNDLE_SAVED"
 
         @Volatile
         private var INSTANCE: MqttService? = null
@@ -95,6 +99,9 @@ class MqttService private constructor(
 
     // Connection callback
     private var connectionCallback: ((Boolean) -> Unit)? = null
+    
+    // Booking bundle callback for direct UI notification
+    private var bookingBundleCallback: ((String, String, String, String, Int, Boolean) -> Unit)? = null
 
     // Connection state management
     private val isConnecting = AtomicBoolean(false)
@@ -130,7 +137,7 @@ class MqttService private constructor(
         "car/$carId/ping",           // Ping requests
         "trip/+/booking",            // Booking events for any trip (wildcard)
         "trip/+/bookings",           // Booking updates for any trip (wildcard)
-        "trip/+/booking_bundle"      // Full booking bundle (booking + payment + tickets)
+        "trip/+/booking_bundle/outbound"      // Full booking bundle from backend (booking + payment + tickets)
     )
 
     // Last Will and Testament
@@ -1008,8 +1015,22 @@ class MqttService private constructor(
     ): TripData {
         Log.d(TAG, "=== CONVERTING TRIP RESPONSE TO TRIP DATA ===")
         Log.d(TAG, "Trip ID: ${tripResponse.id}")
-        Log.d(TAG, "Remaining time to destination: ${remainingTimeToDestination?.let { formatDuration(it) } ?: "null"}")
-        Log.d(TAG, "Remaining distance to destination: ${remainingDistanceToDestination?.let { String.format("%.1f", it) } ?: "null"}m")
+        // If live-calculated remaining time/distance are not provided, fall back to any values stored on the trip/waypoints
+        val (finalRemainingTime, finalRemainingDistance) = run {
+            val nextOrFirstUnpassed = tripResponse.waypoints.firstOrNull { it.is_next }
+                ?: tripResponse.waypoints.firstOrNull { !it.is_passed }
+
+            val time = remainingTimeToDestination
+                ?: nextOrFirstUnpassed?.remaining_time
+
+            val dist = remainingDistanceToDestination
+                ?: nextOrFirstUnpassed?.remaining_distance
+
+            Pair(time, dist)
+        }
+
+        Log.d(TAG, "Remaining time to destination: ${finalRemainingTime?.let { formatDuration(it) } ?: "null"}")
+        Log.d(TAG, "Remaining distance to destination: ${finalRemainingDistance?.let { String.format("%.1f", it) } ?: "null"}m")
         Log.d(TAG, "Current speed: ${currentSpeed?.let { String.format("%.2f", it) } ?: "null"} m/s")
         Log.d(TAG, "Current location: ${currentLocation?.let { "${it.latitude}, ${it.longitude}" } ?: "null"}")
         Log.d(TAG, "=============================================")
@@ -1036,8 +1057,8 @@ class MqttService private constructor(
             connection_mode = tripResponse.connection_mode,
             notes = tripResponse.notes,
             seats = tripResponse.seats,
-            remaining_time_to_destination = remainingTimeToDestination,
-            remaining_distance_to_destination = remainingDistanceToDestination,
+            remaining_time_to_destination = finalRemainingTime,
+            remaining_distance_to_destination = finalRemainingDistance,
             is_reversed = tripResponse.is_reversed,
             current_speed = currentSpeed,
             current_latitude = currentLocation?.latitude,
@@ -1221,7 +1242,7 @@ class MqttService private constructor(
                 tickets = tickets.map { it.toTicket() }
             )
             val payload = json.encodeToString(bundle)
-            val topic = "trip/$tripId/booking_bundle"
+            val topic = "trip/$tripId/booking_bundle/inbound"
             publish(topic, payload)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to publish booking bundle", e)
@@ -1261,6 +1282,42 @@ class MqttService private constructor(
                     Log.d(TAG, "Ticket processing results: $ticketResults")
 
                     Log.d(TAG, "Booking bundle processed: booking=${bookingEntity.id}, payment=${paymentEntity.id}, tickets=${ticketEntities.size}")
+
+                    // Notify UI layer that a booking bundle was saved
+                    try {
+                        val passengerName = bookingEntity.user_name ?: "Passenger"
+                        val pickup = ticketEntities.firstOrNull()?.pickup_location_name
+                            ?: bookingEntity.pickup_location_id ?: "Unknown pickup"
+                        val dropoff = ticketEntities.firstOrNull()?.dropoff_location_name
+                            ?: bookingEntity.dropoff_location_id ?: "Unknown dropoff"
+                        val numTickets = ticketEntities.size
+                        val isPaid = paymentEntity.status == com.gocavgo.validator.dataclass.PaymentStatus.COMPLETED
+
+                        Log.d(TAG, "Broadcasting booking bundle saved event: trip=${bundle.trip_id}, passenger=$passengerName, pickup=$pickup, dropoff=$dropoff, tickets=$numTickets, paid=$isPaid")
+                        
+                        // Send broadcast (for any activity listening)
+                        val intent = Intent(ACTION_BOOKING_BUNDLE_SAVED).apply {
+                            putExtra("trip_id", bundle.trip_id)
+                            putExtra("passenger_name", passengerName)
+                            putExtra("pickup", pickup)
+                            putExtra("dropoff", dropoff)
+                            putExtra("num_tickets", numTickets)
+                            putExtra("is_paid", isPaid)
+                        }
+                        context.sendBroadcast(intent)
+                        Log.d(TAG, "Booking bundle broadcast sent successfully")
+                        
+                        // Also call direct callback if available (more reliable)
+                        try {
+                            bookingBundleCallback?.invoke(bundle.trip_id, passengerName, pickup, dropoff, numTickets, isPaid)
+                            Log.d(TAG, "Booking bundle callback invoked successfully")
+                        } catch (callbackError: Exception) {
+                            Log.w(TAG, "Error invoking booking bundle callback: ${callbackError.message}")
+                        }
+                        
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to broadcast booking bundle saved event: ${e.message}", e)
+                    }
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to persist booking bundle", e)
                 }
@@ -1659,6 +1716,13 @@ class MqttService private constructor(
      */
     fun setConnectionCallback(callback: (Boolean) -> Unit) {
         connectionCallback = callback
+    }
+    
+    /**
+     * Set booking bundle callback for direct UI notification
+     */
+    fun setBookingBundleCallback(callback: ((String, String, String, String, Int, Boolean) -> Unit)?) {
+        bookingBundleCallback = callback
     }
 
     /**
