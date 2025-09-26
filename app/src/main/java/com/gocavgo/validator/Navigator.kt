@@ -106,6 +106,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.view.View
 
 class Navigator : AppCompatActivity() {
 
@@ -3337,7 +3338,7 @@ class Navigator : AppCompatActivity() {
     /**
      * Handle camera toggle button press from XML layout
      */
-    fun onCameraTogglePressed() {
+    fun onCameraTogglePressed(view: View) {
         if (showMap && visualNavigator != null) {
             isCameraBehaviorEnabled = !isCameraBehaviorEnabled
 
@@ -3618,7 +3619,7 @@ class Navigator : AppCompatActivity() {
     }
 
     private var lastMqttUpdateTime = 0L
-    private val MQTT_UPDATE_INTERVAL = 30000L // 30 seconds
+    private val MQTT_UPDATE_INTERVAL = 180000L // 3 minutes (180 seconds)
     private var lastMqttHealthCheckTime = 0L
     private val MQTT_HEALTH_CHECK_INTERVAL = 120000L // 2 minutes
     private var lastMqttReconnectAttempt = 0L
@@ -3634,7 +3635,7 @@ class Navigator : AppCompatActivity() {
                 if (mqttService?.isHealthy() == true) {
                     tripProgressTracker?.sendPeriodicProgressUpdate()
                     lastMqttUpdateTime = currentTime
-                    Log.d(TAG, "Periodic MQTT update sent")
+                    Log.d(TAG, "⏰ MQTT: Periodic update sent (3-minute interval)")
                 } else {
                     // Log detailed MQTT status for debugging
                     val status = mqttService?.getServiceStatus()
@@ -3781,7 +3782,7 @@ class Navigator : AppCompatActivity() {
                     }
                 }
             }
-            val filter = IntentFilter(com.gocavgo.validator.service.MqttService.ACTION_BOOKING_BUNDLE_SAVED)
+            val filter = IntentFilter(MqttService.ACTION_BOOKING_BUNDLE_SAVED)
             registerReceiver(bookingBundleReceiver, filter)
             Log.d(TAG, "Registered booking bundle receiver")
         } catch (e: Exception) {

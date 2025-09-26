@@ -19,6 +19,16 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.concurrent.TimeUnit
 
+/**
+ * Enhanced Trip Progress Tracker with comprehensive MQTT messaging
+ * 
+ * MQTT Event Schedule:
+ * 1. TRIP_STARTED - Sent when navigation begins
+ * 2. WAYPOINT_REACHED - Sent when each waypoint is reached + trip progress update
+ * 3. WAYPOINT_MISSED - Sent when a waypoint is missed + trip progress update
+ * 4. TRIP_PROGRESS_UPDATE - Sent every 3 minutes during navigation
+ * 5. TRIP_COMPLETED - Sent when final waypoint reached + final progress update
+ */
 class TripProgressTracker(
     private val tripId: Int,
     private val databaseManager: DatabaseManager,
@@ -611,10 +621,18 @@ class TripProgressTracker(
                         // Update waypoint status in database
                         updateWaypointInDatabase(waypoint.id, reached)
 
-                        // Send MQTT notification for waypoint reached
+                        // Send MQTT notifications for waypoint events
                         if (reached) {
                             sendWaypointReachedNotification(waypoint)
+                            Log.d(TAG, "✅ MQTT: Waypoint reached notification sent for ${waypoint.location.google_place_name}")
+                        } else {
+                            sendWaypointMissedNotification(waypoint)
+                            Log.w(TAG, "⚠️ MQTT: Waypoint missed notification sent for ${waypoint.location.google_place_name}")
                         }
+                        
+                        // Always send trip progress update when waypoint status changes
+                        sendPeriodicProgressUpdate()
+                        Log.d(TAG, "📊 MQTT: Trip progress update sent after waypoint ${if (reached) "reach" else "miss"}")
 
                         // Check if this was the final waypoint
                         if (reached && waypointIndex == currentTrip?.waypoints?.size) {
@@ -653,7 +671,11 @@ class TripProgressTracker(
                 try {
                     // Update trip status to completed
                     updateTripStatus("completed")
-                    Log.d(TAG, "Trip $tripId marked as completed")
+                    
+                    // Send final trip progress update with completion status
+                    sendPeriodicProgressUpdate()
+                    
+                    Log.d(TAG, "🏁 MQTT: Trip $tripId marked as completed and final status sent")
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to update trip status: ${e.message}", e)
                 }
@@ -985,6 +1007,53 @@ class TripProgressTracker(
     }
 
     /**
+     * Send waypoint missed notification via MQTT
+     */
+    private fun sendWaypointMissedNotification(waypoint: TripWaypoint) {
+        try {
+            mqttService?.let { mqtt ->
+                if (mqtt.isConnected()) {
+                    val location = MqttService.Location(
+                        latitude = waypoint.location.latitude,
+                        longitude = waypoint.location.longitude
+                    )
+
+                    // For now, we'll send this as a trip progress update with missed waypoint info
+                    // You could create a specific waypoint missed event if needed
+                    currentTrip?.let { trip ->
+                        val tripData = mqtt.convertTripResponseToTripData(
+                            tripResponse = trip,
+                            currentSpeed = currentSpeed,
+                            currentLocation = MqttService.Location(
+                                latitude = currentLocation?.coordinates?.latitude ?: 0.0,
+                                longitude = currentLocation?.coordinates?.longitude ?: 0.0
+                            ),
+                            speedAccuracy = speedAccuracy
+                        )
+
+                        mqtt.sendTripEventMessage(
+                            event = "WAYPOINT_MISSED",
+                            tripData = tripData
+                        ).whenComplete { result, throwable ->
+                            if (throwable != null) {
+                                Log.e(TAG, "❌ MQTT: Failed to send waypoint missed notification", throwable)
+                            } else {
+                                Log.d(TAG, "⚠️ MQTT: Waypoint missed notification sent for ${waypoint.location.google_place_name}")
+                            }
+                        }
+                    }
+                } else {
+                    Log.w(TAG, "MQTT not connected, cannot send waypoint missed notification")
+                }
+            } ?: run {
+                Log.w(TAG, "MQTT service not available, cannot send waypoint missed notification")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error sending waypoint missed notification via MQTT: ${e.message}", e)
+        }
+    }
+
+    /**
      * Send trip start notification via MQTT using TripEventMessage
      */
     fun sendTripStartNotification() {
@@ -1021,9 +1090,9 @@ class TripProgressTracker(
                                     tripData = tripData
                                 ).whenComplete { result, throwable ->
                                     if (throwable != null) {
-                                        Log.e(TAG, "Failed to send trip start notification via MQTT", throwable)
+                                        Log.e(TAG, "❌ MQTT: Failed to send trip start notification", throwable)
                                     } else {
-                                        Log.d(TAG, "Trip start notification sent via MQTT with status: ${latestTrip.status}")
+                                        Log.d(TAG, "🚀 MQTT: Trip start notification sent successfully with status: ${latestTrip.status}")
                                     }
                                 }
                             } else {
@@ -1091,9 +1160,9 @@ class TripProgressTracker(
                             tripData = tripData
                         ).whenComplete { result, throwable ->
                             if (throwable != null) {
-                                Log.e(TAG, "Failed to send periodic progress update via MQTT", throwable)
+                                Log.e(TAG, "❌ MQTT: Failed to send periodic progress update", throwable)
                             } else {
-                                Log.d(TAG, "Periodic progress update sent via MQTT")
+                                Log.d(TAG, "📡 MQTT: Periodic progress update sent successfully")
                             }
                         }
                     }
