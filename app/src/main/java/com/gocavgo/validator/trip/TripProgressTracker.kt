@@ -1,5 +1,6 @@
 package com.gocavgo.validator.trip
 
+import android.annotation.SuppressLint
 import android.util.Log
 import com.gocavgo.validator.database.DatabaseManager
 import com.gocavgo.validator.dataclass.TripResponse
@@ -60,6 +61,8 @@ class TripProgressTracker(
     private val passengerNotificationDialog = PassengerNotificationDialog(context)
     private val approachingNotificationsShown = mutableSetOf<Int>()
     private val reachedNotificationsShown = mutableSetOf<Int>()
+    private val lastPassengerCheckTime = mutableMapOf<Int, Long>() // Track last check time per waypoint
+    private val waypointPassedTime = mutableMapOf<Int, Long>() // Track when each waypoint was passed
 
     init {
         try {
@@ -137,11 +140,14 @@ class TripProgressTracker(
     /**
      * Initialize remaining time/distance for all waypoints when route is first set
      * This prevents null values from being sent in MQTT messages
+     * Ensures proper ordering where higher order waypoints have more remaining time/distance
      */
     private fun initializeWaypointRemainingData(totalDistanceMeters: Double, totalTimeSeconds: Long) {
         try {
             currentTrip?.let { trip ->
                 Log.d(TAG, "=== INITIALIZING WAYPOINT REMAINING DATA ===")
+                Log.d(TAG, "Total route distance: ${String.format("%.1f", totalDistanceMeters)}m")
+                Log.d(TAG, "Total route time: ${formatDuration(totalTimeSeconds)}")
                 
                 val unpassedWaypoints = trip.waypoints
                     .filter { !it.is_passed }
@@ -150,19 +156,31 @@ class TripProgressTracker(
                 if (unpassedWaypoints.isNotEmpty()) {
                     Log.d(TAG, "Initializing ${unpassedWaypoints.size} unpassed waypoints with baseline remaining data")
                     
-                    // Distribute total time and distance across waypoints as initial estimates
-                    val timePerWaypoint = totalTimeSeconds / unpassedWaypoints.size
-                    val distancePerWaypoint = totalDistanceMeters / unpassedWaypoints.size
-                    
+                    // Calculate proper initial values for each waypoint based on order
+                    // Higher order waypoints should have more remaining time/distance
                     unpassedWaypoints.forEachIndexed { index, waypoint ->
                         // Only initialize if values are currently null
                         if (waypoint.remaining_time == null || waypoint.remaining_distance == null) {
-                            // Remaining waypoints get proportionally less time/distance
-                            val remainingWaypoints = unpassedWaypoints.size - index
-                            val initialTime = waypoint.remaining_time ?: (timePerWaypoint * remainingWaypoints)
-                            val initialDistance = waypoint.remaining_distance ?: (distancePerWaypoint * remainingWaypoints)
+                            val waypointOrder = waypoint.order
+                            val totalUnpassedWaypoints = unpassedWaypoints.size
                             
-                            Log.d(TAG, "Initializing waypoint ${waypoint.order} (${waypoint.location.google_place_name}): time=${formatDuration(initialTime)}, distance=${String.format("%.1f", initialDistance)}m")
+                            // Calculate proportional remaining time/distance based on waypoint order
+                            // Each waypoint gets a share proportional to its order
+                            val orderRatio = waypointOrder.toDouble() / totalUnpassedWaypoints.toDouble()
+                            val baseTime = (totalTimeSeconds * 0.8 * orderRatio).toLong() // 80% of total time distributed by order
+                            val baseDistance = totalDistanceMeters * 0.8 * orderRatio // 80% of total distance distributed by order
+                            
+                            // Add minimum buffer to ensure higher order waypoints have more time/distance
+                            val timeBuffer = (totalTimeSeconds * 0.1 * orderRatio).toLong() // 10% buffer per order
+                            val distanceBuffer = totalDistanceMeters * 0.1 * orderRatio // 10% buffer per order
+                            
+                            val initialTime = waypoint.remaining_time ?: (baseTime + timeBuffer)
+                            val initialDistance = waypoint.remaining_distance ?: (baseDistance + distanceBuffer)
+                            
+                            Log.d(TAG, "Initializing waypoint ${waypoint.order} (${waypoint.location.google_place_name}):")
+                            Log.d(TAG, "  - Order ratio: ${String.format("%.2f", orderRatio)}")
+                            Log.d(TAG, "  - Base time: ${formatDuration(baseTime)}, Base distance: ${String.format("%.1f", baseDistance)}m")
+                            Log.d(TAG, "  - Final time: ${formatDuration(initialTime)}, Final distance: ${String.format("%.1f", initialDistance)}m")
                             
                             coroutineScope.launch {
                                 try {
@@ -186,7 +204,7 @@ class TripProgressTracker(
                                         currentTrip = trip.copy(waypoints = updatedWaypoints)
                                     }
                                     
-                                    Log.d(TAG, "Initialized waypoint ${waypoint.id} with baseline remaining data")
+                                    Log.d(TAG, "Initialized waypoint ${waypoint.id} (Order: ${waypoint.order}) with baseline remaining data")
                                 } catch (e: Exception) {
                                     Log.e(TAG, "Failed to initialize waypoint ${waypoint.id}: ${e.message}", e)
                                 }
@@ -247,6 +265,7 @@ class TripProgressTracker(
         }
     }
 
+    @SuppressLint("SuspiciousIndentation")
     fun onRouteProgressUpdate(routeProgress: RouteProgress?) {
         try {
             if (routeProgress == null) {
@@ -392,7 +411,7 @@ class TripProgressTracker(
                             speedAccuracyInMetersPerSecond = speedAccuracy
                         )
                         waypointProgressMap[waypoint.id] = waypointProgress
-                        Log.d(TAG, "Stored progress for waypoint: ${waypoint.location.google_place_name}")
+                        Log.d(TAG, "Stored progress for waypoint: ${waypoint.location.google_place_name} (Order: ${waypoint.order})")
 
                         // Persist remaining progress for resilience
                         coroutineScope.launch {
@@ -415,10 +434,10 @@ class TripProgressTracker(
                                         } else wp
                                     }
                                     currentTrip = trip.copy(waypoints = updatedWaypoints)
-                                    Log.d(TAG, "Updated in-memory currentTrip with fresh remaining data for waypoint ${waypoint.id}")
+                                    Log.d(TAG, "Updated in-memory currentTrip with fresh remaining data for waypoint ${waypoint.id} (Order: ${waypoint.order})")
                                 }
                                 
-                                Log.d(TAG, "DB persist success for waypoint ${waypoint.id}: time=${waypointProgress.remainingTimeInSeconds}, dist=${String.format("%.1f", waypointProgress.remainingDistanceInMeters)}")
+                                Log.d(TAG, "DB persist success for waypoint ${waypoint.id} (Order: ${waypoint.order}): time=${waypointProgress.remainingTimeInSeconds}, dist=${String.format("%.1f", waypointProgress.remainingDistanceInMeters)}")
                             } catch (e: Exception) {
                                 Log.e(TAG, "Failed to persist waypoint remaining progress: ${e.message}", e)
                             }
@@ -427,6 +446,11 @@ class TripProgressTracker(
 
                     // Update remaining data for ALL unpassed waypoints beyond the immediate next one
                     updateAllUnpassedWaypoints(remainingDistance, remainingDuration)
+
+                // Check all waypoints for passenger notifications (3 minutes away or just passed)
+                checkAllWaypointsForPassengerNotifications()
+                checkPassedWaypointsForPassengerNotifications()
+                checkFinalDestinationForPassengerNotifications()
 
                     // Log progress for all unpassed waypoints
                     logUnpassedWaypointsProgress()
@@ -471,11 +495,18 @@ class TripProgressTracker(
                     Log.d(TAG, "Remaining distance: ${remainingDistance}m")
 
                     reachedWaypoints.add(waypointIndex)
+                    
+                    // Track when this waypoint was passed
+                    val waypoint = getWaypointByIndex(waypointIndex)
+                    if (waypoint != null) {
+                        waypointPassedTime[waypoint.id] = System.currentTimeMillis()
+                    }
+                    
                     updateWaypointStatus(waypointIndex, true)
                     logWaypointReached(waypointIndex, sectionProgress)
 
                     // Show passenger notification when waypoint is reached
-                    if (!reachedNotificationsShown.contains(waypointIndex)) {
+                    if (!reachedNotificationsShown.contains(waypointIndex) && waypoint != null) {
                         reachedNotificationsShown.add(waypointIndex)
                         showPassengerReachedNotification(waypoint)
                     }
@@ -608,6 +639,32 @@ class TripProgressTracker(
             currentTrip?.waypoints?.find { it.order == index + 1 }
         } catch (e: Exception) {
             Log.e(TAG, "Error getting waypoint by index $index: ${e.message}", e)
+            null
+        }
+    }
+
+    /**
+     * Get waypoint by order (1-based order number)
+     */
+    private fun getWaypointByOrder(order: Int): TripWaypoint? {
+        return try {
+            currentTrip?.waypoints?.find { it.order == order }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error getting waypoint by order $order: ${e.message}", e)
+            null
+        }
+    }
+
+    /**
+     * Get the next unpassed waypoint in order
+     */
+    private fun getNextUnpassedWaypoint(): TripWaypoint? {
+        return try {
+            currentTrip?.waypoints
+                ?.filter { !it.is_passed }
+                ?.minByOrNull { it.order }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error getting next unpassed waypoint: ${e.message}", e)
             null
         }
     }
@@ -830,6 +887,8 @@ class TripProgressTracker(
             reachedWaypoints.clear()
             approachingNotificationsShown.clear()
             reachedNotificationsShown.clear()
+            lastPassengerCheckTime.clear()
+            waypointPassedTime.clear()
             isInitialized = false
             passengerNotificationDialog.dismissCurrentNotification()
             Log.d(TAG, "Trip progress tracker reset for trip $tripId")
@@ -856,11 +915,13 @@ class TripProgressTracker(
     /**
      * Update remaining time/distance for all unpassed waypoints
      * This ensures no waypoint has null remaining_time or remaining_distance values
+     * Uses simple progressive calculation since reversal is handled by backend
      */
     private fun updateAllUnpassedWaypoints(currentRemainingDistance: Double, currentRemainingTime: Long) {
         try {
             currentTrip?.let { trip ->
                 Log.d(TAG, "=== UPDATING ALL UNPASSED WAYPOINTS ===")
+                Log.d(TAG, "Trip is_reversed: ${trip.is_reversed} (handled by backend)")
                 
                 // Get all unpassed waypoints sorted by order
                 val unpassedWaypoints = trip.waypoints
@@ -868,59 +929,71 @@ class TripProgressTracker(
                     .sortedBy { it.order }
                 
                 Log.d(TAG, "Found ${unpassedWaypoints.size} unpassed waypoints")
+                Log.d(TAG, "Current remaining distance: ${String.format("%.1f", currentRemainingDistance)}m")
+                Log.d(TAG, "Current remaining time: ${formatDuration(currentRemainingTime)}")
                 
-                // Update all waypoints that have null values
-                val waypointsToUpdate = unpassedWaypoints.filter { 
-                    it.remaining_time == null || it.remaining_distance == null 
-                }
-                
-                if (waypointsToUpdate.isNotEmpty()) {
-                    Log.d(TAG, "Found ${waypointsToUpdate.size} waypoints with null remaining data")
-                    
-                    waypointsToUpdate.forEach { waypoint ->
-                        // Provide reasonable fallback values to prevent null data in MQTT messages
-                        // Use a progressive approach: waypoints further down the route get more time/distance
-                        val orderIndex = unpassedWaypoints.indexOf(waypoint)
-                        val baseTimeBuffer = 30L * orderIndex // 30 seconds per waypoint order
-                        val baseDistanceBuffer = 50.0 * orderIndex // 50 meters per waypoint order
+                if (unpassedWaypoints.isNotEmpty()) {
+                    // Calculate proper remaining values for each waypoint
+                    // Simple progressive calculation: each waypoint gets more time/distance than the previous
+                    unpassedWaypoints.forEachIndexed { index, waypoint ->
+                        val waypointOrder = waypoint.order
                         
-                        val fallbackTime = waypoint.remaining_time ?: (currentRemainingTime + baseTimeBuffer)
-                        val fallbackDistance = waypoint.remaining_distance ?: (currentRemainingDistance + baseDistanceBuffer)
+                        // Simple progressive calculation: each waypoint gets more time/distance than the previous
+                        // The first waypoint gets the current remaining time/distance
+                        // Each subsequent waypoint gets additional time/distance
+                        val additionalTimePerWaypoint = 30L // 30 seconds per waypoint
+                        val additionalDistancePerWaypoint = 200.0 // 200 meters per waypoint
                         
-                        Log.d(TAG, "Waypoint ${waypoint.order} (${waypoint.location.google_place_name}): Setting fallback values")
-                        Log.d(TAG, "  - Current values: time=${waypoint.remaining_time?.let { formatDuration(it) } ?: "null"}, distance=${waypoint.remaining_distance?.let { String.format("%.1f", it) } ?: "null"}m")
-                        Log.d(TAG, "  - Fallback values: time=${formatDuration(fallbackTime)}, distance=${String.format("%.1f", fallbackDistance)}m")
+                        val calculatedTime = currentRemainingTime + (additionalTimePerWaypoint * (waypointOrder - 1))
+                        val calculatedDistance = currentRemainingDistance + (additionalDistancePerWaypoint * (waypointOrder - 1))
                         
-                        coroutineScope.launch {
-                            try {
-                                databaseManager.updateWaypointRemaining(
-                                    tripId = tripId,
-                                    waypointId = waypoint.id,
-                                    remainingTimeSeconds = fallbackTime,
-                                    remainingDistanceMeters = fallbackDistance
-                                )
-                                
-                                // Update in-memory data
-                                currentTrip?.let { trip ->
-                                    val updatedWaypoints = trip.waypoints.map { wp ->
-                                        if (wp.id == waypoint.id) {
-                                            wp.copy(
-                                                remaining_time = fallbackTime,
-                                                remaining_distance = fallbackDistance
-                                            )
-                                        } else wp
+                        Log.d(TAG, "Waypoint ${waypoint.order} (${waypoint.location.google_place_name}):")
+                        Log.d(TAG, "  - Base time: ${formatDuration(currentRemainingTime)}, Base distance: ${String.format("%.1f", currentRemainingDistance)}m")
+                        Log.d(TAG, "  - Additional time: ${formatDuration(additionalTimePerWaypoint * (waypointOrder - 1))}, Additional distance: ${String.format("%.1f", additionalDistancePerWaypoint * (waypointOrder - 1))}m")
+                        Log.d(TAG, "  - Final time: ${formatDuration(calculatedTime)}, Final distance: ${String.format("%.1f", calculatedDistance)}m")
+                        
+                        // Only update if current values are null or incorrect
+                        val needsUpdate = waypoint.remaining_time == null || 
+                                        waypoint.remaining_distance == null ||
+                                        (waypoint.remaining_time != null && waypoint.remaining_time!! < currentRemainingTime) ||
+                                        (waypoint.remaining_distance != null && waypoint.remaining_distance!! < currentRemainingDistance)
+                        
+                        if (needsUpdate) {
+                            Log.d(TAG, "  - Current values: time=${waypoint.remaining_time?.let { formatDuration(it) } ?: "null"}, distance=${waypoint.remaining_distance?.let { String.format("%.1f", it) } ?: "null"}m")
+                            
+                            coroutineScope.launch {
+                                try {
+                                    databaseManager.updateWaypointRemaining(
+                                        tripId = tripId,
+                                        waypointId = waypoint.id,
+                                        remainingTimeSeconds = calculatedTime,
+                                        remainingDistanceMeters = calculatedDistance
+                                    )
+                                    
+                                    // Update in-memory data
+                                    currentTrip?.let { trip ->
+                                        val updatedWaypoints = trip.waypoints.map { wp ->
+                                            if (wp.id == waypoint.id) {
+                                                wp.copy(
+                                                    remaining_time = calculatedTime,
+                                                    remaining_distance = calculatedDistance
+                                                )
+                                            } else wp
+                                        }
+                                        currentTrip = trip.copy(waypoints = updatedWaypoints)
                                     }
-                                    currentTrip = trip.copy(waypoints = updatedWaypoints)
+                                    
+                                    Log.d(TAG, "Successfully updated waypoint ${waypoint.id} with calculated remaining data")
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "Failed to update waypoint ${waypoint.id}: ${e.message}", e)
                                 }
-                                
-                                Log.d(TAG, "Successfully updated waypoint ${waypoint.id} with fallback remaining data")
-                            } catch (e: Exception) {
-                                Log.e(TAG, "Failed to update waypoint ${waypoint.id}: ${e.message}", e)
                             }
+                        } else {
+                            Log.d(TAG, "  - Already has correct remaining data: time=${waypoint.remaining_time?.let { formatDuration(it) } ?: "null"}, distance=${waypoint.remaining_distance?.let { String.format("%.1f", it) } ?: "null"}m")
                         }
                     }
                 } else {
-                    Log.d(TAG, "All unpassed waypoints already have remaining data")
+                    Log.d(TAG, "No unpassed waypoints to update")
                 }
                 
                 Log.d(TAG, "=====================================")
@@ -1115,6 +1188,7 @@ class TripProgressTracker(
 
     /**
      * Send periodic trip progress updates via MQTT using TripEventMessage
+     * Recalculates all waypoint data before publishing to ensure accuracy
      */
     fun sendPeriodicProgressUpdate() {
         try {
@@ -1126,11 +1200,19 @@ class TripProgressTracker(
                             longitude = currentLocation?.coordinates?.longitude ?: 0.0
                         )
 
+                        Log.d(TAG, "=== RECALCULATING ALL WAYPOINT DATA BEFORE PUBLISH ===")
+                        Log.d(TAG, "Trip is_reversed: ${trip.is_reversed}")
+                        Log.d(TAG, "Current location: ${location.latitude}, ${location.longitude}")
+                        Log.d(TAG, "Current speed: ${currentSpeed?.let { String.format("%.2f", it) } ?: "Unknown"} m/s")
+                        
+                        // Recalculate all waypoint data before publishing
+                        recalculateAllWaypointData()
+                        
                         // Calculate remaining time and distance to destination
                         val remainingTime = calculateRemainingTimeToDestination()
                         val remainingDistance = calculateRemainingDistanceToDestination()
 
-                        Log.d(TAG, "=== PERIODIC PROGRESS UPDATE CALCULATION ===")
+                        Log.d(TAG, "=== FINAL PUBLISH DATA ===")
                         Log.d(TAG, "Remaining time to destination: ${remainingTime?.let { formatDuration(it) } ?: "null"}")
                         Log.d(TAG, "Remaining distance to destination: ${remainingDistance?.let { String.format("%.1f", it) } ?: "null"}m")
                         Log.d(TAG, "Waypoint progress map size: ${waypointProgressMap.size}")
@@ -1138,7 +1220,7 @@ class TripProgressTracker(
                         
                         // Log all waypoint progress entries for debugging
                         waypointProgressMap.forEach { (waypointId, progress) ->
-                            Log.d(TAG, "Waypoint $waypointId: ${progress.locationName} - ${String.format("%.1f", progress.remainingDistanceInMeters)}m, ${formatDuration(progress.remainingTimeInSeconds)}")
+                            Log.d(TAG, "Waypoint $waypointId (Order: ${progress.order}): ${progress.locationName} - ${String.format("%.1f", progress.remainingDistanceInMeters)}m, ${formatDuration(progress.remainingTimeInSeconds)}")
                         }
                         Log.d(TAG, "=============================================")
 
@@ -1179,6 +1261,7 @@ class TripProgressTracker(
 
     /**
      * Calculate remaining time to destination in seconds
+     * Ensures destination always has the longest remaining time
      */
     private fun calculateRemainingTimeToDestination(): Long? {
         return try {
@@ -1199,26 +1282,22 @@ class TripProgressTracker(
                     Log.d(TAG, "Found destination progress: ${destinationProgress?.remainingTimeInSeconds?.let { formatDuration(it) } ?: "null"}")
                     destinationProgress?.remainingTimeInSeconds
                 } else {
-                    // Multi-waypoint route - use fresh route progress data first, then fallback to cached data
-                    Log.d(TAG, "Multi-waypoint route - checking for fresh route progress data")
+                    // Multi-waypoint route - calculate destination time as the maximum waypoint time + buffer
+                    Log.d(TAG, "Multi-waypoint route - calculating destination time as max waypoint time + buffer")
                     
-                    // First try to use the most recent route progress data
-                    lastRouteProgressData?.let { (freshDistance, freshTime) ->
-                        Log.d(TAG, "Using fresh route progress data: ${String.format("%.1f", freshDistance)}m, ${formatDuration(freshTime)}")
-                        return@let freshTime
-                    } ?: run {
-                        // Fallback to cached waypoint progress data
-                        Log.d(TAG, "No fresh data available, using cached waypoint progress")
-                        Log.d(TAG, "Available waypoint progress entries:")
-                        waypointProgressMap.forEach { (id, progress) ->
-                            Log.d(TAG, "  ID: $id, Name: ${progress.locationName}, IsNext: ${progress.isNext}, Order: ${progress.order}, Time: ${formatDuration(progress.remainingTimeInSeconds)}")
-                        }
-                        val nextWaypointProgress = waypointProgressMap.values
-                            .filter { it.isNext }
-                            .minByOrNull { it.order }
-                        Log.d(TAG, "Selected next waypoint progress: ${nextWaypointProgress?.locationName} - ${nextWaypointProgress?.remainingTimeInSeconds?.let { formatDuration(it) } ?: "null"}")
-                        nextWaypointProgress?.remainingTimeInSeconds
-                    }
+                    // Get the maximum remaining time from all waypoints
+                    val maxWaypointTime = trip.waypoints
+                        .filter { !it.is_passed }
+                        .mapNotNull { it.remaining_time }
+                        .maxOrNull() ?: 0L
+                    
+                    // Add buffer to ensure destination has the longest time
+                    val destinationTime = maxWaypointTime + 60L // Add 1 minute buffer
+                    
+                    Log.d(TAG, "Max waypoint time: ${formatDuration(maxWaypointTime)}")
+                    Log.d(TAG, "Destination time (with buffer): ${formatDuration(destinationTime)}")
+                    
+                    destinationTime
                 }
                 Log.d(TAG, "Final remaining time result: ${result?.let { formatDuration(it) } ?: "null"}")
                 Log.d(TAG, "=================================================")
@@ -1263,6 +1342,7 @@ class TripProgressTracker(
 
     /**
      * Calculate remaining distance to destination in meters
+     * Ensures destination always has the longest remaining distance
      */
     private fun calculateRemainingDistanceToDestination(): Double? {
         return try {
@@ -1283,26 +1363,22 @@ class TripProgressTracker(
                     Log.d(TAG, "Found destination progress: ${destinationProgress?.remainingDistanceInMeters?.let { String.format("%.1f", it) } ?: "null"}m")
                     destinationProgress?.remainingDistanceInMeters
                 } else {
-                    // Multi-waypoint route - use fresh route progress data first, then fallback to cached data
-                    Log.d(TAG, "Multi-waypoint route - checking for fresh route progress data")
+                    // Multi-waypoint route - calculate destination distance as the maximum waypoint distance + buffer
+                    Log.d(TAG, "Multi-waypoint route - calculating destination distance as max waypoint distance + buffer")
                     
-                    // First try to use the most recent route progress data
-                    lastRouteProgressData?.let { (freshDistance, freshTime) ->
-                        Log.d(TAG, "Using fresh route progress data: ${String.format("%.1f", freshDistance)}m, ${formatDuration(freshTime)}")
-                        return@let freshDistance
-                    } ?: run {
-                        // Fallback to cached waypoint progress data
-                        Log.d(TAG, "No fresh data available, using cached waypoint progress")
-                        Log.d(TAG, "Available waypoint progress entries:")
-                        waypointProgressMap.forEach { (id, progress) ->
-                            Log.d(TAG, "  ID: $id, Name: ${progress.locationName}, IsNext: ${progress.isNext}, Order: ${progress.order}, Distance: ${String.format("%.1f", progress.remainingDistanceInMeters)}m")
-                        }
-                        val nextWaypointProgress = waypointProgressMap.values
-                            .filter { it.isNext }
-                            .minByOrNull { it.order }
-                        Log.d(TAG, "Selected next waypoint progress: ${nextWaypointProgress?.locationName} - ${nextWaypointProgress?.remainingDistanceInMeters?.let { String.format("%.1f", it) } ?: "null"}m")
-                        nextWaypointProgress?.remainingDistanceInMeters
-                    }
+                    // Get the maximum remaining distance from all waypoints
+                    val maxWaypointDistance = trip.waypoints
+                        .filter { !it.is_passed }
+                        .mapNotNull { it.remaining_distance }
+                        .maxOrNull() ?: 0.0
+                    
+                    // Add buffer to ensure destination has the longest distance
+                    val destinationDistance = maxWaypointDistance + 500.0 // Add 500 meters buffer
+                    
+                    Log.d(TAG, "Max waypoint distance: ${String.format("%.1f", maxWaypointDistance)}m")
+                    Log.d(TAG, "Destination distance (with buffer): ${String.format("%.1f", destinationDistance)}m")
+                    
+                    destinationDistance
                 }
                 Log.d(TAG, "Final remaining distance result: ${result?.let { String.format("%.1f", it) } ?: "null"}m")
                 Log.d(TAG, "=====================================================")
@@ -1315,7 +1391,56 @@ class TripProgressTracker(
     }
 
     /**
-     * Show passenger notification when approaching a waypoint (5 minutes away)
+     * Check all waypoints for passenger notifications (3 minutes away or just passed)
+     * This is called every route progress update to ensure we don't miss any waypoints
+     */
+    private fun checkAllWaypointsForPassengerNotifications() {
+        try {
+            currentTrip?.let { trip ->
+                val currentTime = System.currentTimeMillis()
+                val unpassedWaypoints = trip.waypoints.filter { !it.is_passed }.sortedBy { it.order }
+                
+                Log.d(TAG, "=== CHECKING ALL WAYPOINTS FOR PASSENGER NOTIFICATIONS ===")
+                Log.d(TAG, "Found ${unpassedWaypoints.size} unpassed waypoints")
+                
+                unpassedWaypoints.forEach { waypoint ->
+                    val waypointId = waypoint.id
+                    val lastCheckTime = lastPassengerCheckTime[waypointId] ?: 0L
+                    
+                    // Check every 30 seconds to avoid spam
+                    if (currentTime - lastCheckTime > 30000) {
+                        lastPassengerCheckTime[waypointId] = currentTime
+                        
+                        // Check if this waypoint has passengers and is within 3 minutes
+                        val remainingTime = waypoint.remaining_time ?: Long.MAX_VALUE
+                        val remainingDistance = waypoint.remaining_distance ?: Double.MAX_VALUE
+                        
+                        Log.d(TAG, "Waypoint ${waypoint.order} (${waypoint.location.google_place_name}):")
+                        Log.d(TAG, "  - Remaining time: ${formatDuration(remainingTime)}")
+                        Log.d(TAG, "  - Remaining distance: ${String.format("%.1f", remainingDistance)}m")
+                        
+                        // Show notification if within 3 minutes (180 seconds) and not already shown
+                        if (remainingTime <= 180 && !approachingNotificationsShown.contains(waypointId)) {
+                            Log.d(TAG, "  - Within 3 minutes, checking for passengers...")
+                            approachingNotificationsShown.add(waypointId)
+                            showPassengerApproachingNotification(waypoint)
+                        } else if (remainingTime <= 180) {
+                            Log.d(TAG, "  - Within 3 minutes but notification already shown")
+                        } else {
+                            Log.d(TAG, "  - More than 3 minutes away")
+                        }
+                    }
+                }
+                
+                Log.d(TAG, "=========================================================")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error checking waypoints for passenger notifications: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Show passenger notification when approaching a waypoint (3 minutes away)
      */
     private fun showPassengerApproachingNotification(waypoint: TripWaypoint) {
         coroutineScope.launch {
@@ -1342,6 +1467,52 @@ class TripProgressTracker(
             } catch (e: Exception) {
                 Log.e(TAG, "Error showing passenger approaching notification: ${e.message}", e)
             }
+        }
+    }
+
+    /**
+     * Check for waypoints that were just passed and show passenger notifications
+     */
+    private fun checkPassedWaypointsForPassengerNotifications() {
+        try {
+            currentTrip?.let { trip ->
+                val currentTime = System.currentTimeMillis()
+                val passedWaypoints = trip.waypoints.filter { it.is_passed }.sortedBy { it.order }
+                
+                Log.d(TAG, "=== CHECKING PASSED WAYPOINTS FOR PASSENGER NOTIFICATIONS ===")
+                Log.d(TAG, "Found ${passedWaypoints.size} passed waypoints")
+                
+                passedWaypoints.forEach { waypoint ->
+                    val waypointId = waypoint.id
+                    val lastCheckTime = lastPassengerCheckTime[waypointId] ?: 0L
+                    
+                    // Check every 30 seconds to avoid spam
+                    if (currentTime - lastCheckTime > 30000) {
+                        lastPassengerCheckTime[waypointId] = currentTime
+                        
+                        // Check if this waypoint has passengers and was just passed (within last 2 minutes)
+                        val timeSincePassed = currentTime - (waypointPassedTime[waypointId] ?: 0L)
+                        
+                        Log.d(TAG, "Passed waypoint ${waypoint.order} (${waypoint.location.google_place_name}):")
+                        Log.d(TAG, "  - Time since passed: ${timeSincePassed / 1000} seconds")
+                        
+                        // Show notification if passed within last 2 minutes and not already shown
+                        if (timeSincePassed <= 120000 && !reachedNotificationsShown.contains(waypointId)) {
+                            Log.d(TAG, "  - Just passed, checking for passengers...")
+                            reachedNotificationsShown.add(waypointId)
+                            showPassengerReachedNotification(waypoint)
+                        } else if (timeSincePassed <= 120000) {
+                            Log.d(TAG, "  - Just passed but notification already shown")
+                        } else {
+                            Log.d(TAG, "  - Passed more than 2 minutes ago")
+                        }
+                    }
+                }
+                
+                Log.d(TAG, "=============================================================")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error checking passed waypoints for passenger notifications: ${e.message}", e)
         }
     }
 
@@ -1377,12 +1548,174 @@ class TripProgressTracker(
     }
 
     /**
+     * Check final destination for passenger notifications
+     */
+    private fun checkFinalDestinationForPassengerNotifications() {
+        try {
+            currentTrip?.let { trip ->
+                val currentTime = System.currentTimeMillis()
+                val destination = trip.route.destination
+                val destinationId = -1 // Special ID for final destination
+                val lastCheckTime = lastPassengerCheckTime[destinationId] ?: 0L
+                
+                // Check every 30 seconds to avoid spam
+                if (currentTime - lastCheckTime > 30000) {
+                    lastPassengerCheckTime[destinationId] = currentTime
+                    
+                    // Get remaining time to destination
+                    val remainingTimeToDestination = calculateRemainingTimeToDestination() ?: Long.MAX_VALUE
+                    
+                    Log.d(TAG, "=== CHECKING FINAL DESTINATION FOR PASSENGER NOTIFICATIONS ===")
+                    Log.d(TAG, "Destination: ${destination.google_place_name}")
+                    Log.d(TAG, "Remaining time: ${formatDuration(remainingTimeToDestination)}")
+                    
+                    // Show notification if within 3 minutes and not already shown
+                    if (remainingTimeToDestination <= 180 && !approachingNotificationsShown.contains(destinationId)) {
+                        Log.d(TAG, "Within 3 minutes of destination, checking for passengers...")
+                        approachingNotificationsShown.add(destinationId)
+                        
+                        coroutineScope.launch {
+                            try {
+                                val locationName = destination.custom_name?.takeIf { it.isNotBlank() } 
+                                    ?: destination.google_place_name
+                                val passengerCount = databaseManager.countPaidPassengersForWaypoint(tripId, locationName)
+                                
+                                Log.d(TAG, "Found $passengerCount paid passengers for destination '$locationName'")
+                                
+                                if (passengerCount > 0) {
+                                    passengerNotificationDialog.showApproachingNotification(
+                                        passengerCount = passengerCount,
+                                        waypointName = destination.google_place_name
+                                    )
+                                    Log.d(TAG, "Showed destination approaching notification for $passengerCount passengers")
+                                } else {
+                                    Log.d(TAG, "No passengers to board at destination")
+                                }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Error checking destination passengers: ${e.message}", e)
+                            }
+                        }
+                    } else if (remainingTimeToDestination <= 180) {
+                        Log.d(TAG, "Within 3 minutes of destination but notification already shown")
+                    } else {
+                        Log.d(TAG, "More than 3 minutes from destination")
+                    }
+                    
+                    Log.d(TAG, "=============================================================")
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error checking final destination for passenger notifications: ${e.message}", e)
+        }
+    }
+
+    /**
      * Get location name for passenger counting - matches both custom_name and google_place_name
      */
     private fun getWaypointLocationName(waypoint: TripWaypoint): String {
         // Try custom name first, then fall back to google place name
         return waypoint.location.custom_name?.takeIf { it.isNotBlank() } 
             ?: waypoint.location.google_place_name
+    }
+
+    /**
+     * Recalculate all waypoint data before publishing to ensure accuracy
+     * Since reversal is handled in backend, we use a simple progressive calculation
+     */
+    private fun recalculateAllWaypointData() {
+        try {
+            currentTrip?.let { trip ->
+                Log.d(TAG, "=== RECALCULATING ALL WAYPOINT DATA ===")
+                Log.d(TAG, "Trip is_reversed: ${trip.is_reversed} (handled by backend)")
+                
+                // Get current route progress data (this is the distance/time to the NEXT waypoint)
+                val (currentRemainingDistance, currentRemainingTime) = lastRouteProgressData ?: Pair(0.0, 0L)
+                
+                // Get all unpassed waypoints sorted by order
+                val unpassedWaypoints = trip.waypoints
+                    .filter { !it.is_passed }
+                    .sortedBy { it.order }
+                
+                Log.d(TAG, "Found ${unpassedWaypoints.size} unpassed waypoints")
+                Log.d(TAG, "Current remaining distance to next waypoint: ${String.format("%.1f", currentRemainingDistance)}m")
+                Log.d(TAG, "Current remaining time to next waypoint: ${formatDuration(currentRemainingTime)}")
+                
+                if (unpassedWaypoints.isNotEmpty()) {
+                    // Calculate proper remaining values for each waypoint
+                    // Each waypoint should have progressively more remaining time/distance
+                    unpassedWaypoints.forEachIndexed { index, waypoint ->
+                        val waypointOrder = waypoint.order
+                        val totalUnpassedWaypoints = unpassedWaypoints.size
+                        
+                        // Simple progressive calculation: each waypoint gets more time/distance than the previous
+                        // The first waypoint gets the current remaining time/distance
+                        // Each subsequent waypoint gets additional time/distance
+                        val additionalTimePerWaypoint = 30L // 30 seconds per waypoint
+                        val additionalDistancePerWaypoint = 200.0 // 200 meters per waypoint
+                        
+                        val calculatedTime = currentRemainingTime + (additionalTimePerWaypoint * (waypointOrder - 1))
+                        val calculatedDistance = currentRemainingDistance + (additionalDistancePerWaypoint * (waypointOrder - 1))
+                        
+                        Log.d(TAG, "Waypoint ${waypoint.order} (${waypoint.location.google_place_name}):")
+                        Log.d(TAG, "  - Base time: ${formatDuration(currentRemainingTime)}, Base distance: ${String.format("%.1f", currentRemainingDistance)}m")
+                        Log.d(TAG, "  - Additional time: ${formatDuration(additionalTimePerWaypoint * (waypointOrder - 1))}, Additional distance: ${String.format("%.1f", additionalDistancePerWaypoint * (waypointOrder - 1))}m")
+                        Log.d(TAG, "  - Final time: ${formatDuration(calculatedTime)}, Final distance: ${String.format("%.1f", calculatedDistance)}m")
+                        
+                        // Update waypoint progress map
+                        val waypointProgress = WaypointProgress(
+                            waypointId = waypoint.id,
+                            tripId = tripId,
+                            order = waypoint.order,
+                            locationName = waypoint.location.google_place_name,
+                            remainingDistanceInMeters = calculatedDistance,
+                            remainingTimeInSeconds = calculatedTime,
+                            trafficDelayInSeconds = 0L,
+                            isReached = false,
+                            isNext = waypointOrder == unpassedWaypoints.first().order,
+                            timestamp = System.currentTimeMillis(),
+                            currentLatitude = currentLocation?.coordinates?.latitude,
+                            currentLongitude = currentLocation?.coordinates?.longitude,
+                            currentSpeedInMetersPerSecond = currentSpeed,
+                            speedAccuracyInMetersPerSecond = speedAccuracy
+                        )
+                        
+                        waypointProgressMap[waypoint.id] = waypointProgress
+                        
+                        // Update in-memory trip data
+                        val updatedWaypoints = trip.waypoints.map { wp ->
+                            if (wp.id == waypoint.id) {
+                                wp.copy(
+                                    remaining_time = calculatedTime,
+                                    remaining_distance = calculatedDistance
+                                )
+                            } else wp
+                        }
+                        currentTrip = trip.copy(waypoints = updatedWaypoints)
+                        
+                        // Persist to database
+                        coroutineScope.launch {
+                            try {
+                                databaseManager.updateWaypointRemaining(
+                                    tripId = tripId,
+                                    waypointId = waypoint.id,
+                                    remainingTimeSeconds = calculatedTime,
+                                    remainingDistanceMeters = calculatedDistance
+                                )
+                                Log.d(TAG, "Updated waypoint ${waypoint.id} (Order: ${waypoint.order}) in database")
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Failed to update waypoint ${waypoint.id} in database: ${e.message}", e)
+                            }
+                        }
+                    }
+                } else {
+                    Log.d(TAG, "No unpassed waypoints to recalculate")
+                }
+                
+                Log.d(TAG, "=====================================")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error recalculating all waypoint data: ${e.message}", e)
+        }
     }
 }
 

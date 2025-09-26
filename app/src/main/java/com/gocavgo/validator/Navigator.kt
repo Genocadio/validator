@@ -3619,13 +3619,14 @@ class Navigator : AppCompatActivity() {
     }
 
     private var lastMqttUpdateTime = 0L
-    private val MQTT_UPDATE_INTERVAL = 180000L // 3 minutes (180 seconds)
+    private val MQTT_UPDATE_INTERVAL = 30000L // 30 seconds (changed from 3 minutes)
     private var lastMqttHealthCheckTime = 0L
     private val MQTT_HEALTH_CHECK_INTERVAL = 120000L // 2 minutes
     private var lastMqttReconnectAttempt = 0L
 
     /**
      * Send periodic MQTT updates to keep the backend informed of trip progress
+     * Now sends every 30 seconds with proper waypoint recalculation
      */
     private fun sendPeriodicMqttUpdate() {
         try {
@@ -3635,7 +3636,7 @@ class Navigator : AppCompatActivity() {
                 if (mqttService?.isHealthy() == true) {
                     tripProgressTracker?.sendPeriodicProgressUpdate()
                     lastMqttUpdateTime = currentTime
-                    Log.d(TAG, "⏰ MQTT: Periodic update sent (3-minute interval)")
+                    Log.d(TAG, "⏰ MQTT: Periodic update sent (30-second interval)")
                 } else {
                     // Log detailed MQTT status for debugging
                     val status = mqttService?.getServiceStatus()
