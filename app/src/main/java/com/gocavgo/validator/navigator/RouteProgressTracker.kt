@@ -219,52 +219,8 @@ class RouteProgressTracker(
 
             val sectionProgressList = routeProgress.sectionProgress
             if (sectionProgressList.isNotEmpty()) {
-                val currentSectionProgress = sectionProgressList[0]
-                
-                // Get remaining distance and time
-                val remainingDistance = try {
-                    currentSectionProgress.remainingDistanceInMeters.toDouble()
-                } catch (e: Exception) {
-                    Logging.w(TAG, "Error getting remaining distance: ${e.message}")
-                    0.0
-                }
-
-                val remainingDuration = try {
-                    currentSectionProgress.remainingDuration.seconds
-                } catch (e: Exception) {
-                    Logging.w(TAG, "Error getting remaining duration: ${e.message}")
-                    0L
-                }
-
-                val trafficDelay = try {
-                    currentSectionProgress.trafficDelay.seconds
-                } catch (e: Exception) {
-                    Logging.w(TAG, "Error getting traffic delay: ${e.message}")
-                    0L
-                }
-
-                Logging.d(TAG, "=== ROUTE PROGRESS UPDATE ===")
-                Logging.d(TAG, "Remaining distance: ${String.format("%.1f", remainingDistance)}m")
-                Logging.d(TAG, "Remaining time: ${formatDuration(remainingDuration)}")
-                Logging.d(TAG, "Traffic delay: ${formatDuration(trafficDelay)}")
-
-                // Update waypoint progress based on current section
-                updateWaypointProgress(currentSectionProgress, remainingDistance, remainingDuration, trafficDelay)
-
-                // Check if we're reaching a waypoint (distance-based detection for waypoints)
-                Logging.d(TAG, "Checking waypoint threshold: ${String.format("%.1f", remainingDistance)}m < ${WAYPOINT_REACHED_THRESHOLD_METERS}m = ${remainingDistance < WAYPOINT_REACHED_THRESHOLD_METERS}")
-                if (remainingDistance < WAYPOINT_REACHED_THRESHOLD_METERS) {
-                    Logging.d(TAG, "🚨 WAYPOINT THRESHOLD TRIGGERED! Calling handleWaypointReached...")
-                    handleWaypointReached(currentSectionProgress)
-                }
-
-                // Check for waypoint approaching notifications (5 minutes before)
-                checkWaypointApproachingNotifications(remainingDuration)
-
-                // Publish trip progress update via MQTT (every 20 seconds)
-                publishTripProgressUpdate(remainingDuration, remainingDistance)
-
-                Logging.d(TAG, "=============================")
+                // Pass section data directly to the new method
+                onSectionProgressUpdate(sectionProgressList)
             }
         } catch (e: Exception) {
             Logging.e(TAG, "Error in route progress update: ${e.message}", e)
@@ -272,22 +228,158 @@ class RouteProgressTracker(
     }
 
     /**
-     * Update waypoint progress based on current section progress
+     * Handle section progress updates directly from NavigationHandler
      */
-    private fun updateWaypointProgress(
-        sectionProgress: SectionProgress,
-        remainingDistance: Double,
-        remainingDuration: Long,
+    fun onSectionProgressUpdate(sectionProgressList: List<SectionProgress>) {
+        try {
+            if (!isInitialized) {
+                Logging.w(TAG, "RouteProgressTracker not yet initialized, skipping section progress update")
+                return
+            }
+
+            if (sectionProgressList.isEmpty()) {
+                Logging.w(TAG, "Received empty section progress list")
+                return
+            }
+
+            val currentSectionProgress = sectionProgressList[0]
+            val lastSectionProgress = sectionProgressList[sectionProgressList.size - 1]
+            
+            // Get remaining distance and time for current section (next waypoint)
+            val currentRemainingDistance = try {
+                currentSectionProgress.remainingDistanceInMeters.toDouble()
+            } catch (e: Exception) {
+                Logging.w(TAG, "Error getting current remaining distance: ${e.message}")
+                0.0
+            }
+
+            val currentRemainingDuration = try {
+                currentSectionProgress.remainingDuration.seconds
+            } catch (e: Exception) {
+                Logging.w(TAG, "Error getting current remaining duration: ${e.message}")
+                0L
+            }
+
+            // Use simple logic like getETA() - get the last section for total route remaining time
+            val totalRemainingDistance = try {
+                lastSectionProgress.remainingDistanceInMeters.toDouble()
+            } catch (e: Exception) {
+                Logging.w(TAG, "Error getting total remaining distance: ${e.message}")
+                0.0
+            }
+
+            val totalRemainingDuration = try {
+                lastSectionProgress.remainingDuration.seconds
+            } catch (e: Exception) {
+                Logging.w(TAG, "Error getting total remaining duration: ${e.message}")
+                0L
+            }
+
+            val trafficDelay = try {
+                currentSectionProgress.trafficDelay.seconds
+            } catch (e: Exception) {
+                Logging.w(TAG, "Error getting traffic delay: ${e.message}")
+                0L
+            }
+
+            Logging.d(TAG, "=== ROUTE PROGRESS UPDATE ===")
+            Logging.d(TAG, "Total sections: ${sectionProgressList.size}")
+            Logging.d(TAG, "Current section remaining distance: ${String.format("%.1f", currentRemainingDistance)}m")
+            Logging.d(TAG, "Current section remaining time: ${formatDuration(currentRemainingDuration)}")
+            Logging.d(TAG, "Total route remaining distance: ${String.format("%.1f", totalRemainingDistance)}m")
+            Logging.d(TAG, "Total route remaining time: ${formatDuration(totalRemainingDuration)}")
+            Logging.d(TAG, "Traffic delay: ${formatDuration(trafficDelay)}")
+
+            // Update waypoint progress using actual section data
+            updateWaypointProgressWithSections(sectionProgressList, currentRemainingDistance, currentRemainingDuration, totalRemainingDistance, totalRemainingDuration, trafficDelay)
+
+            // Check if we're reaching a waypoint (distance-based detection for waypoints)
+            Logging.d(TAG, "Checking waypoint threshold: ${String.format("%.1f", currentRemainingDistance)}m < ${WAYPOINT_REACHED_THRESHOLD_METERS}m = ${currentRemainingDistance < WAYPOINT_REACHED_THRESHOLD_METERS}")
+            if (currentRemainingDistance < WAYPOINT_REACHED_THRESHOLD_METERS) {
+                Logging.d(TAG, "🚨 WAYPOINT THRESHOLD TRIGGERED! Calling handleWaypointReached...")
+                handleWaypointReached(currentSectionProgress)
+            }
+
+            // Check for waypoint approaching notifications (5 minutes before)
+            checkWaypointApproachingNotifications(currentRemainingDuration)
+
+            // Store trip's total remaining time/distance in database
+            coroutineScope.launch {
+                try {
+                    currentTrip?.let { trip ->
+                        databaseManager.updateTripRemaining(
+                            tripId = trip.id,
+                            remainingTimeToDestination = totalRemainingDuration,
+                            remainingDistanceToDestination = totalRemainingDistance
+                        )
+                        
+                        // Update in-memory trip data
+                        currentTrip = trip.copy(
+                            remaining_time_to_destination = totalRemainingDuration,
+                            remaining_distance_to_destination = totalRemainingDistance
+                        )
+                        
+                        Logging.d(TAG, "Updated trip remaining progress: time=${formatDuration(totalRemainingDuration)}, distance=${String.format("%.1f", totalRemainingDistance)}m")
+                    }
+                } catch (e: Exception) {
+                    Logging.e(TAG, "Failed to update trip remaining progress: ${e.message}", e)
+                }
+            }
+
+            // Publish trip progress update via MQTT using total route remaining time
+            publishTripProgressUpdate(totalRemainingDuration, totalRemainingDistance)
+
+            Logging.d(TAG, "=============================")
+        } catch (e: Exception) {
+            Logging.e(TAG, "Error in section progress update: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Update waypoint progress using actual section data
+     */
+    private fun updateWaypointProgressWithSections(
+        sectionProgressList: List<SectionProgress>,
+        currentRemainingDistance: Double,
+        currentRemainingDuration: Long,
+        totalRemainingDistance: Double,
+        totalRemainingDuration: Long,
         trafficDelay: Long
     ) {
         try {
             currentTrip?.let { trip ->
                 if (trip.waypoints.isEmpty()) {
-                    // Single destination route - update destination progress
-                    updateDestinationProgress(remainingDistance, remainingDuration, trafficDelay)
+                    // Single destination route - update destination progress using total remaining time
+                    updateDestinationProgress(totalRemainingDistance, totalRemainingDuration, trafficDelay)
+                } else {
+                    // Multi-waypoint route - update waypoint progress using actual section data
+                    updateMultiWaypointProgressWithSections(sectionProgressList, currentRemainingDistance, currentRemainingDuration, totalRemainingDistance, totalRemainingDuration, trafficDelay)
+                }
+            }
+        } catch (e: Exception) {
+            Logging.e(TAG, "Error updating waypoint progress with sections: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Update waypoint progress based on current section progress (legacy method)
+     */
+    private fun updateWaypointProgress(
+        sectionProgress: SectionProgress,
+        currentRemainingDistance: Double,
+        currentRemainingDuration: Long,
+        totalRemainingDistance: Double,
+        totalRemainingDuration: Long,
+        trafficDelay: Long
+    ) {
+        try {
+            currentTrip?.let { trip ->
+                if (trip.waypoints.isEmpty()) {
+                    // Single destination route - update destination progress using total remaining time
+                    updateDestinationProgress(totalRemainingDistance, totalRemainingDuration, trafficDelay)
                 } else {
                     // Multi-waypoint route - update waypoint progress
-                    updateMultiWaypointProgress(sectionProgress, remainingDistance, remainingDuration, trafficDelay)
+                    updateMultiWaypointProgress(sectionProgress, currentRemainingDistance, currentRemainingDuration, totalRemainingDistance, totalRemainingDuration, trafficDelay)
                 }
             }
         } catch (e: Exception) {
@@ -320,12 +412,84 @@ class RouteProgressTracker(
     }
 
     /**
-     * Update progress for multi-waypoint route
+     * Update progress for multi-waypoint route using actual section data
+     */
+    private fun updateMultiWaypointProgressWithSections(
+        sectionProgressList: List<SectionProgress>,
+        currentRemainingDistance: Double,
+        currentRemainingDuration: Long,
+        totalRemainingDistance: Double,
+        totalRemainingDuration: Long,
+        trafficDelay: Long
+    ) {
+        try {
+            currentTrip?.let { trip ->
+                Logging.d(TAG, "🗺️ MULTI-WAYPOINT ROUTE WITH SECTIONS")
+                Logging.d(TAG, "Total sections: ${sectionProgressList.size}")
+                
+                // Get unpassed waypoints
+                val unpassedWaypoints = trip.waypoints
+                    .filter { !it.is_passed }
+                    .sortedBy { it.order }
+                
+                Logging.d(TAG, "Found ${unpassedWaypoints.size} unpassed waypoints")
+                
+                if (unpassedWaypoints.isNotEmpty()) {
+                    // Update each waypoint using the corresponding section data
+                    // Sections are cumulative: Section 1 = to waypoint 1, Section 2 = to waypoint 2, etc.
+                    unpassedWaypoints.forEachIndexed { index, waypoint ->
+                        val sectionIndex = index // Use index directly since sections are already cumulative
+                        
+                        if (sectionIndex < sectionProgressList.size) {
+                            val sectionProgress = sectionProgressList[sectionIndex]
+                            val sectionRemainingTime = sectionProgress.remainingDuration.seconds
+                            val sectionRemainingDistance = sectionProgress.remainingDistanceInMeters.toDouble()
+                            
+                            Logging.d(TAG, "Waypoint ${waypoint.order} (${waypoint.location.google_place_name}):")
+                            Logging.d(TAG, "  - Section ${sectionIndex + 1}: ${formatDuration(sectionRemainingTime)}, ${String.format("%.1f", sectionRemainingDistance)}m")
+                            
+                            // Update waypoint in database with actual section data
+                            updateWaypointInDatabase(
+                                waypointId = waypoint.id,
+                                remainingTimeSeconds = sectionRemainingTime,
+                                remainingDistanceMeters = sectionRemainingDistance,
+                                refreshData = false
+                            )
+                        } else {
+                            // If we don't have enough sections, use the last section data
+                            val lastSectionProgress = sectionProgressList[sectionProgressList.size - 1]
+                            val lastSectionRemainingTime = lastSectionProgress.remainingDuration.seconds
+                            val lastSectionRemainingDistance = lastSectionProgress.remainingDistanceInMeters.toDouble()
+                            
+                            Logging.d(TAG, "Waypoint ${waypoint.order} (${waypoint.location.google_place_name}):")
+                            Logging.d(TAG, "  - Using last section data: ${formatDuration(lastSectionRemainingTime)}, ${String.format("%.1f", lastSectionRemainingDistance)}m")
+                            
+                            updateWaypointInDatabase(
+                                waypointId = waypoint.id,
+                                remainingTimeSeconds = lastSectionRemainingTime,
+                                remainingDistanceMeters = lastSectionRemainingDistance,
+                                refreshData = false
+                            )
+                        }
+                    }
+                } else {
+                    Logging.d(TAG, "No unpassed waypoints found")
+                }
+            }
+        } catch (e: Exception) {
+            Logging.e(TAG, "Error updating multi-waypoint progress with sections: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Update progress for multi-waypoint route (legacy method)
      */
     private fun updateMultiWaypointProgress(
         sectionProgress: SectionProgress,
-        remainingDistance: Double,
-        remainingDuration: Long,
+        currentRemainingDistance: Double,
+        currentRemainingDuration: Long,
+        totalRemainingDistance: Double,
+        totalRemainingDuration: Long,
         trafficDelay: Long
     ) {
         try {
@@ -336,20 +500,22 @@ class RouteProgressTracker(
                 val nextWaypoint = getNextUnpassedWaypoint()
                 if (nextWaypoint != null) {
                     Logging.d(TAG, "Next waypoint: ${nextWaypoint.location.google_place_name}")
-                    Logging.d(TAG, "Remaining distance to next: ${String.format("%.1f", remainingDistance)}m")
-                    Logging.d(TAG, "ETA to next: ${formatDuration(remainingDuration)}")
+                    Logging.d(TAG, "Remaining distance to next: ${String.format("%.1f", currentRemainingDistance)}m")
+                    Logging.d(TAG, "ETA to next: ${formatDuration(currentRemainingDuration)}")
+                    Logging.d(TAG, "Total route remaining distance: ${String.format("%.1f", totalRemainingDistance)}m")
+                    Logging.d(TAG, "Total route remaining time: ${formatDuration(totalRemainingDuration)}")
                     Logging.d(TAG, "Traffic delay: ${formatDuration(trafficDelay)}")
 
                     // Update the next waypoint's remaining time and distance (don't refresh, will be done by updateAllUnpassedWaypoints)
                     updateWaypointInDatabase(
                         waypointId = nextWaypoint.id,
-                        remainingTimeSeconds = remainingDuration,
-                        remainingDistanceMeters = remainingDistance,
+                        remainingTimeSeconds = currentRemainingDuration,
+                        remainingDistanceMeters = currentRemainingDistance,
                         refreshData = false
                     )
 
-                    // Update all unpassed waypoints with progressive values
-                    updateAllUnpassedWaypoints(remainingDistance, remainingDuration)
+                    // Update all unpassed waypoints with progressive values using total route remaining time
+                    updateAllUnpassedWaypoints(totalRemainingDistance, totalRemainingDuration)
                 } else {
                     Logging.d(TAG, "No unpassed waypoints found")
                 }
@@ -667,8 +833,8 @@ class RouteProgressTracker(
                 if (currentTime - lastProgressUpdateTime >= PROGRESS_UPDATE_INTERVAL_SECONDS * 1000) {
                     Logging.d(TAG, "=== PUBLISHING TRIP PROGRESS UPDATE ===")
                     Logging.d(TAG, "Trip ID: ${trip.id}")
-                    Logging.d(TAG, "Remaining time: ${remainingTime?.let { formatDuration(it) } ?: "Unknown"}")
-                    Logging.d(TAG, "Remaining distance: ${remainingDistance?.let { String.format("%.1f", it) } ?: "Unknown"}m")
+                    Logging.d(TAG, "Remaining time: ${remainingTime?.let { formatDuration(it) } ?: "Unknown"} (${remainingTime} seconds)")
+                    Logging.d(TAG, "Remaining distance: ${remainingDistance?.let { String.format("%.1f", it) } ?: "Unknown"}m (${remainingDistance} meters)")
                     Logging.d(TAG, "Current speed: ${currentSpeed?.let { String.format("%.2f", it) } ?: "Unknown"} m/s")
                     Logging.d(TAG, "=====================================")
                     

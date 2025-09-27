@@ -336,8 +336,13 @@ class App(
             waypoints.add(origin)
             Logging.d("App", "Added origin waypoint")
 
-            // Add intermediate waypoints sorted by order
-            val sortedWaypoints = trip.waypoints.sortedBy { it.order }
+            // Add intermediate waypoints sorted by order, but only unpassed ones
+            val sortedWaypoints = trip.waypoints
+                .filter { !it.is_passed } // Only include unpassed waypoints
+                .sortedBy { it.order }
+            
+            Logging.d("App", "Found ${trip.waypoints.size} total waypoints, ${sortedWaypoints.size} unpassed waypoints")
+            
             sortedWaypoints.forEach { tripWaypoint ->
                 val waypoint = Waypoint(
                     GeoCoordinates(
@@ -348,7 +353,7 @@ class App(
                     type = WaypointType.STOPOVER
                 }
                 waypoints.add(waypoint)
-                Logging.d("App", "Added waypoint: ${tripWaypoint.location.google_place_name} (order: ${tripWaypoint.order})")
+                Logging.d("App", "Added unpassed waypoint: ${tripWaypoint.location.google_place_name} (order: ${tripWaypoint.order})")
             }
 
             // Add destination
@@ -394,11 +399,13 @@ class App(
             mapView.mapScene.addMapMarker(originMarker)
             Logging.d("App", "Origin marker added to map")
             
-            // Add intermediate waypoint markers
-            val sortedWaypoints = trip.waypoints.sortedBy { it.order }
-            Logging.d("App", "Adding ${sortedWaypoints.size} intermediate waypoint markers...")
+            // Add intermediate waypoint markers (only unpassed ones)
+            val sortedWaypoints = trip.waypoints
+                .filter { !it.is_passed } // Only include unpassed waypoints
+                .sortedBy { it.order }
+            Logging.d("App", "Adding ${sortedWaypoints.size} unpassed intermediate waypoint markers...")
             sortedWaypoints.forEachIndexed { index, tripWaypoint ->
-                Logging.d("App", "Adding waypoint $index: ${tripWaypoint.location.google_place_name}")
+                Logging.d("App", "Adding unpassed waypoint $index: ${tripWaypoint.location.google_place_name}")
                 val marker = createWaypointMarker(
                     GeoCoordinates(tripWaypoint.location.latitude, tripWaypoint.location.longitude),
                     R.drawable.green_dot,
@@ -406,7 +413,7 @@ class App(
                 )
                 waypointMarkers.add(marker)
                 mapView.mapScene.addMapMarker(marker)
-                Logging.d("App", "Waypoint $index marker added to map")
+                Logging.d("App", "Unpassed waypoint $index marker added to map")
             }
             
             // Add destination marker

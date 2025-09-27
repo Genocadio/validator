@@ -1037,9 +1037,11 @@ class MqttService private constructor(
             }
 
             val time = remainingTimeToDestination
+                ?: tripResponse.remaining_time_to_destination
                 ?: nextOrFirstUnpassed?.remaining_time
 
             val dist = remainingDistanceToDestination
+                ?: tripResponse.remaining_distance_to_destination
                 ?: nextOrFirstUnpassed?.remaining_distance
 
             Log.d(TAG, "Final fallback result: time=${time?.let { formatDuration(it) } ?: "null"}, distance=${dist?.let { String.format("%.1f", it) } ?: "null"}m")

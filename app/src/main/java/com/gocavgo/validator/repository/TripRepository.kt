@@ -159,6 +159,23 @@ class TripRepository(context: Context) {
             Log.d("TripRepository", "Saved remaining progress to DB: trip=$tripId, waypoint=$waypointId, time=${remainingTimeSeconds}, distance=${remainingDistanceMeters}")
         }
     }
+
+    // Update remaining time/distance for the entire trip (route to destination)
+    suspend fun updateTripRemaining(
+        tripId: Int,
+        remainingTimeToDestination: Long?,
+        remainingDistanceToDestination: Double?
+    ) {
+        val trip = getTripById(tripId)
+        if (trip != null) {
+            val updatedTrip = trip.copy(
+                remaining_time_to_destination = remainingTimeToDestination ?: trip.remaining_time_to_destination,
+                remaining_distance_to_destination = remainingDistanceToDestination ?: trip.remaining_distance_to_destination
+            )
+            saveTrip(updatedTrip)
+            Log.d("TripRepository", "Saved trip remaining progress to DB: trip=$tripId, time=${remainingTimeToDestination}, distance=${remainingDistanceToDestination}")
+        }
+    }
     
     // Update vehicle current location
     suspend fun updateVehicleCurrentLocation(vehicleId: Int, latitude: Double, longitude: Double, speed: Double) {

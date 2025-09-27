@@ -16,6 +16,8 @@ data class TripResponse(
     val connection_mode: String,
     val notes: String?,
     val seats: Int,
+    val remaining_time_to_destination: Long? = null,
+    val remaining_distance_to_destination: Double? = null,
     val is_reversed: Boolean,
     val has_custom_waypoints: Boolean,
     val created_at: String,

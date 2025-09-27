@@ -67,6 +67,24 @@ class DatabaseManager(context: Context) {
             throw e
         }
     }
+
+    // Trip remaining progress persistence (route to destination)
+    suspend fun updateTripRemaining(
+        tripId: Int,
+        remainingTimeToDestination: Long?,
+        remainingDistanceToDestination: Double?
+    ) {
+        try {
+            tripRepository.updateTripRemaining(tripId, remainingTimeToDestination, remainingDistanceToDestination)
+            android.util.Log.d(
+                "DatabaseManager",
+                "Persisted trip remaining progress: trip=$tripId, time=${remainingTimeToDestination}, distance=${remainingDistanceToDestination}"
+            )
+        } catch (e: Exception) {
+            android.util.Log.e("DatabaseManager", "Failed to persist trip remaining progress: ${e.message}", e)
+            throw e
+        }
+    }
     
     // Vehicle location tracking
     suspend fun updateVehicleCurrentLocation(vehicleId: Int, latitude: Double, longitude: Double, speed: Double) =
