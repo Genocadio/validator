@@ -3357,213 +3357,6 @@ class Navigator : AppCompatActivity() {
     }
 
     /**
-     * Resume navigation if it was active before going to background
-     */
-    private fun resumeNavigationIfNeeded() {
-        try {
-            Log.d(TAG, "=== CHECKING IF NAVIGATION NEEDS TO RESUME ===")
-            Log.d(TAG, "Navigation started: $isNavigationStarted")
-            Log.d(TAG, "Current route: ${currentRoute != null}")
-            Log.d(TAG, "Visual navigator: ${visualNavigator != null}")
-            Log.d(TAG, "Headless navigator: ${navigator != null}")
-            
-            if (isNavigationStarted && currentRoute != null) {
-                Log.d(TAG, "Navigation was active, checking if it needs to be resumed...")
-                
-                // Check if visual navigator needs to be restarted
-                if (showMap && visualNavigator != null) {
-                    val needsRestart = visualNavigator?.route == null || 
-                                     visualNavigator?.routeProgressListener == null ||
-                                     visualNavigator?.navigableLocationListener == null
-                    
-                    if (needsRestart) {
-                        Log.d(TAG, "Visual navigator needs restart, reattaching route and listeners...")
-                        restartVisualNavigation()
-                    } else {
-                        Log.d(TAG, "Visual navigator is healthy, no restart needed")
-                    }
-                }
-                
-                // Check if headless navigator needs to be restarted
-                if (!showMap && navigator != null) {
-                    val needsRestart = navigator?.route == null || 
-                                     navigator?.routeProgressListener == null ||
-                                     navigator?.navigableLocationListener == null
-                    
-                    if (needsRestart) {
-                        Log.d(TAG, "Headless navigator needs restart, reattaching route and listeners...")
-                        restartHeadlessNavigation()
-                    } else {
-                        Log.d(TAG, "Headless navigator is healthy, no restart needed")
-                    }
-                }
-                
-                // Ensure location source is properly set up
-                ensureLocationSourceIsActive()
-                
-                // Restart dynamic routing if it was enabled
-                if (useDynamicRouting && dynamicRoutingEngine != null) {
-                    Log.d(TAG, "Restarting dynamic routing...")
-                    startDynamicSearchForBetterRoutes(currentRoute!!)
-                }
-                
-                // Ensure trip progress tracker is properly connected
-                ensureTripProgressTrackerIsActive()
-                
-                Log.d(TAG, "Navigation resume check completed")
-            } else {
-                Log.d(TAG, "Navigation was not active or no route available, skipping resume")
-            }
-            
-            Log.d(TAG, "=============================================")
-        } catch (e: Exception) {
-            Log.e(TAG, "Error resuming navigation: ${e.message}", e)
-        }
-    }
-    
-    /**
-     * Restart visual navigation with current route
-     */
-    private fun restartVisualNavigation() {
-        try {
-            currentRoute?.let { route ->
-                Log.d(TAG, "Restarting visual navigation...")
-                
-                // Stop current visual navigator
-                visualNavigator?.stopRendering()
-                visualNavigator = null
-                
-                // Create new visual navigator
-                visualNavigator = VisualNavigator()
-                
-                // Set up the route and listeners
-                visualNavigator?.let { nav ->
-                    nav.route = route
-                    setupNavigationListeners(nav)
-                    setupRouteProgressListener(nav)
-                    
-                    // Set up destination reached listener
-                    nav.destinationReachedListener = DestinationReachedListener {
-                        Log.d(TAG, "Destination reached!")
-                        nav.stopRendering()
-                    }
-                    
-                    // Set up camera behavior
-                    nav.cameraBehavior = if (isCameraBehaviorEnabled) DynamicCameraBehavior() else null
-                    
-                    // Start rendering
-                    nav.startRendering(mapView!!)
-                    
-                    // Set up location source
-                    setupLocationSource(nav, route, isSimulator = isSimulated)
-                    
-                    Log.d(TAG, "Visual navigation restarted successfully")
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error restarting visual navigation: ${e.message}", e)
-        }
-    }
-    
-    /**
-     * Restart headless navigation with current route
-     */
-    private fun restartHeadlessNavigation() {
-        try {
-            currentRoute?.let { route ->
-                Log.d(TAG, "Restarting headless navigation...")
-                
-                // Stop current headless navigator
-                navigator = null
-                
-                // Create new headless navigator
-                navigator = Navigator()
-                
-                // Set up the route and listeners
-                navigator?.let { nav ->
-                    nav.route = route
-                    setupRouteProgressListener(nav)
-                    
-                    // Set up location source
-                    setupLocationSource(nav, route, isSimulated)
-                    
-                    Log.d(TAG, "Headless navigation restarted successfully")
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error restarting headless navigation: ${e.message}", e)
-        }
-    }
-    
-    /**
-     * Ensure location source is active and properly connected
-     */
-    private fun ensureLocationSourceIsActive() {
-        try {
-            Log.d(TAG, "Ensuring location source is active...")
-            
-            if (!isSimulated) {
-                // Check if location engine is running
-                locationEngine?.let { engine ->
-                    try {
-                        // Try to start location engine if not already running
-                        engine.start(LocationAccuracy.NAVIGATION)
-                        Log.d(TAG, "Location engine is active")
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Location engine may already be running or failed to start: ${e.message}")
-                    }
-                }
-            } else {
-                // Check if location simulator is running
-                locationSimulator?.let { simulator ->
-                    try {
-                        // Try to start simulator (it will handle if already running)
-                        simulator.start()
-                        Log.d(TAG, "Location simulator is active")
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Location simulator may already be running or failed to start: ${e.message}")
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error ensuring location source is active: ${e.message}", e)
-        }
-    }
-    
-    /**
-     * Ensure trip progress tracker is properly connected and active
-     */
-    private fun ensureTripProgressTrackerIsActive() {
-        try {
-            Log.d(TAG, "Ensuring trip progress tracker is active...")
-            
-            tripProgressTracker?.let { tracker ->
-                // Set the current route in the tracker if it's not set
-                if (currentRoute != null) {
-                    tracker.setCurrentRoute(currentRoute!!)
-                    Log.d(TAG, "Trip progress tracker route updated")
-                }
-                
-                // Ensure MQTT service is connected
-                mqttService?.let { mqtt ->
-                    if (!mqtt.isHealthy()) {
-                        Log.w(TAG, "MQTT service not healthy, attempting reconnection...")
-                        mqtt.forceReconnect()
-                    } else {
-                        Log.d(TAG, "MQTT service is healthy")
-                    }
-                }
-                
-                Log.d(TAG, "Trip progress tracker is active and connected")
-            } ?: run {
-                Log.w(TAG, "Trip progress tracker is null, cannot ensure it's active")
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error ensuring trip progress tracker is active: ${e.message}", e)
-        }
-    }
-
-    /**
      * Handle back button press from XML layout
      */
     @SuppressLint("GestureBackNavigation")
@@ -3670,8 +3463,6 @@ class Navigator : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         
-        Log.d(TAG, "=== NAVIGATOR RESUMING FROM BACKGROUND ===")
-        
         // Notify MQTT service that app is in foreground
         mqttService?.onAppForeground()
         
@@ -3688,10 +3479,6 @@ class Navigator : AppCompatActivity() {
                 }
             }
         }
-        
-        // CRITICAL: Resume navigation if it was active before going to background
-        resumeNavigationIfNeeded()
-        
         // Only refresh network status if we don't have initial state from MainActivity
         if (!isNetworkConnected && currentConnectionType == "UNKNOWN") {
             Log.d(TAG, "No initial network state from MainActivity, refreshing...")
@@ -3699,8 +3486,6 @@ class Navigator : AppCompatActivity() {
         } else {
             Log.d(TAG, "Using network state from MainActivity, no refresh needed")
         }
-        
-        Log.d(TAG, "==========================================")
     }
     
     override fun onPause() {

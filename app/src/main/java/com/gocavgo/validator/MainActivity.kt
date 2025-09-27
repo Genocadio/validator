@@ -514,13 +514,10 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        val intent = Intent(this, Navigator::class.java)
-        intent.putExtra(Navigator.EXTRA_TRIP_ID, latestTrip!!.id)
-        intent.putExtra(Navigator.EXTRA_SHOW_MAP, showMap)
-        intent.putExtra(Navigator.EXTRA_IS_SIMULATED, isSimulated)
-        intent.putExtra(Navigator.EXTRA_NETWORK_CONNECTED, isConnected)
-        intent.putExtra(Navigator.EXTRA_CONNECTION_TYPE, connectionType)
-        intent.putExtra(Navigator.EXTRA_IS_METERED, isMetered)
+        val intent = Intent(this, com.gocavgo.validator.navigator.NavigActivity::class.java)
+        intent.putExtra(com.gocavgo.validator.navigator.NavigActivity.EXTRA_TRIP_ID, latestTrip!!.id)
+        intent.putExtra(com.gocavgo.validator.navigator.NavigActivity.EXTRA_SHOW_MAP, showMap)
+        intent.putExtra(com.gocavgo.validator.navigator.NavigActivity.EXTRA_IS_SIMULATED, isSimulated)
         startActivity(intent)
     }
 

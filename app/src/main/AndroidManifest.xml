@@ -29,6 +29,11 @@
             android:name=".security.VehicleAuthActivity"
             android:exported="false"
             android:theme="@style/Theme.AppCompat.Light.NoActionBar"/>
+        <!-- NavigActivity -->
+        <activity android:name=".navigator.NavigActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
+            android:theme="@style/Theme.Validator"
+            android:launchMode="singleTop" />
         <!-- Main Activity -->
         <activity
             android:name=".MainActivity"
@@ -39,7 +44,8 @@
 
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-        </activity> <!-- Navigator Activity -->
+        </activity>
+        <!-- Navigator Activity -->
         <activity
             android:name=".Navigator"
             android:exported="false"
