@@ -444,8 +444,9 @@ class TripProgressTracker(
                         }
                     }
 
-                    // Update remaining data for ALL unpassed waypoints beyond the immediate next one
-                    updateAllUnpassedWaypoints(remainingDistance, remainingDuration)
+                    // DISABLED: Let RouteProgressTracker handle waypoint updates with correct section-based logic
+                    // updateAllUnpassedWaypoints(remainingDistance, remainingDuration)
+                    Log.d(TAG, "Skipping waypoint updates - RouteProgressTracker handles this with correct section logic")
 
                 // Check all waypoints for passenger notifications (3 minutes away or just passed)
                 checkAllWaypointsForPassengerNotifications()
@@ -1191,6 +1192,11 @@ class TripProgressTracker(
      * Recalculates all waypoint data before publishing to ensure accuracy
      */
     fun sendPeriodicProgressUpdate() {
+        // DISABLED: Let RouteProgressTracker handle MQTT updates with correct calculations
+        Log.d(TAG, "Skipping TripProgressTracker MQTT update - RouteProgressTracker handles this with correct section-based logic")
+        return
+        
+        /* ORIGINAL CODE DISABLED
         try {
             mqttService?.let { mqtt ->
                 if (mqtt.isConnected()) {
@@ -1257,6 +1263,7 @@ class TripProgressTracker(
         } catch (e: Exception) {
             Log.e(TAG, "Error sending periodic progress update via MQTT: ${e.message}", e)
         }
+        */
     }
 
     /**

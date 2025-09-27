@@ -8,7 +8,7 @@ import androidx.room.TypeConverters
 
 @Database(
     entities = [TripEntity::class, BookingEntity::class, PaymentEntity::class, TicketEntity::class],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 @TypeConverters(TripConverters::class)

@@ -40,6 +40,7 @@ import com.here.sdk.routing.CalculateTrafficOnRouteCallback
 import com.here.sdk.routing.Maneuver
 import com.here.sdk.routing.ManeuverAction
 import com.here.sdk.routing.RoadType
+import com.here.sdk.routing.Route
 import com.here.sdk.routing.RoutingEngine
 import com.here.sdk.routing.RoutingError
 import com.here.sdk.routing.TrafficOnRoute
@@ -90,7 +91,7 @@ class NavigationHandler(
 
         // Notifies on the progress along the route including maneuver instructions.
         visualNavigator.routeProgressListener =
-            RouteProgressListener { routeProgress: RouteProgress ->
+            RouteProgressListener { routeProgress: RouteProgress,  ->
                 // Contains the progress for the next maneuver ahead and the next-next maneuvers, if any.
                 val nextManeuverList = routeProgress.maneuverProgress
 
@@ -212,10 +213,14 @@ class NavigationHandler(
         val sectionProgressList = routeProgress.sectionProgress
         // sectionProgressList is guaranteed to be non-empty.
         val totalSections = sectionProgressList.size
+
+
+
         
         // Log information for all sections
         for (i in sectionProgressList.indices) {
             val sectionProgress = sectionProgressList[i]
+
             val sectionNumber = i + 1
             
             Logging.d(TAG, "Section $sectionNumber/$totalSections:")

@@ -49,6 +49,10 @@ class DatabaseManager(context: Context) {
     suspend fun updateWaypointStatus(tripId: Int, waypointId: Int, isPassed: Boolean) = 
         tripRepository.updateWaypointStatus(tripId, waypointId, isPassed)
     
+    // Waypoint next status management
+    suspend fun updateWaypointNextStatus(tripId: Int, waypointId: Int, isNext: Boolean) = 
+        tripRepository.updateWaypointNextStatus(tripId, waypointId, isNext)
+    
     // Waypoint remaining progress persistence
     suspend fun updateWaypointRemaining(
         tripId: Int,

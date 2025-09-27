@@ -72,7 +72,9 @@ class TripRepository(context: Context) {
     // Save a single trip to database
     suspend fun saveTrip(trip: TripResponse) {
         val entity = TripEntity.fromTripResponse(trip)
-        tripDao.insertTrip(entity)
+        // Use updateTrip instead of insertTrip to update existing trip
+        tripDao.updateTrip(entity)
+        Log.d("TripRepository", "Updated trip in database: ID=${trip.id}, remaining_time=${trip.remaining_time_to_destination}, remaining_distance=${trip.remaining_distance_to_destination}")
     }
     
     // Update trip in database
@@ -133,6 +135,28 @@ class TripRepository(context: Context) {
             saveTrip(updatedTrip)
         }
     }
+    
+    // Update waypoint next status within a trip
+    suspend fun updateWaypointNextStatus(tripId: Int, waypointId: Int, isNext: Boolean) {
+        val trip = getTripById(tripId)
+        if (trip != null) {
+            // Update the waypoint next status
+            val updatedWaypoints = trip.waypoints.map { waypoint ->
+                if (waypoint.id == waypointId) {
+                    waypoint.copy(is_next = isNext)
+                } else {
+                    waypoint
+                }
+            }
+            
+            // Create updated trip with modified waypoints
+            val updatedTrip = trip.copy(waypoints = updatedWaypoints)
+            
+            // Save updated trip to database
+            saveTrip(updatedTrip)
+            Log.d("TripRepository", "Updated waypoint $waypointId is_next status to $isNext in trip $tripId")
+        }
+    }
 
     // Update remaining time/distance for a waypoint in a trip
     suspend fun updateWaypointRemaining(
@@ -168,12 +192,35 @@ class TripRepository(context: Context) {
     ) {
         val trip = getTripById(tripId)
         if (trip != null) {
+            Log.d("TripRepository", "=== BEFORE UPDATE ===")
+            Log.d("TripRepository", "Current trip remaining_time_to_destination: ${trip.remaining_time_to_destination}")
+            Log.d("TripRepository", "Current trip remaining_distance_to_destination: ${trip.remaining_distance_to_destination}")
+            Log.d("TripRepository", "New remainingTimeToDestination: $remainingTimeToDestination")
+            Log.d("TripRepository", "New remainingDistanceToDestination: $remainingDistanceToDestination")
+            
             val updatedTrip = trip.copy(
                 remaining_time_to_destination = remainingTimeToDestination ?: trip.remaining_time_to_destination,
                 remaining_distance_to_destination = remainingDistanceToDestination ?: trip.remaining_distance_to_destination
             )
+            
+            Log.d("TripRepository", "=== AFTER COPY ===")
+            Log.d("TripRepository", "Updated trip remaining_time_to_destination: ${updatedTrip.remaining_time_to_destination}")
+            Log.d("TripRepository", "Updated trip remaining_distance_to_destination: ${updatedTrip.remaining_distance_to_destination}")
+            
             saveTrip(updatedTrip)
             Log.d("TripRepository", "Saved trip remaining progress to DB: trip=$tripId, time=${remainingTimeToDestination}, distance=${remainingDistanceToDestination}")
+            
+            // Verify the save by immediately fetching the trip again
+            val verifyTrip = getTripById(tripId)
+            if (verifyTrip != null) {
+                Log.d("TripRepository", "=== VERIFICATION AFTER SAVE ===")
+                Log.d("TripRepository", "Verified trip remaining_time_to_destination: ${verifyTrip.remaining_time_to_destination}")
+                Log.d("TripRepository", "Verified trip remaining_distance_to_destination: ${verifyTrip.remaining_distance_to_destination}")
+            } else {
+                Log.e("TripRepository", "Failed to fetch trip for verification after save")
+            }
+        } else {
+            Log.e("TripRepository", "Trip not found for ID: $tripId")
         }
     }
     
