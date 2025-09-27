@@ -4,6 +4,7 @@ import android.os.Bundle
 import com.gocavgo.validator.R
 import android.util.Log
 import android.widget.Button
+import com.gocavgo.validator.util.Logging
 import android.widget.EditText
 import android.widget.TextView
 import android.widget.Toast
@@ -61,6 +62,9 @@ class VehicleAuthActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_vehicle_auth)
+
+        // Set this activity as active for logging
+        Logging.setActiveActivity(TAG)
 
         securityManager = VehicleSecurityManager(this)
 
@@ -553,6 +557,13 @@ class VehicleAuthActivity : AppCompatActivity() {
         val password: String,
         val pubKey: String
     )
+
+    override fun onResume() {
+        super.onResume()
+        
+        // Set this activity as the active one for logging
+        Logging.setActiveActivity(TAG)
+    }
 
     companion object {
         private const val TAG = "VehicleAuthActivity"

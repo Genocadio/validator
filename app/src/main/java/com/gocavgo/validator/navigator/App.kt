@@ -22,7 +22,10 @@ package com.gocavgo.validator.navigator
 import android.content.Context
 import android.util.Log
 import com.gocavgo.validator.R
+import com.gocavgo.validator.util.Logging
 import com.gocavgo.validator.dataclass.TripResponse
+import com.gocavgo.validator.database.DatabaseManager
+import com.gocavgo.validator.service.MqttService
 import com.here.sdk.core.Color
 import com.here.sdk.core.GeoCoordinates
 import com.here.sdk.core.Location
@@ -41,8 +44,15 @@ import com.here.sdk.mapview.RenderSize
 import com.here.sdk.routing.CalculateRouteCallback
 import com.here.sdk.routing.Route
 import com.here.sdk.routing.RoutingError
+import com.here.sdk.routing.Section
 import com.here.sdk.routing.Waypoint
 import com.here.sdk.routing.WaypointType
+import java.text.DateFormat
+import java.text.SimpleDateFormat
+import java.util.Locale
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 
 // An app that allows to calculate a route and start navigation, using either platform positioning or
@@ -62,10 +72,16 @@ class App(
     private val navigationExample: NavigationExample
     private var isCameraTrackingEnabled = true
     private val timeUtils: TimeUtils
+    private val databaseManager: DatabaseManager
+    private val mqttService: MqttService?
     
     // Waypoint markers for trip navigation
     private val waypointMarkers: MutableList<MapMarker> = ArrayList()
     private var currentWaypointIndex = 0
+    
+    // Route progress tracking
+    private var routeProgressTracker: RouteProgressTracker? = null
+    private val coroutineScope = CoroutineScope(Dispatchers.Main)
 
     init {
         val mapMeasureZoom =
@@ -78,6 +94,8 @@ class App(
         navigationExample.startLocationProvider()
 
         timeUtils = TimeUtils()
+        databaseManager = DatabaseManager.getInstance(context)
+        mqttService = MqttService.getInstance()
 
         setLongPressGestureHandler()
 
@@ -105,24 +123,50 @@ class App(
 
     // Update trip data when it becomes available
     fun updateTripData(newTripResponse: TripResponse?, isSimulated: Boolean = true) {
-        Log.d("App", "=== updateTripData called ===")
-        Log.d("App", "newTripResponse: $newTripResponse")
-        Log.d("App", "isSimulated: $isSimulated")
+        Logging.d("App", "=== updateTripData called ===")
+        Logging.d("App", "newTripResponse: $newTripResponse")
+        Logging.d("App", "isSimulated: $isSimulated")
         
         tripResponse = newTripResponse
         if (tripResponse != null) {
-            Log.d("App", "Trip data updated: ${tripResponse?.id}")
+            Logging.d("App", "Trip data updated: ${tripResponse?.id}")
             messageView.updateText("Trip data loaded. Calculating route...")
             
+            // Initialize route progress tracker for this trip
+            initializeRouteProgressTracker()
+            
             // Automatically start route calculation when trip data is available
-            Log.d("App", "About to call calculateRouteFromTrip...")
+            Logging.d("App", "About to call calculateRouteFromTrip...")
             calculateRouteFromTrip(isSimulated)
         } else {
-            Log.e("App", "Trip response is null in updateTripData")
+            Logging.e("App", "Trip response is null in updateTripData")
             messageView.updateText("Error: No trip data available")
         }
     }
 
+    /**
+     * Initialize route progress tracker for the current trip
+     */
+    private fun initializeRouteProgressTracker() {
+        try {
+            tripResponse?.let { trip ->
+                Logging.d("App", "Initializing RouteProgressTracker for trip ${trip.id}")
+                routeProgressTracker = RouteProgressTracker(
+                    tripId = trip.id,
+                    context = context,
+                    coroutineScope = coroutineScope,
+                    mqttService = mqttService
+                )
+                
+                // Set the route progress tracker in the navigation example
+                navigationExample.setRouteProgressTracker(routeProgressTracker)
+                
+                Logging.d("App", "RouteProgressTracker initialized and set in NavigationExample")
+            }
+        } catch (e: Exception) {
+            Logging.e("App", "Failed to initialize RouteProgressTracker: ${e.message}", e)
+        }
+    }
 
     fun toggleTrackingButtonOnClicked() {
         // By default, this is enabled.
@@ -163,11 +207,11 @@ class App(
     }
 
     private fun calculateRouteFromTrip(isSimulated: Boolean) {
-        Log.d("App", "Starting calculateRouteFromTrip with isSimulated: $isSimulated")
+        Logging.d("App", "Starting calculateRouteFromTrip with isSimulated: $isSimulated")
         clearMap()
 
         if (!determineRouteWaypointsFromTrip(isSimulated)) {
-            Log.e("App", "Failed to determine route waypoints from trip")
+            Logging.e("App", "Failed to determine route waypoints from trip")
             return
         }
 
@@ -175,14 +219,14 @@ class App(
         val waypoints = createWaypointsFromTrip()
         
         if (waypoints.isEmpty()) {
-            Log.e("App", "No valid waypoints found in trip data")
+            Logging.e("App", "No valid waypoints found in trip data")
             showDialog("Error", "No valid waypoints found in trip data")
             return
         }
 
-        Log.d("App", "Calculating route with ${waypoints.size} waypoints")
+        Logging.d("App", "Calculating route with ${waypoints.size} waypoints")
         waypoints.forEachIndexed { index, waypoint ->
-            Log.d("App", "Waypoint $index: ${waypoint.coordinates.latitude}, ${waypoint.coordinates.longitude}")
+            Logging.d("App", "Waypoint $index: ${waypoint.coordinates.latitude}, ${waypoint.coordinates.longitude}")
         }
 
         messageView.updateText("Calculating route with ${waypoints.size} waypoints...")
@@ -193,16 +237,19 @@ class App(
             CalculateRouteCallback { routingError: RoutingError?, routes: List<Route>? ->
                 if (routingError == null) {
                     val route: Route = routes!![0]
-                    Log.d("App", "Route calculated successfully. Length: ${route.lengthInMeters}m, Duration: ${route.duration.seconds}s")
+                    Logging.d("App", "Route calculated successfully. Length: ${route.lengthInMeters}m, Duration: ${route.duration.seconds}s")
                     showRouteOnMap(route)
                     
+                    // Set route in progress tracker
+                    routeProgressTracker?.setCurrentRoute(route)
+                    
                     // Add waypoint markers after route is calculated
-                    Log.d("App", "About to add waypoint markers...")
+                    Logging.d("App", "About to add waypoint markers...")
                     addWaypointMarkersToMap()
                     
                     showRouteDetails(route, isSimulated)
                 } else {
-                    Log.e("App", "Route calculation failed: $routingError")
+                    Logging.e("App", "Route calculation failed: $routingError")
                     showDialog("Error while calculating a route:", routingError.toString())
                 }
             }
@@ -238,11 +285,11 @@ class App(
     }
 
     private fun determineRouteWaypointsFromTrip(isSimulated: Boolean): Boolean {
-        Log.d("App", "=== determineRouteWaypointsFromTrip called ===")
-        Log.d("App", "isSimulated: $isSimulated")
+        Logging.d("App", "=== determineRouteWaypointsFromTrip called ===")
+        Logging.d("App", "isSimulated: $isSimulated")
         
         if (!isSimulated && navigationExample.getLastKnownLocation() == null) {
-            Log.e("App", "No GPS location found for device location mode")
+            Logging.e("App", "No GPS location found for device location mode")
             showDialog("Error", "No GPS location found.")
             return false
         }
@@ -250,21 +297,21 @@ class App(
         // When using real GPS locations, we always start from the current location of user.
         if (!isSimulated) {
             val location: Location? = navigationExample.getLastKnownLocation()
-            Log.d("App", "Device location: $location")
+            Logging.d("App", "Device location: $location")
             location?.let {
                 startWaypoint = Waypoint(it.coordinates)
                 // If a driver is moving, the bearing value can help to improve the route calculation.
                 startWaypoint!!.headingInDegrees = it.bearingInDegrees
                 mapView.camera.lookAt(it.coordinates)
-                Log.d("App", "Set start waypoint from device location")
+                Logging.d("App", "Set start waypoint from device location")
             }
         } else {
-            Log.d("App", "Using simulated location mode")
+            Logging.d("App", "Using simulated location mode")
         }
 
         // For trip-based navigation, we don't need to set startWaypoint and destinationWaypoint
         // as they will be determined from the trip data in createWaypointsFromTrip()
-        Log.d("App", "determineRouteWaypointsFromTrip returning true")
+        Logging.d("App", "determineRouteWaypointsFromTrip returning true")
         return true
     }
 
@@ -272,10 +319,10 @@ class App(
         val waypoints = mutableListOf<Waypoint>()
         
         tripResponse?.let { trip ->
-            Log.d("App", "Creating waypoints from trip: ${trip.id}")
-            Log.d("App", "Origin: ${trip.route.origin.google_place_name} (${trip.route.origin.latitude}, ${trip.route.origin.longitude})")
-            Log.d("App", "Destination: ${trip.route.destination.google_place_name} (${trip.route.destination.latitude}, ${trip.route.destination.longitude})")
-            Log.d("App", "Intermediate waypoints: ${trip.waypoints.size}")
+            Logging.d("App", "Creating waypoints from trip: ${trip.id}")
+            Logging.d("App", "Origin: ${trip.route.origin.google_place_name} (${trip.route.origin.latitude}, ${trip.route.origin.longitude})")
+            Logging.d("App", "Destination: ${trip.route.destination.google_place_name} (${trip.route.destination.latitude}, ${trip.route.destination.longitude})")
+            Logging.d("App", "Intermediate waypoints: ${trip.waypoints.size}")
             
             // Add origin
             val origin = Waypoint(
@@ -287,7 +334,7 @@ class App(
                 type = WaypointType.STOPOVER
             }
             waypoints.add(origin)
-            Log.d("App", "Added origin waypoint")
+            Logging.d("App", "Added origin waypoint")
 
             // Add intermediate waypoints sorted by order
             val sortedWaypoints = trip.waypoints.sortedBy { it.order }
@@ -301,7 +348,7 @@ class App(
                     type = WaypointType.STOPOVER
                 }
                 waypoints.add(waypoint)
-                Log.d("App", "Added waypoint: ${tripWaypoint.location.google_place_name} (order: ${tripWaypoint.order})")
+                Logging.d("App", "Added waypoint: ${tripWaypoint.location.google_place_name} (order: ${tripWaypoint.order})")
             }
 
             // Add destination
@@ -314,30 +361,30 @@ class App(
                 type = WaypointType.STOPOVER
             }
             waypoints.add(destination)
-            Log.d("App", "Added destination waypoint")
+            Logging.d("App", "Added destination waypoint")
         } ?: run {
-            Log.e("App", "Trip response is null, cannot create waypoints")
+            Logging.e("App", "Trip response is null, cannot create waypoints")
         }
 
-        Log.d("App", "Total waypoints created: ${waypoints.size}")
+        Logging.d("App", "Total waypoints created: ${waypoints.size}")
         return waypoints
     }
 
     private fun addWaypointMarkersToMap() {
-        Log.d("App", "=== STARTING addWaypointMarkersToMap ===")
+        Logging.d("App", "=== STARTING addWaypointMarkersToMap ===")
         
         // Clear existing waypoint markers
         clearWaypointMarkers()
         
         tripResponse?.let { trip ->
-            Log.d("App", "Trip data available, adding waypoint markers")
-            Log.d("App", "Trip ID: ${trip.id}")
-            Log.d("App", "Origin: ${trip.route.origin.google_place_name}")
-            Log.d("App", "Destination: ${trip.route.destination.google_place_name}")
-            Log.d("App", "Intermediate waypoints: ${trip.waypoints.size}")
+            Logging.d("App", "Trip data available, adding waypoint markers")
+            Logging.d("App", "Trip ID: ${trip.id}")
+            Logging.d("App", "Origin: ${trip.route.origin.google_place_name}")
+            Logging.d("App", "Destination: ${trip.route.destination.google_place_name}")
+            Logging.d("App", "Intermediate waypoints: ${trip.waypoints.size}")
             
             // Add origin marker
-            Log.d("App", "Adding origin marker...")
+            Logging.d("App", "Adding origin marker...")
             val originMarker = createWaypointMarker(
                 GeoCoordinates(trip.route.origin.latitude, trip.route.origin.longitude),
                 R.drawable.green_dot,
@@ -345,13 +392,13 @@ class App(
             )
             waypointMarkers.add(originMarker)
             mapView.mapScene.addMapMarker(originMarker)
-            Log.d("App", "Origin marker added to map")
+            Logging.d("App", "Origin marker added to map")
             
             // Add intermediate waypoint markers
             val sortedWaypoints = trip.waypoints.sortedBy { it.order }
-            Log.d("App", "Adding ${sortedWaypoints.size} intermediate waypoint markers...")
+            Logging.d("App", "Adding ${sortedWaypoints.size} intermediate waypoint markers...")
             sortedWaypoints.forEachIndexed { index, tripWaypoint ->
-                Log.d("App", "Adding waypoint $index: ${tripWaypoint.location.google_place_name}")
+                Logging.d("App", "Adding waypoint $index: ${tripWaypoint.location.google_place_name}")
                 val marker = createWaypointMarker(
                     GeoCoordinates(tripWaypoint.location.latitude, tripWaypoint.location.longitude),
                     R.drawable.green_dot,
@@ -359,11 +406,11 @@ class App(
                 )
                 waypointMarkers.add(marker)
                 mapView.mapScene.addMapMarker(marker)
-                Log.d("App", "Waypoint $index marker added to map")
+                Logging.d("App", "Waypoint $index marker added to map")
             }
             
             // Add destination marker
-            Log.d("App", "Adding destination marker...")
+            Logging.d("App", "Adding destination marker...")
             val destinationMarker = createWaypointMarker(
                 GeoCoordinates(trip.route.destination.latitude, trip.route.destination.longitude),
                 R.drawable.green_dot,
@@ -371,25 +418,25 @@ class App(
             )
             waypointMarkers.add(destinationMarker)
             mapView.mapScene.addMapMarker(destinationMarker)
-            Log.d("App", "Destination marker added to map")
+            Logging.d("App", "Destination marker added to map")
             
-            Log.d("App", "=== COMPLETED addWaypointMarkersToMap ===")
-            Log.d("App", "Total waypoint markers added: ${waypointMarkers.size}")
+            Logging.d("App", "=== COMPLETED addWaypointMarkersToMap ===")
+            Logging.d("App", "Total waypoint markers added: ${waypointMarkers.size}")
             messageView.updateText("Added ${waypointMarkers.size} waypoint markers to map")
         } ?: run {
-            Log.e("App", "Trip response is null, cannot add waypoint markers")
+            Logging.e("App", "Trip response is null, cannot add waypoint markers")
             messageView.updateText("No trip data available for waypoint markers")
         }
     }
 
     private fun createWaypointMarker(geoCoordinates: GeoCoordinates, resourceId: Int, title: String): MapMarker {
-        Log.d("App", "Creating waypoint marker at: ${geoCoordinates.latitude}, ${geoCoordinates.longitude}")
-        Log.d("App", "Using resource ID: $resourceId")
+        Logging.d("App", "Creating waypoint marker at: ${geoCoordinates.latitude}, ${geoCoordinates.longitude}")
+        Logging.d("App", "Using resource ID: $resourceId")
         
         val mapImage = MapImageFactory.fromResource(context.resources, resourceId)
         val mapMarker = MapMarker(geoCoordinates, mapImage)
         
-        Log.d("App", "Waypoint marker created successfully")
+        Logging.d("App", "Waypoint marker created successfully")
         return mapMarker
     }
 
@@ -398,7 +445,7 @@ class App(
             mapView.mapScene.removeMapMarker(marker)
         }
         waypointMarkers.clear()
-        Log.d("App", "Cleared waypoint markers")
+        Logging.d("App", "Cleared waypoint markers")
     }
 
     fun markWaypointAsPassed(waypointIndex: Int) {
@@ -408,7 +455,7 @@ class App(
             mapView.mapScene.removeMapMarker(marker)
             waypointMarkers.removeAt(waypointIndex)
             
-            Log.d("App", "Marked waypoint $waypointIndex as passed and removed from map")
+            Logging.d("App", "Marked waypoint $waypointIndex as passed and removed from map")
             messageView.updateText("Waypoint $waypointIndex passed")
         }
     }
@@ -417,16 +464,50 @@ class App(
     private fun showRouteDetails(route: Route, isSimulated: Boolean) {
         val estimatedTravelTimeInSeconds = route.duration.seconds
         val lengthInMeters = route.lengthInMeters
+        val routeSections = route.sections.size
 
+        // Log overall route details
         val routeDetails =
             (("Travel Time: " + timeUtils.formatTime(estimatedTravelTimeInSeconds)
                     ) + ", Length: " + timeUtils.formatLength(lengthInMeters))
 
+        Logging.d("App", "=== ROUTE DETAILS ===")
+        Logging.d("App", "Overall Route Details: $routeDetails")
+        Logging.d("App", "Total sections: $routeSections")
+        
+        // Log ETA for overall route
+        val overallETA = timeUtils.getETAinDeviceTimeZone(estimatedTravelTimeInSeconds.toInt())
+        Logging.d("App", "Overall ETA: $overallETA")
+        
+        // Log details for each section and update waypoint progress
+        Logging.d("App", "=== SECTION DETAILS ===")
+        updateWaypointProgressFromRouteSections(route)
+        
+        for (i in route.sections.indices) {
+            val dateFormat: DateFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
+            val section: Section = route.sections[i]
+
+            val formattedDepartureLocationTime = section.departureLocationTime
+                ?.localTime
+                ?.let(dateFormat::format)
+                ?: "Unknown"
+
+            val formattedArrivalLocationTime = section.arrivalLocationTime
+                ?.localTime
+                ?.let(dateFormat::format)
+                ?: "Unknown"
+
+            Logging.d("APP", "Route Section : " + (i + 1))
+            Logging.d("APP", "Route Section Departure Time : $formattedDepartureLocationTime")
+            Logging.d("APP", "Route Section Arrival Time : $formattedArrivalLocationTime")
+            Logging.d("APP", "Route Section length : " + section.lengthInMeters + " m")
+            Logging.d("APP", "Route Section duration : " + section.duration.seconds + " s")
+        }
+
         // Automatically start navigation without confirmation
-        Log.d("App", "Route Details: $routeDetails")
         messageView.updateText("Route: ${timeUtils.formatTime(estimatedTravelTimeInSeconds)}, ${timeUtils.formatLength(lengthInMeters)}")
         
-        Log.d("App", "Starting navigation automatically...")
+        Logging.d("App", "Starting navigation automatically...")
         messageView.updateText("Starting navigation...")
         navigationExample.startNavigation(route, isSimulated, isCameraTrackingEnabled)
     }
@@ -446,9 +527,9 @@ class App(
                 )
             )
         } catch (e: MapPolyline.Representation.InstantiationException) {
-            Log.e("MapPolyline Representation Exception:", e.error.name)
+            Logging.e("App", e.error.name)
         } catch (e: MapMeasureDependentRenderSize.InstantiationException) {
-            Log.e("MapMeasureDependentRenderSize Exception:", e.error.name)
+            Logging.e("App", e.error.name)
         }
 
         mapView.mapScene.addMapPolyline(routeMapPolyline!!)
@@ -529,8 +610,117 @@ class App(
         DialogManager.show(title, text, buttonText = "Ok") {}
     }
 
+    /**
+     * Update waypoint progress from route sections after route calculation
+     */
+    private fun updateWaypointProgressFromRouteSections(route: Route) {
+        try {
+            tripResponse?.let { trip ->
+                Logging.d("App", "=== UPDATING WAYPOINT PROGRESS FROM ROUTE SECTIONS ===")
+                Logging.d("App", "Route has ${route.sections.size} sections")
+                Logging.d("App", "Trip has ${trip.waypoints.size} waypoints")
+                
+                if (trip.waypoints.isEmpty()) {
+                    Logging.d("App", "Single destination route - no waypoints to update")
+                    return
+                }
+                
+                // Get unpassed waypoints sorted by order
+                val unpassedWaypoints = trip.waypoints
+                    .filter { !it.is_passed }
+                    .sortedBy { it.order }
+                
+                Logging.d("App", "Found ${unpassedWaypoints.size} unpassed waypoints")
+                
+                if (unpassedWaypoints.isNotEmpty()) {
+                    // Calculate cumulative remaining time and distance for each waypoint
+                    var cumulativeDistance = 0.0
+                    var cumulativeTime = 0L
+                    
+                    // Start from the end and work backwards to calculate remaining values
+                    val totalDistance = route.lengthInMeters.toDouble()
+                    val totalTime = route.duration.seconds
+                    
+                    Logging.d("App", "Total route distance: ${String.format("%.1f", totalDistance)}m")
+                    Logging.d("App", "Total route time: ${formatDuration(totalTime)}")
+                    
+                    unpassedWaypoints.forEachIndexed { index, waypoint ->
+                        // Calculate remaining distance and time for this waypoint
+                        // Each waypoint gets progressively less remaining time/distance
+                        val waypointOrder = waypoint.order
+                        val totalUnpassedWaypoints = unpassedWaypoints.size
+                        
+                        // Calculate proportional remaining values
+                        // First waypoint gets most remaining, last waypoint gets least
+                        val orderRatio = (totalUnpassedWaypoints - index).toDouble() / totalUnpassedWaypoints.toDouble()
+                        val remainingTime = (totalTime * orderRatio).toLong()
+                        val remainingDistance = totalDistance * orderRatio
+                        
+                        // Add some buffer to ensure proper ordering
+                        val timeBuffer = (totalTime * 0.1 * orderRatio).toLong() // 10% buffer
+                        val distanceBuffer = totalDistance * 0.1 * orderRatio // 10% buffer
+                        
+                        val finalTime = remainingTime + timeBuffer
+                        val finalDistance = remainingDistance + distanceBuffer
+                        
+                        Logging.d("App", "Waypoint ${waypoint.order} (${waypoint.location.google_place_name}):")
+                        Logging.d("App", "  - Order ratio: ${String.format("%.2f", orderRatio)}")
+                        Logging.d("App", "  - Base time: ${formatDuration(remainingTime)}, Base distance: ${String.format("%.1f", remainingDistance)}m")
+                        Logging.d("App", "  - Buffer time: ${formatDuration(timeBuffer)}, Buffer distance: ${String.format("%.1f", distanceBuffer)}m")
+                        Logging.d("App", "  - Final time: ${formatDuration(finalTime)}, Final distance: ${String.format("%.1f", finalDistance)}m")
+                        
+                        // Update waypoint in database
+                        coroutineScope.launch {
+                            try {
+                                databaseManager.updateWaypointRemaining(
+                                    tripId = trip.id,
+                                    waypointId = waypoint.id,
+                                    remainingTimeSeconds = finalTime,
+                                    remainingDistanceMeters = finalDistance
+                                )
+                                Logging.d("App", "Updated waypoint ${waypoint.id} (Order: ${waypoint.order}) in database from route sections")
+                            } catch (e: Exception) {
+                                Logging.e("App", "Failed to update waypoint ${waypoint.id} from route sections: ${e.message}", e)
+                            }
+                        }
+                    }
+                } else {
+                    Logging.d("App", "No unpassed waypoints to update")
+                }
+                
+                Logging.d("App", "=======================================================")
+            }
+        } catch (e: Exception) {
+            Logging.e("App", "Error updating waypoint progress from route sections: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Format duration in seconds to human-readable format
+     */
+    private fun formatDuration(seconds: Long): String {
+        return try {
+            when {
+                seconds < 60 -> "${seconds}s"
+                seconds < 3600 -> "${seconds / 60}m ${seconds % 60}s"
+                else -> {
+                    val hours = seconds / 3600
+                    val minutes = (seconds % 3600) / 60
+                    "${hours}h ${minutes}m"
+                }
+            }
+        } catch (e: Exception) {
+            "Unknown"
+        }
+    }
+
+    /**
+     * Get the route progress tracker for external access
+     */
+    fun getRouteProgressTracker(): RouteProgressTracker? = routeProgressTracker
+
     fun clearMapAndExit() {
-        Log.d("App", "Clearing map and exiting navigation")
+        Logging.d("App", "Clearing map and exiting navigation")
         clearMap()
         messageView.updateText("Navigation stopped. Returning to main screen...")
         
@@ -545,6 +735,9 @@ class App(
         navigationExample.stopLocating()
         // Disables rendering.
         navigationExample.stopRendering()
+        // Reset route progress tracker
+        routeProgressTracker?.reset()
+        routeProgressTracker = null
     }
 
     companion object {

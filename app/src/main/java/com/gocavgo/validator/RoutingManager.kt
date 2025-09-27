@@ -2,6 +2,7 @@ package com.gocavgo.validator
 
 import android.util.Log
 import android.os.Handler
+import com.gocavgo.validator.util.Logging
 import com.here.sdk.core.errors.InstantiationErrorException
 import com.here.sdk.core.GeoCoordinates
 import com.here.sdk.core.Location
@@ -52,7 +53,7 @@ class RoutingManager(
             onlineRoutingEngine = RoutingEngine()
             offlineRoutingEngine = OfflineRoutingEngine()
             createDynamicRoutingEngine()
-            Log.d(TAG, "All routing engines initialized successfully")
+            Logging.d(TAG, "All routing engines initialized successfully")
         } catch (e: InstantiationErrorException) {
             throw RuntimeException("Initialization of routing engines failed: " + e.error.name)
         }
@@ -67,7 +68,7 @@ class RoutingManager(
 
         try {
             dynamicRoutingEngine = DynamicRoutingEngine(dynamicRoutingOptions)
-            Log.d(TAG, "DynamicRoutingEngine initialized successfully")
+            Logging.d(TAG, "DynamicRoutingEngine initialized successfully")
         } catch (e: InstantiationErrorException) {
             throw RuntimeException("Initialization of DynamicRoutingEngine failed: " + e.error.name)
         }
@@ -76,7 +77,7 @@ class RoutingManager(
     fun toggleRoutingMode(useDynamic: Boolean, currentRoute: Route?, onNeedRestart: (Route) -> Unit) {
         val previous = useDynamicRouting
         useDynamicRouting = useDynamic
-        Log.d(TAG, "Routing mode changed ${if (previous) "Dynamic" else "Offline"} -> ${if (useDynamicRouting) "Dynamic" else "Offline"}")
+        Logging.d(TAG, "Routing mode changed ${if (previous) "Dynamic" else "Offline"} -> ${if (useDynamicRouting) "Dynamic" else "Offline"}")
         currentRoute?.let { onNeedRestart(it) }
     }
 
@@ -88,55 +89,55 @@ class RoutingManager(
         onRestartWithNewEngine: (Route) -> Unit,
         onMapUpdateRecommended: () -> Unit
     ) {
-        Log.d(TAG, "=== HANDLING NETWORK CHANGE (RoutingManager) ===")
+        Logging.d(TAG, "=== HANDLING NETWORK CHANGE (RoutingManager) ===")
 
         offlineSwitchRunnable?.let {
             handler.removeCallbacks(it)
-            Log.d(TAG, "Cancelled pending offline switch task")
+            Logging.d(TAG, "Cancelled pending offline switch task")
         }
         offlineSwitchRunnable = null
 
         when {
             !connected -> {
-                Log.w(TAG, "Lost network connection - switching to offline mode")
+                Logging.w(TAG, "Lost network connection - switching to offline mode")
                 if (useDynamicRouting) {
-                    Log.d(TAG, "Auto-switching from dynamic to offline routing (delayed)")
+                    Logging.d(TAG, "Auto-switching from dynamic to offline routing (delayed)")
                     offlineSwitchRunnable = Runnable {
                         toggleRoutingMode(false, currentRoute) { r -> onRestartWithNewEngine(r) }
                         offlineSwitchRunnable = null
                     }
                     handler.postDelayed(offlineSwitchRunnable!!, 120000)
-                    Log.d(TAG, "Scheduled offline switch in 2 minutes")
+                    Logging.d(TAG, "Scheduled offline switch in 2 minutes")
                 }
                 dynamicRoutingEngine?.stop()
             }
 
             connected && type == "CELLULAR" && metered -> {
-                Log.w(TAG, "On metered cellular connection - using offline routing to save data")
+                Logging.w(TAG, "On metered cellular connection - using offline routing to save data")
                 if (useDynamicRouting) {
-                    Log.d(TAG, "Switching to offline routing to conserve data")
+                    Logging.d(TAG, "Switching to offline routing to conserve data")
                     toggleRoutingMode(false, currentRoute) { r -> onRestartWithNewEngine(r) }
                 }
             }
 
             connected && type == "WIFI" && !metered -> {
-                Log.d(TAG, "Fast WiFi connection available - dynamic routing optimal")
+                Logging.d(TAG, "Fast WiFi connection available - dynamic routing optimal")
                 if (!useDynamicRouting && currentRoute != null) {
-                    Log.d(TAG, "Switching to dynamic routing for better traffic awareness")
+                    Logging.d(TAG, "Switching to dynamic routing for better traffic awareness")
                     toggleRoutingMode(true, currentRoute) { r -> onRestartWithNewEngine(r) }
                 }
                 onMapUpdateRecommended()
             }
 
             connected && type.startsWith("CELLULAR") && !metered -> {
-                Log.d(TAG, "Unlimited cellular connection - dynamic routing available")
+                Logging.d(TAG, "Unlimited cellular connection - dynamic routing available")
                 if (!useDynamicRouting && currentRoute != null) {
                     toggleRoutingMode(true, currentRoute) { r -> onRestartWithNewEngine(r) }
                 }
             }
         }
 
-        Log.d(TAG, "==============================")
+        Logging.d(TAG, "==============================")
     }
 
     private fun getSelectedRoutingEngine(): RoutingInterface {
@@ -189,7 +190,7 @@ class RoutingManager(
                     }
                 })
             } catch (e: DynamicRoutingEngine.StartException) {
-                Log.e(TAG, "Failed to start dynamic routing: ${e.message}")
+                Logging.e(TAG, "Failed to start dynamic routing: ${e.message}")
             }
         }
     }
@@ -254,7 +255,7 @@ class RoutingManager(
     fun resetDeviationState() {
         isReturningToRoute = false
         deviationCounter = 0
-        Log.d(TAG, "Deviation state reset for new route")
+        Logging.d(TAG, "Deviation state reset for new route")
     }
 
     fun handleRouteDeviation(
@@ -266,7 +267,7 @@ class RoutingManager(
     ) {
         val route = currentRoute
         if (route == null) {
-            Log.w(TAG, "No current route available for deviation handling")
+            Logging.w(TAG, "No current route available for deviation handling")
             return
         }
 
@@ -284,32 +285,32 @@ class RoutingManager(
                         ?: routeDeviation.lastLocationOnRoute!!.originalLocation.coordinates
                 )!!
             } else {
-                Log.d(TAG, "User was never following the route. Taking start of the route instead.")
+                Logging.d(TAG, "User was never following the route. Taking start of the route instead.")
                 route.sections[0].departurePlace.originalCoordinates!!
             }
 
         val distanceInMeters = currentGeoCoordinates.distanceTo(lastGeoCoordinatesOnRoute).toInt()
-        Log.d(TAG, "Route deviation detected: ${distanceInMeters}m from route")
+        Logging.d(TAG, "Route deviation detected: ${distanceInMeters}m from route")
 
         deviationCounter++
 
         if (isReturningToRoute) {
-            Log.d(TAG, "Rerouting is already in progress, ignoring deviation event")
+            Logging.d(TAG, "Rerouting is already in progress, ignoring deviation event")
             return
         }
 
         if (distanceInMeters > DEVIATION_THRESHOLD_METERS && deviationCounter >= MIN_DEVIATION_EVENTS) {
-            Log.d(TAG, "=== ROUTE DEVIATION DETECTED ===")
-            Log.d(TAG, "Deviation distance: ${distanceInMeters}m (threshold: ${DEVIATION_THRESHOLD_METERS}m)")
-            Log.d(TAG, "Deviation events: $deviationCounter (minimum: $MIN_DEVIATION_EVENTS)")
-            Log.d(TAG, "Starting rerouting process...")
+            Logging.d(TAG, "=== ROUTE DEVIATION DETECTED ===")
+            Logging.d(TAG, "Deviation distance: ${distanceInMeters}m (threshold: ${DEVIATION_THRESHOLD_METERS}m)")
+            Logging.d(TAG, "Deviation events: $deviationCounter (minimum: $MIN_DEVIATION_EVENTS)")
+            Logging.d(TAG, "Starting rerouting process...")
 
             isReturningToRoute = true
 
             val newStartingPoint = Waypoint(currentGeoCoordinates)
             currentMapMatchedLocation?.bearingInDegrees?.let { bearing ->
                 newStartingPoint.headingInDegrees = bearing
-                Log.d(TAG, "Setting heading direction: ${bearing}°")
+                Logging.d(TAG, "Setting heading direction: ${bearing}°")
             }
 
             returnToRoute(
@@ -318,26 +319,26 @@ class RoutingManager(
                 routeDeviation.lastTraveledSectionIndex,
                 routeDeviation.traveledDistanceOnLastSectionInMeters,
                 onSuccess = { newRoute ->
-                    Log.d(TAG, "=== REROUTING SUCCESSFUL ===")
-                    Log.d(TAG, "New route calculated successfully")
+                    Logging.d(TAG, "=== REROUTING SUCCESSFUL ===")
+                    Logging.d(TAG, "New route calculated successfully")
                     onRerouteApplied(newRoute)
                     onShowMap(newRoute)
                     onLogRouteInfo(newRoute)
-                    Log.d(TAG, "==========================")
+                    Logging.d(TAG, "==========================")
                     isReturningToRoute = false
                     deviationCounter = 0
-                    Log.d(TAG, "Rerouting process completed")
+                    Logging.d(TAG, "Rerouting process completed")
                 },
                 onError = { routingError ->
-                    Log.e(TAG, "Rerouting failed: ${routingError?.name}")
-                    Log.w(TAG, "Continuing with original route despite deviation")
+                    Logging.e(TAG, "Rerouting failed: ${routingError?.name}")
+                    Logging.w(TAG, "Continuing with original route despite deviation")
                     isReturningToRoute = false
                     deviationCounter = 0
-                    Log.d(TAG, "Rerouting process completed")
+                    Logging.d(TAG, "Rerouting process completed")
                 }
             )
         } else {
-            Log.d(TAG, "Deviation not significant enough for rerouting: ${distanceInMeters}m or not enough events: $deviationCounter")
+            Logging.d(TAG, "Deviation not significant enough for rerouting: ${distanceInMeters}m or not enough events: $deviationCounter")
         }
     }
 }

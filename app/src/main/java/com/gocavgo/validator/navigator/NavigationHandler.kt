@@ -20,10 +20,11 @@
 package com.gocavgo.validator.navigator
 
 import android.content.Context
-import android.util.Log
+import com.gocavgo.validator.util.Logging
 import com.here.sdk.core.LanguageCode
 import com.here.sdk.core.UnitSystem
 import com.here.sdk.core.errors.InstantiationErrorException
+import com.here.sdk.navigation.DestinationReachedListener
 import com.here.sdk.navigation.EventText
 import com.here.sdk.navigation.EventTextListener
 import com.here.sdk.navigation.ManeuverNotificationOptions
@@ -32,6 +33,7 @@ import com.here.sdk.navigation.NavigableLocation
 import com.here.sdk.navigation.NavigableLocationListener
 import com.here.sdk.navigation.RouteProgress
 import com.here.sdk.navigation.RouteProgressListener
+import com.here.sdk.navigation.SectionProgress
 import com.here.sdk.navigation.TextNotificationType
 import com.here.sdk.navigation.VisualNavigator
 import com.here.sdk.routing.CalculateTrafficOnRouteCallback
@@ -48,7 +50,8 @@ import java.util.Locale
 // Note that this class does not show an exhaustive list of all possible events.
 class NavigationHandler(
     private val context: Context?,
-    private val messageView: MessageViewUpdater
+    private val messageView: MessageViewUpdater,
+    private var routeProgressTracker: RouteProgressTracker? = null
 ) {
     private var previousManeuverIndex = -1
     private var lastMapMatchedLocation: MapMatchedLocation? = null
@@ -56,7 +59,8 @@ class NavigationHandler(
     private val timeUtils = TimeUtils()
     private val routingEngine: RoutingEngine
     private var lastTrafficUpdateInMilliseconds = 0L
-    private lateinit var voiceAssistant: VoiceAssistant
+    // Voice assistant is disabled
+    // private lateinit var voiceAssistant: VoiceAssistant
 
     init {
         try {
@@ -66,16 +70,23 @@ class NavigationHandler(
         }
     }
 
+    /**
+     * Set the route progress tracker for this navigation handler
+     */
+    fun setRouteProgressTracker(tracker: RouteProgressTracker?) {
+        routeProgressTracker = tracker
+    }
+
     fun setupListeners(
         visualNavigator: VisualNavigator,
         dynamicRoutingEngine: DynamicRoutingEngine
     ) {
         // A helper class for TTS.
-        voiceAssistant = VoiceAssistant(context, object : VoiceAssistant.VoiceAssistantListener {
-            override fun onInitialized() {
-                setupVoiceGuidance(visualNavigator)
-            }
-        })
+//        voiceAssistant = VoiceAssistant(context, object : VoiceAssistant.VoiceAssistantListener {
+//            override fun onInitialized() {
+//                setupVoiceGuidance(visualNavigator)
+//            }
+//        })
 
         // Notifies on the progress along the route including maneuver instructions.
         visualNavigator.routeProgressListener =
@@ -85,7 +96,7 @@ class NavigationHandler(
 
                 val nextManeuverProgress = nextManeuverList[0]
                 if (nextManeuverProgress == null) {
-                    Log.d(TAG, "No next maneuver available.")
+                    Logging.d(TAG, "No next maneuver available.")
                     return@RouteProgressListener
                 }
 
@@ -102,11 +113,11 @@ class NavigationHandler(
                 val turnAngle = nextManeuver.turnAngleInDegrees
                 if (turnAngle != null) {
                     if (turnAngle > 10) {
-                        Log.d(TAG, "At the next maneuver: Make a right turn of $turnAngle degrees.")
+                        Logging.d(TAG, "At the next maneuver: Make a right turn of $turnAngle degrees.")
                     } else if (turnAngle < -10) {
-                        Log.d(TAG, "At the next maneuver: Make a left turn of $turnAngle degrees.")
+                        Logging.d(TAG, "At the next maneuver: Make a left turn of $turnAngle degrees.")
                     } else {
-                        Log.d(TAG, "At the next maneuver: Go straight.")
+                        Logging.d(TAG, "At the next maneuver: Go straight.")
                     }
                 }
 
@@ -114,7 +125,7 @@ class NavigationHandler(
                 val roundaboutAngle = nextManeuver.roundaboutAngleInDegrees
                 if (roundaboutAngle != null) {
                     // Note that the value is negative only for left-driving countries such as UK.
-                    Log.d(TAG, "At the next maneuver: Follow the roundabout for " + roundaboutAngle + " degrees to reach the exit."
+                    Logging.d(TAG, "At the next maneuver: Follow the roundabout for " + roundaboutAngle + " degrees to reach the exit."
                     )
                 }
 
@@ -139,6 +150,9 @@ class NavigationHandler(
                     )
                 }
                 updateTrafficOnRoute(routeProgress, visualNavigator)
+                
+                // Update route progress tracker with current progress
+                routeProgressTracker?.onRouteProgressUpdate(routeProgress)
             }
 
         // Notifies on the current map-matched location and other useful information while driving or walking.
@@ -146,13 +160,13 @@ class NavigationHandler(
             NavigableLocationListener { currentNavigableLocation: NavigableLocation ->
                 lastMapMatchedLocation = currentNavigableLocation.mapMatchedLocation
                 if (lastMapMatchedLocation == null) {
-                    Log.d(TAG, "The currentNavigableLocation could not be map-matched. Are you off-road?")
+                    Logging.d(TAG, "The currentNavigableLocation could not be map-matched. Are you off-road?")
                     return@NavigableLocationListener
                 }
 
                 if (lastMapMatchedLocation!!.isDrivingInTheWrongWay) {
                     // For two-way streets, this value is always false. This feature is supported in tracking mode and when deviating from a route.
-                    Log.d(
+                    Logging.d(
                         TAG,
                         "This is a one way road. User is driving against the allowed traffic direction."
                     )
@@ -161,7 +175,7 @@ class NavigationHandler(
                 val speed = currentNavigableLocation.originalLocation.speedInMetersPerSecond
                 val accuracy =
                     currentNavigableLocation.originalLocation.speedAccuracyInMetersPerSecond
-                Log.d(
+                Logging.d(
                     TAG,
                     "Driving speed (m/s): " + speed + "plus/minus an accuracy of: " + accuracy
                 )
@@ -171,88 +185,117 @@ class NavigationHandler(
         // The texts can be maneuver instructions or warn on certain obstacles, such as speed cameras.
         visualNavigator.eventTextListener =
             EventTextListener { eventText: EventText ->
-                // We use the built-in TTS engine to synthesize the localized text as audio.
-                voiceAssistant.speak(eventText.text)
+                // Voice assistant is disabled, so we just log the event text
+                Logging.d(TAG, "Event text received: ${eventText.text}")
                 // We can optionally retrieve the associated maneuver. The details will be null if the text contains
                 // non-maneuver related information, such as for speed camera warnings.
                 if (eventText.type == TextNotificationType.MANEUVER && eventText.maneuverNotificationDetails != null) {
                     val maneuver = eventText.maneuverNotificationDetails!!.maneuver
+                    Logging.d(TAG, "Maneuver event: ${maneuver.action.name}")
                 }
+            }
+
+        // Notifies when destination has been reached
+        visualNavigator.destinationReachedListener =
+            DestinationReachedListener {
+                Logging.d(TAG, "=== DESTINATION REACHED LISTENER TRIGGERED ===")
+                Logging.d(TAG, "HERE SDK detected destination reached")
+                
+                // Notify route progress tracker about destination reached
+                routeProgressTracker?.onDestinationReached()
+                
+                Logging.d(TAG, "=============================================")
             }
     }
 
     private fun getETA(routeProgress: RouteProgress): String {
         val sectionProgressList = routeProgress.sectionProgress
         // sectionProgressList is guaranteed to be non-empty.
+        val totalSections = sectionProgressList.size
+        
+        // Log information for all sections
+        for (i in sectionProgressList.indices) {
+            val sectionProgress = sectionProgressList[i]
+            val sectionNumber = i + 1
+            
+            Logging.d(TAG, "Section $sectionNumber/$totalSections:")
+            Logging.d(TAG, "  Remaining distance: ${sectionProgress.remainingDistanceInMeters} meters")
+            Logging.d(TAG, "  Remaining duration: ${sectionProgress.remainingDuration.toSeconds()} seconds")
+            Logging.d(TAG, "  Traffic delay: ${sectionProgress.trafficDelay.seconds} seconds")
+            
+            // Check if we're close to reaching this waypoint
+            if (sectionProgress.remainingDistanceInMeters < 10) {
+                Logging.d(TAG, "  *** Reached waypoint for section $sectionNumber! ***")
+            }
+        }
+        
+        // Get the last section for overall ETA
         val lastSectionProgress = sectionProgressList[sectionProgressList.size - 1]
         val currentETAString = "ETA: " + timeUtils.getETAinDeviceTimeZone(
             lastSectionProgress.remainingDuration.toSeconds().toInt()
         )
-        Log.d(
-            TAG,
-            "Distance to destination in meters: " + lastSectionProgress.remainingDistanceInMeters
-        )
-        Log.d(TAG, "Traffic delay ahead in seconds: " + lastSectionProgress.trafficDelay.seconds)
+        
         // Logs current ETA.
-        Log.d(TAG, currentETAString)
+        Logging.d(TAG, currentETAString)
         return currentETAString
     }
 
-    private fun setupVoiceGuidance(visualNavigator: VisualNavigator) {
-        val ttsLanguageCode =
-            getLanguageCodeForDevice(VisualNavigator.getAvailableLanguagesForManeuverNotifications())
-        val maneuverNotificationOptions = ManeuverNotificationOptions()
-        // Set the language in which the notifications will be generated.
-        maneuverNotificationOptions.language = ttsLanguageCode
-        // Set the measurement system used for distances.
-        maneuverNotificationOptions.unitSystem = UnitSystem.METRIC
-        visualNavigator.maneuverNotificationOptions = maneuverNotificationOptions
-        Log.d(
-            TAG,
-            "LanguageCode for maneuver notifications: $ttsLanguageCode"
-        )
+    // Voice guidance setup is disabled
+    // private fun setupVoiceGuidance(visualNavigator: VisualNavigator) {
+    //     val ttsLanguageCode =
+    //         getLanguageCodeForDevice(VisualNavigator.getAvailableLanguagesForManeuverNotifications())
+    //     val maneuverNotificationOptions = ManeuverNotificationOptions()
+    //     // Set the language in which the notifications will be generated.
+    //     maneuverNotificationOptions.language = ttsLanguageCode
+    //     // Set the measurement system used for distances.
+    //     maneuverNotificationOptions.unitSystem = UnitSystem.METRIC
+    //     visualNavigator.maneuverNotificationOptions = maneuverNotificationOptions
+    //     Logging.d(
+    //         TAG,
+    //         "LanguageCode for maneuver notifications: $ttsLanguageCode"
+    //     )
+    //
+    //     // Set language to our TextToSpeech engine.
+    //     val locale = LanguageCodeConverter.getLocale(ttsLanguageCode)
+    //     if (voiceAssistant.setLanguage(locale)) {
+    //         Logging.d(
+    //             TAG,
+    //             "TextToSpeech engine uses this language: $locale"
+    //         )
+    //     } else {
+    //         Logging.e(
+    //             TAG,
+    //             "TextToSpeech engine does not support this language: $locale"
+    //         )
+    //     }
+    // }
 
-        // Set language to our TextToSpeech engine.
-        val locale = LanguageCodeConverter.getLocale(ttsLanguageCode)
-        if (voiceAssistant.setLanguage(locale)) {
-            Log.d(
-                TAG,
-                "TextToSpeech engine uses this language: $locale"
-            )
-        } else {
-            Log.e(
-                TAG,
-                "TextToSpeech engine does not support this language: $locale"
-            )
-        }
-    }
-
-    // Get the language preferably used on this device.
-    private fun getLanguageCodeForDevice(supportedVoiceSkins: List<LanguageCode>): LanguageCode {
-        // 1. Determine if preferred device language is supported by our TextToSpeech engine.
-
-        var localeForCurrenDevice = Locale.getDefault()
-        if (!voiceAssistant.isLanguageAvailable(localeForCurrenDevice)) {
-            Log.e(
-                TAG,
-                "TextToSpeech engine does not support: $localeForCurrenDevice, falling back to EN_US."
-            )
-            localeForCurrenDevice = Locale("en", "US")
-        }
-
-        // 2. Determine supported voice skins from HERE SDK.
-        var languageCodeForCurrenDevice =
-            LanguageCodeConverter.getLanguageCode(localeForCurrenDevice)
-        if (!supportedVoiceSkins.contains(languageCodeForCurrenDevice)) {
-            Log.e(
-                TAG,
-                "No voice skins available for $languageCodeForCurrenDevice, falling back to EN_US."
-            )
-            languageCodeForCurrenDevice = LanguageCode.EN_US
-        }
-
-        return languageCodeForCurrenDevice
-    }
+    // Language code detection is disabled since voice guidance is disabled
+    // private fun getLanguageCodeForDevice(supportedVoiceSkins: List<LanguageCode>): LanguageCode {
+    //     // 1. Determine if preferred device language is supported by our TextToSpeech engine.
+    //
+    //     var localeForCurrenDevice = Locale.getDefault()
+    //     if (!voiceAssistant.isLanguageAvailable(localeForCurrenDevice)) {
+    //         Logging.e(
+    //             TAG,
+    //             "TextToSpeech engine does not support: $localeForCurrenDevice, falling back to EN_US."
+    //         )
+    //         localeForCurrenDevice = Locale("en", "US")
+    //     }
+    //
+    //     // 2. Determine supported voice skins from HERE SDK.
+    //     var languageCodeForCurrenDevice =
+    //         LanguageCodeConverter.getLanguageCode(localeForCurrenDevice)
+    //     if (!supportedVoiceSkins.contains(languageCodeForCurrenDevice)) {
+    //         Logging.e(
+    //             TAG,
+    //             "No voice skins available for $languageCodeForCurrenDevice, falling back to EN_US."
+    //         )
+    //         languageCodeForCurrenDevice = LanguageCode.EN_US
+    //     }
+    //
+    //     return languageCodeForCurrenDevice
+    // }
 
     private fun getRoadName(maneuver: Maneuver): String {
         val currentRoadTexts = maneuver.roadTexts
@@ -311,6 +354,9 @@ class NavigationHandler(
         lastTrafficUpdateInMilliseconds = now
 
         val sectionProgressList = routeProgress.sectionProgress
+        val currentSectionProgress = sectionProgressList[0]
+        val totalSections = sectionProgressList.size
+
         val lastSectionProgress = sectionProgressList[sectionProgressList.size - 1]
         val traveledDistanceOnLastSectionInMeters =
             currentRoute.lengthInMeters - lastSectionProgress.remainingDistanceInMeters
@@ -322,13 +368,13 @@ class NavigationHandler(
             traveledDistanceOnLastSectionInMeters,
             CalculateTrafficOnRouteCallback { routingError: RoutingError?, trafficOnRoute: TrafficOnRoute? ->
                 if (routingError != null) {
-                    Log.d(TAG, "CalculateTrafficOnRoute error: " + routingError.name)
+                    Logging.d(TAG, "CalculateTrafficOnRoute error: " + routingError.name)
                     return@CalculateTrafficOnRouteCallback
                 }
                 // Sets traffic data for the current route, affecting RouteProgress duration in SectionProgress,
                 // while preserving route distance and geometry.
                 visualNavigator.trafficOnRoute = trafficOnRoute
-                Log.d(TAG, "Updated traffic on route.")
+                Logging.d(TAG, "Updated traffic on route.")
             })
     }
 

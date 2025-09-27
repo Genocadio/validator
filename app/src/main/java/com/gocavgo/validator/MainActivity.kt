@@ -81,27 +81,27 @@ class MainActivity : ComponentActivity() {
     ) { permissions ->
         val allGranted = permissions.values.all { it }
         if (allGranted) {
-            Log.d(TAG, "Network permissions granted")
+            Logging.d(TAG, "Network permissions granted")
             initializeNetworkMonitoring()
         } else {
-            Log.w(TAG, "Some network permissions denied")
+            Logging.w(TAG, "Some network permissions denied")
             // Still try to initialize with basic permissions
             initializeNetworkMonitoring()
         }
     }
 
     private fun initializeNetworkMonitoring() {
-        Log.d(TAG, "Initializing network monitoring...")
+        Logging.d(TAG, "Initializing network monitoring...")
 
         // Log initial network state
         logDetailedNetworkInfo()
 
         networkMonitor = NetworkMonitor(this) { connected, type, metered ->
-            Log.d(TAG, "=== NETWORK STATE CHANGED ===")
-            Log.d(TAG, "Connected: $connected")
-            Log.d(TAG, "Connection Type: $type")
-            Log.d(TAG, "Is Metered: $metered")
-            Log.d(TAG, "============================")
+            Logging.d(TAG, "=== NETWORK STATE CHANGED ===")
+            Logging.d(TAG, "Connected: $connected")
+            Logging.d(TAG, "Connection Type: $type")
+            Logging.d(TAG, "Is Metered: $metered")
+            Logging.d(TAG, "============================")
 
             // Update UI state
             isConnected = connected
@@ -117,7 +117,7 @@ class MainActivity : ComponentActivity() {
 
     private fun initializeMqtt() {
         if (!vehicleSecurityManager.isVehicleRegistered()) {
-            Log.w(TAG, "Vehicle not registered, skipping MQTT initialization")
+            Logging.w(TAG, "Vehicle not registered, skipping MQTT initialization")
             return
         }
 
@@ -134,14 +134,14 @@ class MainActivity : ComponentActivity() {
         // Set connection callback
         mqttService?.setConnectionCallback { connected ->
             mqttConnected = connected
-            Log.d(TAG, "MQTT connection status: $connected")
+            Logging.d(TAG, "MQTT connection status: $connected")
 
             if (connected) {
-                Log.i(TAG, "MQTT connected successfully")
+                Logging.i(TAG, "MQTT connected successfully")
                 // Optionally publish initial status
                 publishVehicleStatus("READY")
             } else {
-                Log.w(TAG, "MQTT connection failed or lost")
+                Logging.w(TAG, "MQTT connection failed or lost")
             }
         }
 
@@ -173,9 +173,9 @@ class MainActivity : ComponentActivity() {
                 mqtt.publish("car/$vehicleId/status", statusMessage)
                     .whenComplete { result, throwable ->
                         if (throwable != null) {
-                            Log.e(TAG, "Failed to publish vehicle status", throwable)
+                            Logging.e(TAG, "Failed to publish vehicle status", throwable)
                         } else {
-                            Log.d(TAG, "Vehicle status published: $status")
+                            Logging.d(TAG, "Vehicle status published: $status")
                         }
                     }
             }
@@ -186,21 +186,21 @@ class MainActivity : ComponentActivity() {
 
         // Listen for trip assignments
         mqttService?.addMessageListener("car/$vehicleId/trip") { topic, payload ->
-            Log.d(TAG, "Trip assignment received: $payload")
+            Logging.d(TAG, "Trip assignment received: $payload")
             // Handle new trip assignment
             handleTripAssignment(payload)
         }
 
         // Listen for booking updates
         mqttService?.addMessageListener("trip/+/booking") { topic, payload ->
-            Log.d(TAG, "Booking update received on $topic: $payload")
+            Logging.d(TAG, "Booking update received on $topic: $payload")
             // Handle booking updates
-            Log.d(TAG, "Booking update for trip ")
+            Logging.d(TAG, "Booking update for trip ")
         }
 
         // Listen for ping requests
         mqttService?.addMessageListener("car/$vehicleId/ping") { topic, payload ->
-            Log.d(TAG, "Ping received: $payload")
+            Logging.d(TAG, "Ping received: $payload")
             // MQTT service automatically handles pong response
         }
     }
@@ -209,11 +209,11 @@ class MainActivity : ComponentActivity() {
         // Parse the trip assignment and refresh trips
         lifecycleScope.launch {
             try {
-                Log.d(TAG, "Processing trip assignment: $payload")
+                Logging.d(TAG, "Processing trip assignment: $payload")
                 // Force refresh trips from remote to get the new assignment
                 forceRefreshFromRemote()
             } catch (e: Exception) {
-                Log.e(TAG, "Error handling trip assignment", e)
+                Logging.e(TAG, "Error handling trip assignment", e)
             }
         }
     }
@@ -224,27 +224,27 @@ class MainActivity : ComponentActivity() {
             if (NetworkUtils.hasNetworkPermissions(this)) {
                 val report = NetworkUtils.createNetworkReport(this)
                 networkDebugInfo = report
-                Log.d(TAG, "\n$report")
+                Logging.d(TAG, "\n$report")
 
                 // Additional connectivity checks
-                Log.d(TAG, "=== CONNECTIVITY TESTS ===")
-                Log.d(TAG, "Internet Available: ${NetworkUtils.isConnectedToInternet(this)}")
-                Log.d(TAG, "Connection Metered: ${NetworkUtils.isConnectionMetered(this)}")
+                Logging.d(TAG, "=== CONNECTIVITY TESTS ===")
+                Logging.d(TAG, "Internet Available: ${NetworkUtils.isConnectedToInternet(this)}")
+                Logging.d(TAG, "Connection Metered: ${NetworkUtils.isConnectionMetered(this)}")
 
                 // Check roaming status if available
                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
-                    Log.d(TAG, "Is Roaming: ${NetworkUtils.isRoaming(this)}")
+                    Logging.d(TAG, "Is Roaming: ${NetworkUtils.isRoaming(this)}")
                 }
-                Log.d(TAG, "==========================")
+                Logging.d(TAG, "==========================")
             } else {
                 val basicInfo = "Network permissions not available - basic monitoring only"
                 networkDebugInfo = basicInfo
-                Log.w(TAG, basicInfo)
+                Logging.w(TAG, basicInfo)
             }
         } catch (e: Exception) {
             val errorInfo = "Error getting network info: ${e.message}"
             networkDebugInfo = errorInfo
-            Log.e(TAG, errorInfo, e)
+            Logging.e(TAG, errorInfo, e)
         }
     }
 
@@ -258,10 +258,10 @@ class MainActivity : ComponentActivity() {
         }
 
         if (missingPermissions.isNotEmpty()) {
-            Log.d(TAG, "Requesting network permissions: ${missingPermissions.joinToString()}")
+            Logging.d(TAG, "Requesting network permissions: ${missingPermissions.joinToString()}")
             networkPermissionLauncher.launch(missingPermissions.toTypedArray())
         } else {
-            Log.d(TAG, "All network permissions already granted")
+            Logging.d(TAG, "All network permissions already granted")
             initializeNetworkMonitoring()
         }
     }
@@ -274,19 +274,19 @@ class MainActivity : ComponentActivity() {
         // Get vehicle info
         vehicleInfo = vehicleSecurityManager.getVehicleInfo()
         
-        Log.d(TAG, "=== VEHICLE SECURITY STATUS ===")
-        Log.d(TAG, "Vehicle Registered: ${vehicleSecurityManager.isVehicleRegistered()}")
-        Log.d(TAG, "Vehicle ID: ${vehicleSecurityManager.getVehicleId()}")
-        Log.d(TAG, "Has Key Pair: ${vehicleSecurityManager.hasKeyPair()}")
-        Log.d(TAG, "Completely Setup: ${vehicleSecurityManager.isCompletelySetup()}")
+        Logging.d(TAG, "=== VEHICLE SECURITY STATUS ===")
+        Logging.d(TAG, "Vehicle Registered: ${vehicleSecurityManager.isVehicleRegistered()}")
+        Logging.d(TAG, "Vehicle ID: ${vehicleSecurityManager.getVehicleId()}")
+        Logging.d(TAG, "Has Key Pair: ${vehicleSecurityManager.hasKeyPair()}")
+        Logging.d(TAG, "Completely Setup: ${vehicleSecurityManager.isCompletelySetup()}")
         
         vehicleInfo?.let { info ->
-            Log.d(TAG, "Vehicle ID: ${info.vehicleId}")
-            Log.d(TAG, "Company: ${info.companyName}")
-            Log.d(TAG, "License Plate: ${info.licensePlate}")
-            Log.d(TAG, "Registration Date: ${info.registrationDateTime}")
+            Logging.d(TAG, "Vehicle ID: ${info.vehicleId}")
+            Logging.d(TAG, "Company: ${info.companyName}")
+            Logging.d(TAG, "License Plate: ${info.licensePlate}")
+            Logging.d(TAG, "Registration Date: ${info.registrationDateTime}")
         }
-        Log.d(TAG, "==============================")
+        Logging.d(TAG, "==============================")
         
         // Test database connection
         testDatabaseConnection()
@@ -305,23 +305,23 @@ class MainActivity : ComponentActivity() {
                 if (vehicleSecurityManager.isVehicleRegistered()) {
                     val vehicleId = vehicleSecurityManager.getVehicleId()
                     val tripCount = databaseManager.getTripCountByVehicle(vehicleId.toInt())
-                    Log.d(TAG, "=== DATABASE STATUS ===")
-                    Log.d(TAG, "Database connected successfully")
-                    Log.d(TAG, "Trips in database for vehicle $vehicleId: $tripCount")
-                    Log.d(TAG, "=========================")
+                    Logging.d(TAG, "=== DATABASE STATUS ===")
+                    Logging.d(TAG, "Database connected successfully")
+                    Logging.d(TAG, "Trips in database for vehicle $vehicleId: $tripCount")
+                    Logging.d(TAG, "=========================")
                     
                     // Test TripStatus values
-                    Log.d(TAG, "=== TRIP STATUS TEST ===")
-                    Log.d(TAG, "PENDING.value: '${TripStatus.PENDING.value}'")
-                    Log.d(TAG, "SCHEDULED.value: '${TripStatus.SCHEDULED.value}'")
-                    Log.d(TAG, "IN_PROGRESS.value: '${TripStatus.IN_PROGRESS.value}'")
-                    Log.d(TAG, "PENDING.value length: ${TripStatus.PENDING.value.length}")
-                    Log.d(TAG, "SCHEDULED.value length: ${TripStatus.SCHEDULED.value.length}")
-                    Log.d(TAG, "IN_PROGRESS.value length: ${TripStatus.IN_PROGRESS.value.length}")
-                    Log.d(TAG, "=========================")
+                    Logging.d(TAG, "=== TRIP STATUS TEST ===")
+                    Logging.d(TAG, "PENDING.value: '${TripStatus.PENDING.value}'")
+                    Logging.d(TAG, "SCHEDULED.value: '${TripStatus.SCHEDULED.value}'")
+                    Logging.d(TAG, "IN_PROGRESS.value: '${TripStatus.IN_PROGRESS.value}'")
+                    Logging.d(TAG, "PENDING.value length: ${TripStatus.PENDING.value.length}")
+                    Logging.d(TAG, "SCHEDULED.value length: ${TripStatus.SCHEDULED.value.length}")
+                    Logging.d(TAG, "IN_PROGRESS.value length: ${TripStatus.IN_PROGRESS.value.length}")
+                    Logging.d(TAG, "=========================")
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Database connection test failed: ${e.message}", e)
+                Logging.e(TAG, "Database connection test failed: ${e.message}", e)
             }
         }
     }
@@ -329,13 +329,13 @@ class MainActivity : ComponentActivity() {
     @SuppressLint("SuspiciousIndentation")
     private fun fetchLatestVehicleTrip() {
         if (!vehicleSecurityManager.isVehicleRegistered()) {
-            Log.w(TAG, "Vehicle not registered, cannot fetch trips")
+            Logging.w(TAG, "Vehicle not registered, cannot fetch trips")
             tripError = "Vehicle not registered. Please complete vehicle authentication first."
             return
         }
 
         val vehicleId = vehicleSecurityManager.getVehicleId()
-        Log.d(TAG, "Checking trips for vehicle ID: $vehicleId")
+        Logging.d(TAG, "Checking trips for vehicle ID: $vehicleId")
         
         isLoadingTrips = true
         tripError = null
@@ -350,12 +350,12 @@ class MainActivity : ComponentActivity() {
                     val activeTrip = databaseManager.getActiveTripByVehicle(vehicleId.toInt())
                     if (activeTrip != null) {
                         latestTrip = activeTrip
-                        Log.d(TAG, "Active trip loaded from database: ${latestTrip?.id}")
-                        Log.d(TAG, "Trip details: ${latestTrip?.route?.origin?.google_place_name} → ${latestTrip?.route?.destination?.google_place_name}")
-                        Log.d(TAG, "Status: ${latestTrip?.status}")
-                        Log.d(TAG, "Connection mode: ${latestTrip?.connection_mode}")
-                        Log.d(TAG, "DEBUG: Trip status length: ${latestTrip?.status?.length}")
-                        Log.d(TAG, "DEBUG: Trip status bytes: ${latestTrip?.status?.toByteArray().contentToString()}")
+                        Logging.d(TAG, "Active trip loaded from database: ${latestTrip?.id}")
+                        Logging.d(TAG, "Trip details: ${latestTrip?.route?.origin?.google_place_name} → ${latestTrip?.route?.destination?.google_place_name}")
+                        Logging.d(TAG, "Status: ${latestTrip?.status}")
+                        Logging.d(TAG, "Connection mode: ${latestTrip?.connection_mode}")
+                        Logging.d(TAG, "DEBUG: Trip status length: ${latestTrip?.status?.length}")
+                        Logging.d(TAG, "DEBUG: Trip status bytes: ${latestTrip?.status?.toByteArray().contentToString()}")
                     }
                 } else {
                     // No active trips, check if we have any trips at all
@@ -363,22 +363,22 @@ class MainActivity : ComponentActivity() {
                     if (dbTrip != null) {
                         latestTrip = dbTrip
                         tripError = null // Clear any previous errors
-                        Log.d(TAG, "Latest trip loaded from database: ${latestTrip?.id}")
-                        Log.d(TAG, "Trip details: ${latestTrip?.route?.origin?.google_place_name} → ${latestTrip?.route?.destination?.google_place_name}")
-                        Log.d(TAG, "Status: ${latestTrip?.status}")
-                        Log.d(TAG, "Connection mode: ${latestTrip?.connection_mode}")
-                        Log.d(TAG, "DEBUG: Trip status length: ${latestTrip?.status?.length}")
-                        Log.d(TAG, "DEBUG: Trip status bytes: ${latestTrip?.status?.toByteArray().contentToString()}")
+                        Logging.d(TAG, "Latest trip loaded from database: ${latestTrip?.id}")
+                        Logging.d(TAG, "Trip details: ${latestTrip?.route?.origin?.google_place_name} → ${latestTrip?.route?.destination?.google_place_name}")
+                        Logging.d(TAG, "Status: ${latestTrip?.status}")
+                        Logging.d(TAG, "Connection mode: ${latestTrip?.connection_mode}")
+                        Logging.d(TAG, "DEBUG: Trip status length: ${latestTrip?.status?.length}")
+                        Logging.d(TAG, "DEBUG: Trip status bytes: ${latestTrip?.status?.toByteArray().contentToString()}")
                     } else {
                         // No trips in database, clear latest trip
                         latestTrip = null
-                        Log.d(TAG, "No trips found in database")
+                        Logging.d(TAG, "No trips found in database")
                     }
                     
                     // Only fetch from remote if we don't have any trips or if all trips are completed
                     val tripCount = databaseManager.getTripCountByVehicle(vehicleId.toInt())
                     if (tripCount == 0 || (dbTrip != null && TripStatus.isCompleted(dbTrip.status))) {
-                        Log.d(TAG, "No active trips found, fetching from remote API...")
+                        Logging.d(TAG, "No active trips found, fetching from remote API...")
                         val result = databaseManager.syncTripsFromRemote(vehicleId.toInt(), page = 1, limit = 1)
                         
                         when {
@@ -389,34 +389,34 @@ class MainActivity : ComponentActivity() {
                                 if (updatedTrip != null) {
                                     latestTrip = updatedTrip
                                     tripError = null // Clear any previous errors
-                                    Log.d(TAG, "Trip updated from database: ${latestTrip?.id}")
-                                    Log.d(TAG, "DEBUG: Trip status: ${latestTrip?.status}")
-                                    Log.d(TAG, "DEBUG: Trip status length: ${latestTrip?.status?.length}")
-                                    Log.d(TAG, "DEBUG: Trip status bytes: ${latestTrip?.status?.toByteArray().contentToString()}")
+                                    Logging.d(TAG, "Trip updated from database: ${latestTrip?.id}")
+                                    Logging.d(TAG, "DEBUG: Trip status: ${latestTrip?.status}")
+                                    Logging.d(TAG, "DEBUG: Trip status length: ${latestTrip?.status?.length}")
+                                    Logging.d(TAG, "DEBUG: Trip status bytes: ${latestTrip?.status?.toByteArray().contentToString()}")
                                 } else {
                                     // No trips in database after sync (either no new trips or cleanup removed all)
                                     latestTrip = null
                                     if (newTripCount == 0) {
-                                        Log.w(TAG, "No trips found for vehicle after sync")
+                                        Logging.w(TAG, "No trips found for vehicle after sync")
                                         tripError = "No trips available for this vehicle"
                                     } else {
-                                        Log.w(TAG, "Trips were cleaned up during sync")
+                                        Logging.w(TAG, "Trips were cleaned up during sync")
                                         tripError = "Previous trips are no longer available"
                                     }
                                 }
                             }
                             result.isError() -> {
                                 val errorMessage = result.getErrorOrNull() ?: "Unknown error occurred"
-                                Log.e(TAG, "Failed to fetch trips: $errorMessage")
+                                Logging.e(TAG, "Failed to fetch trips: $errorMessage")
                                 tripError = "Failed to fetch trips: $errorMessage"
                             }
                         }
                     } else {
-                        Log.d(TAG, "Using existing trip from database, no remote fetch needed")
+                        Logging.d(TAG, "Using existing trip from database, no remote fetch needed")
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Exception while checking trips", e)
+                Logging.e(TAG, "Exception while checking trips", e)
                 tripError = "Exception: ${e.message}"
             } finally {
                 isLoadingTrips = false
@@ -438,11 +438,11 @@ class MainActivity : ComponentActivity() {
         permissionsRequestor!!.request(object :
             PermissionsRequestor.ResultListener {
             override fun permissionsGranted() {
-                Log.d(TAG, "All permissions granted by user.")
+                Logging.d(TAG, "All permissions granted by user.")
             }
 
             override fun permissionsDenied() {
-                Log.e(TAG, "Permissions denied by user.")
+                Logging.e(TAG, "Permissions denied by user.")
             }
         })
     }
@@ -451,7 +451,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        Logging.setTagEnabled(TAG, false)
+        
+        // Set this activity as active and disable its logging
+        Logging.setActivityLoggingEnabled(TAG, false)
         permissionsRequestor = PermissionsRequestor(this)
 
         checkAndRequestNetworkPermissions()
@@ -487,7 +489,7 @@ class MainActivity : ComponentActivity() {
 
     private fun startNavigator() {
         if (latestTrip == null) {
-            Log.w(TAG, "No trip available for navigation")
+            Logging.w(TAG, "No trip available for navigation")
             return
         }
 
@@ -504,13 +506,13 @@ class MainActivity : ComponentActivity() {
                 
                 if (newStatus != normalizedCurrentStatus) {
                     databaseManager.updateTripStatus(latestTrip!!.id, newStatus)
-                    Log.d(TAG, "Trip ${latestTrip!!.id} status updated from $currentStatus to $newStatus")
+                    Logging.d(TAG, "Trip ${latestTrip!!.id} status updated from $currentStatus to $newStatus")
                     
                     // Update local trip status
                     latestTrip = latestTrip!!.copy(status = newStatus)
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to update trip status: ${e.message}", e)
+                Logging.e(TAG, "Failed to update trip status: ${e.message}", e)
             }
         }
 
@@ -531,6 +533,9 @@ class MainActivity : ComponentActivity() {
         
         // Mark activity as active
         isActivityActive = true
+        
+        // Set this activity as the active one for logging
+        Logging.setActiveActivity(TAG)
         
         // Notify MQTT service that app is in foreground
         mqttService?.onAppForeground()
@@ -572,12 +577,12 @@ class MainActivity : ComponentActivity() {
                 if (activeTrip != null && activeTrip.status == TripStatus.IN_PROGRESS.value) {
                     // If we have an in-progress trip, check if it should be completed
                     // This is a simple check - in a real app, you might want to check actual navigation completion
-                    Log.d(TAG, "Found in-progress trip ${activeTrip.id}, checking if should be completed")
+                    Logging.d(TAG, "Found in-progress trip ${activeTrip.id}, checking if should be completed")
                     
                     // For now, we'll just mark it as completed when returning to MainActivity
                     // In a real implementation, you'd check actual navigation completion status
 //                    databaseManager.updateTripStatus(activeTrip.id, TripStatus.COMPLETED.value)
-                    Log.d(TAG, "Trip ${activeTrip.id} marked as completed")
+                    Logging.d(TAG, "Trip ${activeTrip.id} marked as completed")
                     
                     // Update local trip if it's the current one
 //                    if (latestTrip?.id == activeTrip.id) {
@@ -585,19 +590,19 @@ class MainActivity : ComponentActivity() {
 //                    }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to check trip completion: ${e.message}", e)
+                Logging.e(TAG, "Failed to check trip completion: ${e.message}", e)
             }
         }
     }
     
     private fun forceRefreshFromRemote() {
         if (!vehicleSecurityManager.isVehicleRegistered()) {
-            Log.w(TAG, "Vehicle not registered, cannot refresh trips")
+            Logging.w(TAG, "Vehicle not registered, cannot refresh trips")
             return
         }
 
         val vehicleId = vehicleSecurityManager.getVehicleId()
-        Log.d(TAG, "Force refreshing trips from remote for vehicle ID: $vehicleId")
+        Logging.d(TAG, "Force refreshing trips from remote for vehicle ID: $vehicleId")
         
         isLoadingTrips = true
         tripError = null
@@ -614,27 +619,27 @@ class MainActivity : ComponentActivity() {
                         if (updatedTrip != null) {
                             latestTrip = updatedTrip
                             tripError = null // Clear any previous errors
-                            Log.d(TAG, "Trips refreshed from remote: ${latestTrip?.id}")
+                            Logging.d(TAG, "Trips refreshed from remote: ${latestTrip?.id}")
                         } else {
                             // No trips in database after sync (either no new trips or cleanup removed all)
                             latestTrip = null
                             if (tripCount == 0) {
-                                Log.w(TAG, "No trips found for vehicle after refresh")
+                                Logging.w(TAG, "No trips found for vehicle after refresh")
                                 tripError = "No trips available for this vehicle"
                             } else {
-                                Log.w(TAG, "Trips were cleaned up during refresh")
+                                Logging.w(TAG, "Trips were cleaned up during refresh")
                                 tripError = "Previous trips are no longer available"
                             }
                         }
                     }
                     result.isError() -> {
                         val errorMessage = result.getErrorOrNull() ?: "Unknown error occurred"
-                        Log.e(TAG, "Failed to refresh trips: $errorMessage")
+                        Logging.e(TAG, "Failed to refresh trips: $errorMessage")
                         tripError = "Failed to refresh trips: $errorMessage"
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Exception while refreshing trips", e)
+                Logging.e(TAG, "Exception while refreshing trips", e)
                 tripError = "Exception: ${e.message}"
             } finally {
                 isLoadingTrips = false
@@ -644,27 +649,27 @@ class MainActivity : ComponentActivity() {
     
     private fun startPeriodicTripFetching() {
         if (!vehicleSecurityManager.isVehicleRegistered()) {
-            Log.w(TAG, "Vehicle not registered, skipping periodic trip fetching")
+            Logging.w(TAG, "Vehicle not registered, skipping periodic trip fetching")
             return
         }
         
         // Cancel existing job if any
         periodicTripFetchJob?.cancel()
         
-        Log.d(TAG, "Starting periodic trip fetching every 3 minutes")
+        Logging.d(TAG, "Starting periodic trip fetching every 3 minutes")
         
         periodicTripFetchJob = periodicScope.launch {
             while (isActivityActive) {
                 try {
                     // Check internet connectivity before fetching
                     if (NetworkUtils.isConnectedToInternet(this@MainActivity)) {
-                        Log.d(TAG, "Internet available, performing periodic trip fetch")
+                        Logging.d(TAG, "Internet available, performing periodic trip fetch")
                         performPeriodicTripFetch()
                     } else {
-                        Log.d(TAG, "No internet connection, skipping periodic trip fetch")
+                        Logging.d(TAG, "No internet connection, skipping periodic trip fetch")
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "Error in periodic trip fetch: ${e.message}", e)
+                    Logging.e(TAG, "Error in periodic trip fetch: ${e.message}", e)
                 }
                 
                 // Wait 3 minutes (180,000 milliseconds)
@@ -674,36 +679,36 @@ class MainActivity : ComponentActivity() {
     }
     
     private fun stopPeriodicTripFetching() {
-        Log.d(TAG, "Stopping periodic trip fetching")
+        Logging.d(TAG, "Stopping periodic trip fetching")
         periodicTripFetchJob?.cancel()
         periodicTripFetchJob = null
     }
     
     private suspend fun performPeriodicTripFetch() {
         if (!vehicleSecurityManager.isVehicleRegistered()) {
-            Log.w(TAG, "Vehicle not registered, skipping periodic trip fetch")
+            Logging.w(TAG, "Vehicle not registered, skipping periodic trip fetch")
             return
         }
         
         val vehicleId = vehicleSecurityManager.getVehicleId()
-        Log.d(TAG, "=== PERIODIC TRIP FETCH ===")
-        Log.d(TAG, "Fetching trips for vehicle ID: $vehicleId")
+        Logging.d(TAG, "=== PERIODIC TRIP FETCH ===")
+        Logging.d(TAG, "Fetching trips for vehicle ID: $vehicleId")
         
         try {
             // Get current trip count before sync
             val beforeCount = databaseManager.getTripCountByVehicle(vehicleId.toInt())
-            Log.d(TAG, "Current trips in database before sync: $beforeCount")
+            Logging.d(TAG, "Current trips in database before sync: $beforeCount")
             
             val result = databaseManager.syncTripsFromRemote(vehicleId.toInt(), page = 1, limit = 10)
             
             when {
                 result.isSuccess() -> {
                     val tripCount = result.getDataOrNull() ?: 0
-                    Log.d(TAG, "Periodic fetch successful: $tripCount trips synced")
+                    Logging.d(TAG, "Periodic fetch successful: $tripCount trips synced")
                     
                     // Get trip count after sync
                     val afterCount = databaseManager.getTripCountByVehicle(vehicleId.toInt())
-                    Log.d(TAG, "Current trips in database after sync: $afterCount")
+                    Logging.d(TAG, "Current trips in database after sync: $afterCount")
                     
                     // Update latest trip on main thread
                     if (isActivityActive) {
@@ -712,25 +717,25 @@ class MainActivity : ComponentActivity() {
                             if (updatedTrip != null) {
                                 latestTrip = updatedTrip
                                 tripError = null // Clear any previous errors
-                                Log.d(TAG, "Latest trip updated: ${latestTrip?.id}")
+                                Logging.d(TAG, "Latest trip updated: ${latestTrip?.id}")
                             } else {
                                 // Clear latest trip if no trips available after sync
                                 latestTrip = null
-                                Log.d(TAG, "No trips available after periodic sync, cleared latest trip")
+                                Logging.d(TAG, "No trips available after periodic sync, cleared latest trip")
                             }
                         }
                     }
                 }
                 result.isError() -> {
                     val errorMessage = result.getErrorOrNull() ?: "Unknown error occurred"
-                    Log.w(TAG, "Periodic trip fetch failed: $errorMessage")
+                    Logging.w(TAG, "Periodic trip fetch failed: $errorMessage")
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Exception during periodic trip fetch: ${e.message}", e)
+            Logging.e(TAG, "Exception during periodic trip fetch: ${e.message}", e)
         }
         
-        Log.d(TAG, "=== END PERIODIC TRIP FETCH ===")
+        Logging.d(TAG, "=== END PERIODIC TRIP FETCH ===")
     }
 
     override fun onDestroy() {
@@ -963,17 +968,17 @@ fun NavigationScreen(
         item {
             // Debug info for trip status
             latestTrip?.let { trip ->
-                Log.d("MainActivity", "=== TRIP STATUS DEBUG ===")
-                Log.d("MainActivity", "Trip ID: ${trip.id}")
-                Log.d("MainActivity", "Trip Status: '${trip.status}'")
-                Log.d("MainActivity", "Status matches PENDING: ${trip.status == TripStatus.PENDING.value}")
-                Log.d("MainActivity", "Status matches SCHEDULED: ${trip.status == TripStatus.SCHEDULED.value}")
-                Log.d("MainActivity", "Status matches IN_PROGRESS: ${trip.status == TripStatus.IN_PROGRESS.value}")
-                Log.d("MainActivity", "Is Loading: $isLoadingTrips")
-                Log.d("MainActivity", "Is Active Status: ${TripStatus.isActive(trip.status)}")
-                Log.d("MainActivity", "Navigation allowed: ${TripStatus.isActive(trip.status)}")
-                Log.d("MainActivity", "Button should be enabled: ${TripStatus.isActive(trip.status)}")
-                Log.d("MainActivity", "===============================")
+                Logging.d("MainActivity", "=== TRIP STATUS DEBUG ===")
+                Logging.d("MainActivity", "Trip ID: ${trip.id}")
+                Logging.d("MainActivity", "Trip Status: '${trip.status}'")
+                Logging.d("MainActivity", "Status matches PENDING: ${trip.status == TripStatus.PENDING.value}")
+                Logging.d("MainActivity", "Status matches SCHEDULED: ${trip.status == TripStatus.SCHEDULED.value}")
+                Logging.d("MainActivity", "Status matches IN_PROGRESS: ${trip.status == TripStatus.IN_PROGRESS.value}")
+                Logging.d("MainActivity", "Is Loading: $isLoadingTrips")
+                Logging.d("MainActivity", "Is Active Status: ${TripStatus.isActive(trip.status)}")
+                Logging.d("MainActivity", "Navigation allowed: ${TripStatus.isActive(trip.status)}")
+                Logging.d("MainActivity", "Button should be enabled: ${TripStatus.isActive(trip.status)}")
+                Logging.d("MainActivity", "===============================")
             }
             
             Button(
