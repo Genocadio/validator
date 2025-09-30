@@ -284,7 +284,8 @@ class NavigActivity: ComponentActivity() {
                 ToggleButton(
                     "Camera: ON", 
                     "Camera: OFF", 
-                    enabled = isRouteCalculated
+                    enabled = isRouteCalculated,
+                    initialState = true // Camera tracking starts ON
                 ) { toggled ->
                     if (toggled) app?.toggleTrackingButtonOnClicked() else app?.toggleTrackingButtonOffClicked()
                 }
@@ -294,7 +295,8 @@ class NavigActivity: ComponentActivity() {
                 ToggleButton(
                     "Waypoints: ON", 
                     "Waypoints: OFF", 
-                    enabled = isRouteCalculated
+                    enabled = isRouteCalculated,
+                    initialState = false // Waypoints overlay starts OFF
                 ) { toggled ->
                     showWaypointOverlay = toggled
                     if (toggled) {
@@ -355,11 +357,12 @@ class NavigActivity: ComponentActivity() {
         textOn: String,
         textOff: String,
         enabled: Boolean = true,
+        initialState: Boolean = false,
         onToggle: (Boolean) -> Unit
     ) {
         val isDark = isSystemInDarkTheme()
         val buttonColor = if (isDark) Color(0xCC007070) else Color(0xCC01B9B9)
-        var isToggled by remember { mutableStateOf(false) } // Start with false to match overlay state
+        var isToggled by remember { mutableStateOf(initialState) }
 
         Button(
             onClick = {
