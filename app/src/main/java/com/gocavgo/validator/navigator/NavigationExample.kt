@@ -45,7 +45,8 @@ import com.here.time.Duration
 class NavigationExample(
     context: Context?,
     mapView: MapView?,
-    private val messageView: MessageViewUpdater
+    private val messageView: MessageViewUpdater,
+    private val tripSectionValidator: TripSectionValidator
 ) {
     private var visualNavigator: VisualNavigator
     private val herePositioningProvider: HEREPositioningProvider
@@ -82,7 +83,7 @@ class NavigationExample(
         createDynamicRoutingEngine()
 
         // A class to handle various kinds of guidance events.
-        navigationHandler = NavigationHandler(context, messageView)
+        navigationHandler = NavigationHandler(context, messageView, tripSectionValidator)
         dynamicRoutingEngine?.let { navigationHandler.setupListeners(visualNavigator, it) }
 
         messageView.updateText("Initialization completed.")

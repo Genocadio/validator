@@ -48,7 +48,8 @@ import java.util.Locale
 // Note that this class does not show an exhaustive list of all possible events.
 class NavigationHandler(
     private val context: Context?,
-    private val messageView: MessageViewUpdater
+    private val messageView: MessageViewUpdater,
+    private val tripSectionValidator: TripSectionValidator
 ) {
     private var previousManeuverIndex = -1
     private var lastMapMatchedLocation: MapMatchedLocation? = null
@@ -176,7 +177,7 @@ class NavigationHandler(
                 // We can optionally retrieve the associated maneuver. The details will be null if the text contains
                 // non-maneuver related information, such as for speed camera warnings.
                 if (eventText.type == TextNotificationType.MANEUVER && eventText.maneuverNotificationDetails != null) {
-                    val maneuver = eventText.maneuverNotificationDetails!!.maneuver
+                    eventText.maneuverNotificationDetails!!.maneuver
                 }
             }
     }
@@ -185,9 +186,33 @@ class NavigationHandler(
         val sectionProgressList = routeProgress.sectionProgress
         // sectionProgressList is guaranteed to be non-empty.
         val lastSectionProgress = sectionProgressList[sectionProgressList.size - 1]
+        val totalSections = sectionProgressList.size
+
+        // Process section progress through trip section validator for verified trips
+        tripSectionValidator.processSectionProgress(sectionProgressList, totalSections)
+
+        for (i in sectionProgressList.indices) {
+            val sectionProgress = sectionProgressList[i]
+
+            val sectionNumber = i + 1
+            // Check if we're close to reaching this waypoint
+            if (sectionProgress.remainingDistanceInMeters < 10) {
+                for (j in sectionProgressList.indices) {
+                    val section = sectionProgressList[j]
+                    Log.d(TAG, "Section $j/$totalSections:")
+                    Log.d(TAG, "  Remaining distance: ${section.remainingDistanceInMeters} meters")
+                    Log.d(TAG, "  Remaining duration: ${section.remainingDuration.toSeconds()} seconds")
+                    Log.d(TAG, "  Traffic delay: ${section.trafficDelay.seconds} seconds")
+                }
+
+                Log.d(TAG, "  *** Reached waypoint for section $sectionNumber! ***")
+            }
+        }
+
         val currentETAString = "ETA: " + timeUtils.getETAinDeviceTimeZone(
             lastSectionProgress.remainingDuration.toSeconds().toInt()
         )
+
         Log.d(
             TAG,
             "Distance to destination in meters: " + lastSectionProgress.remainingDistanceInMeters

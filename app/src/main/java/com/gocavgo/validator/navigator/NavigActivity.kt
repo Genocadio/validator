@@ -26,6 +26,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -37,9 +38,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -53,6 +57,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.MutableState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -81,6 +86,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 
 class NavigActivity: ComponentActivity() {
 
@@ -108,6 +115,13 @@ class NavigActivity: ComponentActivity() {
 
     // Coroutine scope
     private val coroutineScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    
+    // Waypoint overlay state
+    private var showWaypointOverlay by mutableStateOf(false)
+    private var waypointProgressData by mutableStateOf<List<TripSectionValidator.WaypointProgressInfo>>(emptyList())
+    
+    // Route calculation state
+    private var isRouteCalculated by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -176,7 +190,10 @@ class NavigActivity: ComponentActivity() {
                 ) { paddingValues ->
                     Box(modifier = Modifier.padding(paddingValues)) {
                         HereMapView(savedInstanceState)
-                        ButtonRows(messageViewUpdater!!)
+                        ButtonRows(messageViewUpdater!!, isRouteCalculated)
+                        if (showWaypointOverlay) {
+                            WaypointProgressOverlay(waypointProgressData)
+                        }
                         DialogScreen()
                     }
                 }
@@ -235,18 +252,19 @@ class NavigActivity: ComponentActivity() {
     }
 
     @Composable
-    fun ButtonRows(messageViewUpdater: MessageViewUpdater) {
+    fun ButtonRows(messageViewUpdater: MessageViewUpdater, isRouteCalculated: Boolean) {
         val messageViewText by remember { messageViewUpdater.textState }
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(6.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            // Top row: Clear & Exit button (left aligned)
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.Center
+                horizontalArrangement = Arrangement.Start
             ) {
                 CustomButton(
                     onClick = {
@@ -256,14 +274,37 @@ class NavigActivity: ComponentActivity() {
                     text = "Clear & Exit"
                 )
             }
+            
+            // Middle row: Toggle buttons (centered)
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.Center
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                ToggleButton("Camera Tracking: ON", "Camera Tracking: OFF") { toggled ->
+                ToggleButton(
+                    "Camera: ON", 
+                    "Camera: OFF", 
+                    enabled = isRouteCalculated
+                ) { toggled ->
                     if (toggled) app?.toggleTrackingButtonOnClicked() else app?.toggleTrackingButtonOffClicked()
                 }
+                
+                Spacer(modifier = Modifier.width(8.dp))
+                
+                ToggleButton(
+                    "Waypoints: ON", 
+                    "Waypoints: OFF", 
+                    enabled = isRouteCalculated
+                ) { toggled ->
+                    showWaypointOverlay = toggled
+                    if (toggled) {
+                        updateWaypointProgressData()
+                        startWaypointProgressUpdates()
+                    }
+                }
             }
+            
+            // Bottom row: Message view (full width)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.Center
@@ -313,23 +354,31 @@ class NavigActivity: ComponentActivity() {
     fun ToggleButton(
         textOn: String,
         textOff: String,
+        enabled: Boolean = true,
         onToggle: (Boolean) -> Unit
     ) {
         val isDark = isSystemInDarkTheme()
         val buttonColor = if (isDark) Color(0xCC007070) else Color(0xCC01B9B9)
-        var isToggled by remember { mutableStateOf(true) }
+        var isToggled by remember { mutableStateOf(false) } // Start with false to match overlay state
 
         Button(
             onClick = {
-                isToggled = !isToggled
-                onToggle(isToggled)
+                if (enabled) {
+                    isToggled = !isToggled
+                    onToggle(isToggled)
+                }
             },
+            enabled = enabled,
             colors = ButtonDefaults.buttonColors(
-                containerColor = if (isToggled) buttonColor else Color.Gray,
+                containerColor = when {
+                    !enabled -> Color.Gray.copy(alpha = 0.5f)
+                    isToggled -> buttonColor
+                    else -> Color.Gray
+                },
             )
         ) {
             Text(
-                color = MaterialTheme.colorScheme.onBackground,
+                color = if (enabled) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
                 text = if (isToggled) textOn else textOff
             )
         }
@@ -380,6 +429,11 @@ class NavigActivity: ComponentActivity() {
                     // Start the app that contains the logic to calculate routes & start TBT guidance.
                     app = App(applicationContext, mapView!!, messageViewUpdater!!, tripResponse)
                     Log.d(TAG, "App instance created: $app")
+                    
+                    // Set up route calculation callback
+                    app?.setOnRouteCalculatedCallback {
+                        updateRouteCalculationStatus(true)
+                    }
 
                     // Enable traffic flows and 3D landmarks, by default.
                     val mapFeatures: MutableMap<String, String> = HashMap()
@@ -436,6 +490,175 @@ class NavigActivity: ComponentActivity() {
             // For safety reasons, we explicitly set the shared instance to null to avoid situations,
             // where a disposed instance is accidentally reused.
             SDKNativeEngine.setSharedInstance(null)
+        }
+    }
+    
+    /**
+     * Updates waypoint progress data from the validator
+     */
+    private fun updateWaypointProgressData() {
+        app?.getTripSectionValidator()?.let { validator ->
+            waypointProgressData = validator.getCurrentWaypointProgress()
+        }
+    }
+    
+    /**
+     * Updates route calculation status
+     */
+    fun updateRouteCalculationStatus(calculated: Boolean) {
+        isRouteCalculated = calculated
+        Log.d(TAG, "Route calculation status updated: $calculated")
+    }
+    
+    /**
+     * Starts periodic updates for waypoint progress data
+     */
+    private fun startWaypointProgressUpdates() {
+        coroutineScope.launch {
+            while (isActive && showWaypointOverlay) {
+                updateWaypointProgressData()
+                delay(2000) // Update every 2 seconds
+            }
+        }
+    }
+    
+    /**
+     * Composable for waypoint progress overlay
+     */
+    @Composable
+    fun WaypointProgressOverlay(progressData: List<TripSectionValidator.WaypointProgressInfo>) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp),
+            contentAlignment = Alignment.TopEnd
+        ) {
+            Column(
+                modifier = Modifier
+                    .width(300.dp)
+                    .heightIn(max = 400.dp) // Limit height to handle ~5 locations
+                    .padding(top = 80.dp) // Add top padding to avoid covering buttons
+                    .background(
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                    .border(
+                        width = 1.dp,
+                        color = MaterialTheme.colorScheme.outline,
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                    .padding(12.dp)
+            ) {
+                Text(
+                    text = "Waypoint Progress",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+                
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.weight(1f) // Allow scrolling within the container
+                ) {
+                    items(progressData) { waypoint ->
+                        WaypointProgressItem(waypoint)
+                    }
+                }
+            }
+        }
+    }
+    
+    /**
+     * Individual waypoint progress item
+     */
+    @Composable
+    fun WaypointProgressItem(waypoint: TripSectionValidator.WaypointProgressInfo) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(
+                    color = when {
+                        waypoint.isPassed -> Color(0xFF4CAF50).copy(alpha = 0.2f)
+                        waypoint.isNext -> Color(0xFF2196F3).copy(alpha = 0.2f)
+                        else -> Color.Transparent
+                    },
+                    shape = RoundedCornerShape(4.dp)
+                )
+                .padding(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Status indicator
+            Box(
+                modifier = Modifier
+                    .width(12.dp)
+                    .height(12.dp)
+                    .background(
+                        color = when {
+                            waypoint.isPassed -> Color(0xFF4CAF50)
+                            waypoint.isNext -> Color(0xFF2196F3)
+                            else -> Color.Gray
+                        },
+                        shape = androidx.compose.foundation.shape.CircleShape
+                    )
+            )
+            
+            Spacer(modifier = Modifier.width(8.dp))
+            
+            Column(
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(
+                    text = waypoint.waypointName,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                
+                if (waypoint.isPassed && waypoint.passedTimestamp != null) {
+                    val timeFormat = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault())
+                    val formattedTime = timeFormat.format(waypoint.passedTimestamp)
+                    Text(
+                        text = "Passed at: $formattedTime",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                    )
+                } else if (!waypoint.isPassed) {
+                    // Show remaining time and distance for unpassed waypoints
+                    val remainingInfo = mutableListOf<String>()
+                    
+                    waypoint.remainingTimeInSeconds?.let { timeInSeconds ->
+                        val minutes = timeInSeconds / 60
+                        val seconds = timeInSeconds % 60
+                        remainingInfo.add("${minutes}m ${seconds}s")
+                    }
+                    
+                    waypoint.remainingDistanceInMeters?.let { distanceInMeters ->
+                        val distanceKm = distanceInMeters / 1000.0
+                        if (distanceKm >= 1.0) {
+                            remainingInfo.add(String.format("%.1f km", distanceKm))
+                        } else {
+                            remainingInfo.add("${distanceInMeters.toInt()}m")
+                        }
+                    }
+                    
+                    if (remainingInfo.isNotEmpty()) {
+                        Text(
+                            text = remainingInfo.joinToString(" • "),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (waypoint.isNext) Color(0xFF2196F3) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                        )
+                    }
+                    
+                    if (waypoint.isNext) {
+                        Text(
+                            text = "Next",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFF2196F3)
+                        )
+                    }
+                }
+            }
         }
     }
 

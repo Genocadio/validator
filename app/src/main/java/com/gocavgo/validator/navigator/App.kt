@@ -26,9 +26,6 @@ import com.gocavgo.validator.dataclass.TripResponse
 import com.here.sdk.core.Color
 import com.here.sdk.core.GeoCoordinates
 import com.here.sdk.core.Location
-import com.here.sdk.core.Point2D
-import com.here.sdk.gestures.GestureState
-import com.here.sdk.gestures.LongPressListener
 import com.here.sdk.mapview.LineCap
 import com.here.sdk.mapview.MapImageFactory
 import com.here.sdk.mapview.MapMarker
@@ -41,8 +38,12 @@ import com.here.sdk.mapview.RenderSize
 import com.here.sdk.routing.CalculateRouteCallback
 import com.here.sdk.routing.Route
 import com.here.sdk.routing.RoutingError
+import com.here.sdk.routing.Section
 import com.here.sdk.routing.Waypoint
 import com.here.sdk.routing.WaypointType
+import java.text.DateFormat
+import java.text.SimpleDateFormat
+import java.util.Locale
 
 
 // An app that allows to calculate a route and start navigation, using either platform positioning or
@@ -57,7 +58,6 @@ class App(
     private val mapPolylines: MutableList<MapPolyline?> = ArrayList()
     private var startWaypoint: Waypoint? = null
     private var destinationWaypoint: Waypoint? = null
-    private var setLongpressDestination = false
     private val routeCalculator: RouteCalculator
     private val navigationExample: NavigationExample
     private var isCameraTrackingEnabled = true
@@ -66,6 +66,9 @@ class App(
     // Waypoint markers for trip navigation
     private val waypointMarkers: MutableList<MapMarker> = ArrayList()
     private var currentWaypointIndex = 0
+    
+    // Trip section validator for route validation and waypoint tracking
+    private val tripSectionValidator: TripSectionValidator = TripSectionValidator()
 
     init {
         val mapMeasureZoom =
@@ -74,12 +77,10 @@ class App(
 
         routeCalculator = RouteCalculator()
 
-        navigationExample = NavigationExample(context, mapView, messageView)
+        navigationExample = NavigationExample(context, mapView, messageView, tripSectionValidator)
         navigationExample.startLocationProvider()
 
         timeUtils = TimeUtils()
-
-        setLongPressGestureHandler()
 
         if (tripResponse != null) {
             messageView.updateText("Trip data loaded. Starting navigation...")
@@ -417,6 +418,41 @@ class App(
     private fun showRouteDetails(route: Route, isSimulated: Boolean) {
         val estimatedTravelTimeInSeconds = route.duration.seconds
         val lengthInMeters = route.lengthInMeters
+        val routeSections = route.sections.size
+
+        // Verify route sections against trip data if trip is available
+        if (tripResponse != null) {
+            Log.d("App", "Verifying route sections against trip data...")
+            val verificationPassed = tripSectionValidator.verifyRouteSections(tripResponse!!, route)
+            if (verificationPassed) {
+                Log.d("App", "✅ Route verification passed - proceeding with navigation")
+            } else {
+                Log.e("App", "❌ Route verification failed - continuing with navigation anyway")
+            }
+        } else {
+            Log.d("App", "No trip data available for route verification")
+        }
+
+        for (i in route.sections.indices) {
+            val dateFormat: DateFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
+            val section: Section = route.sections[i]
+
+            val formattedDepartureLocationTime = section.departureLocationTime
+                ?.localTime
+                ?.let(dateFormat::format)
+                ?: "Unknown"
+
+            val formattedArrivalLocationTime = section.arrivalLocationTime
+                ?.localTime
+                ?.let(dateFormat::format)
+                ?: "Unknown"
+
+            Log.d("APP", "Route Section : " + (i + 1))
+            Log.d("APP", "Route Section Departure Time : $formattedDepartureLocationTime")
+            Log.d("APP", "Route Section Arrival Time : $formattedArrivalLocationTime")
+            Log.d("APP", "Route Section length : " + section.lengthInMeters + " m")
+            Log.d("APP", "Route Section duration : " + section.duration.seconds + " s")
+        }
 
         val routeDetails =
             (("Travel Time: " + timeUtils.formatTime(estimatedTravelTimeInSeconds)
@@ -429,6 +465,9 @@ class App(
         Log.d("App", "Starting navigation automatically...")
         messageView.updateText("Starting navigation...")
         navigationExample.startNavigation(route, isSimulated, isCameraTrackingEnabled)
+        
+        // Notify that route is calculated
+        onRouteCalculatedCallback?.invoke()
     }
 
     private fun showRouteOnMap(route: Route) {
@@ -476,29 +515,6 @@ class App(
         mapPolylines.clear()
     }
 
-    private fun setLongPressGestureHandler() {
-        mapView.gestures.longPressListener =
-            LongPressListener { gestureState: GestureState, touchPoint: Point2D? ->
-                val geoCoordinates = mapView.viewToGeoCoordinates(
-                    touchPoint!!
-                )
-                if (geoCoordinates == null) {
-                    return@LongPressListener
-                }
-                if (gestureState == GestureState.BEGIN) {
-                    if (setLongpressDestination) {
-                        destinationWaypoint = Waypoint(geoCoordinates)
-                        addCircleMapMarker(geoCoordinates, R.drawable.green_dot)
-                        messageView.updateText("New long press destination set.")
-                    } else {
-                        startWaypoint = Waypoint(geoCoordinates)
-                        addCircleMapMarker(geoCoordinates, R.drawable.green_dot)
-                        messageView.updateText("New long press starting point set.")
-                    }
-                    setLongpressDestination = !setLongpressDestination
-                }
-            }
-    }
 
     private fun createRandomGeoCoordinatesAroundMapCenter(): GeoCoordinates {
         val centerGeoCoordinates = mapViewCenter
@@ -517,13 +533,6 @@ class App(
     private val mapViewCenter: GeoCoordinates
         get() = mapView.camera.state.targetCoordinates
 
-    private fun addCircleMapMarker(geoCoordinates: GeoCoordinates, resourceId: Int) {
-        val mapImage = MapImageFactory.fromResource(context.resources, resourceId)
-        val mapMarker = MapMarker(geoCoordinates, mapImage)
-
-        mapView.mapScene.addMapMarker(mapMarker)
-        mapMarkerList.add(mapMarker)
-    }
 
     private fun showDialog(title: String, text: String) {
         DialogManager.show(title, text, buttonText = "Ok") {}
@@ -545,6 +554,23 @@ class App(
         navigationExample.stopLocating()
         // Disables rendering.
         navigationExample.stopRendering()
+    }
+    
+    /**
+     * Gets the trip section validator for UI access
+     */
+    fun getTripSectionValidator(): TripSectionValidator = tripSectionValidator
+    
+    /**
+     * Callback to notify when route is calculated
+     */
+    private var onRouteCalculatedCallback: (() -> Unit)? = null
+    
+    /**
+     * Sets callback for route calculation notification
+     */
+    fun setOnRouteCalculatedCallback(callback: () -> Unit) {
+        onRouteCalculatedCallback = callback
     }
 
     companion object {
