@@ -29,6 +29,11 @@ class RoutingManager(
 
     companion object {
         private const val TAG = "RoutingManager"
+        
+        init {
+            // Disable logging for this manager
+            Logging.setTagEnabled(TAG, false)
+        }
     }
 
     private var onlineRoutingEngine: RoutingEngine? = null

@@ -23,7 +23,6 @@ import android.content.Context
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
-import com.gocavgo.validator.util.Logging
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
@@ -97,34 +96,31 @@ class NavigActivity: ComponentActivity() {
     private var mapView: MapView? = null
     private var app: App? = null
     private var messageViewUpdater: MessageViewUpdater? = null
-    
+
     // Trip data
     private var tripResponse: TripResponse? = null
     private var tripId: Int = -1
     private var showMap: Boolean = true
     private var isSimulated: Boolean = true
-    
+
     // Database manager
     private lateinit var databaseManager: DatabaseManager
-    
+
     // Coroutine scope
     private val coroutineScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Set this activity as active for logging
-        Logging.setActiveActivity(TAG)
-
         // Get trip data from intent
         tripId = intent.getIntExtra(EXTRA_TRIP_ID, -1)
         showMap = intent.getBooleanExtra(EXTRA_SHOW_MAP, true)
         isSimulated = intent.getBooleanExtra(EXTRA_IS_SIMULATED, true)
 
-        Logging.d(TAG, "NavigActivity started with tripId: $tripId, showMap: $showMap, isSimulated: $isSimulated")
+        Log.d(TAG, "NavigActivity started with tripId: $tripId, showMap: $showMap, isSimulated: $isSimulated")
 
         if (tripId == -1) {
-            Logging.e(TAG, "No trip ID provided. Cannot start navigation.")
+            Log.e(TAG, "No trip ID provided. Cannot start navigation.")
             finish()
             return
         }
@@ -145,31 +141,31 @@ class NavigActivity: ComponentActivity() {
 
         // Fetch trip data from database
         coroutineScope.launch {
-            Logging.d(TAG, "=== Starting trip data fetch ===")
-            Logging.d(TAG, "Fetching trip with ID: $tripId")
-            
+            Log.d(TAG, "=== Starting trip data fetch ===")
+            Log.d(TAG, "Fetching trip with ID: $tripId")
+
             tripResponse = databaseManager.getTripById(tripId)
             if (tripResponse == null) {
-                Logging.e(TAG, "Trip with ID $tripId not found in database. Cannot start navigation.")
+                Log.e(TAG, "Trip with ID $tripId not found in database. Cannot start navigation.")
                 finish()
                 return@launch
             }
 
-            Logging.d(TAG, "=== Trip data loaded successfully ===")
-            Logging.d(TAG, "Trip loaded: ${tripResponse?.id}")
-            Logging.d(TAG, "Origin: ${tripResponse?.route?.origin?.google_place_name}")
-            Logging.d(TAG, "Destination: ${tripResponse?.route?.destination?.google_place_name}")
-            Logging.d(TAG, "Waypoints: ${tripResponse?.waypoints?.size}")
-            Logging.d(TAG, "App instance: $app")
-            
+            Log.d(TAG, "=== Trip data loaded successfully ===")
+            Log.d(TAG, "Trip loaded: ${tripResponse?.id}")
+            Log.d(TAG, "Origin: ${tripResponse?.route?.origin?.google_place_name}")
+            Log.d(TAG, "Destination: ${tripResponse?.route?.destination?.google_place_name}")
+            Log.d(TAG, "Waypoints: ${tripResponse?.waypoints?.size}")
+            Log.d(TAG, "App instance: $app")
+
             // Update the App with the loaded trip data if it's available
-            Logging.d(TAG, "About to call app?.updateTripData...")
+            Log.d(TAG, "About to call app?.updateTripData...")
             if (app == null) {
-                Logging.d(TAG, "App instance not yet created. Trip data will be passed when App is ready.")
+                Log.d(TAG, "App instance not yet created. Trip data will be passed when App is ready.")
                 messageViewUpdater?.updateText("Trip data loaded. Waiting for map...")
             } else {
                 app?.updateTripData(tripResponse, isSimulated)
-                Logging.d(TAG, "app?.updateTripData called")
+                Log.d(TAG, "app?.updateTripData called")
             }
         }
 
@@ -253,7 +249,7 @@ class NavigActivity: ComponentActivity() {
                 horizontalArrangement = Arrangement.Center
             ) {
                 CustomButton(
-                    onClick = { 
+                    onClick = {
                         app?.clearMapAndExit()
                         finish() // Exit back to MainActivity
                     },
@@ -362,7 +358,7 @@ class NavigActivity: ComponentActivity() {
             }
 
             override fun permissionsDenied() {
-                Logging.e(TAG, "Permissions denied by user.")
+                Log.e(TAG, "Permissions denied by user.")
             }
         })
     }
@@ -383,7 +379,7 @@ class NavigActivity: ComponentActivity() {
                 if (mapError == null) {
                     // Start the app that contains the logic to calculate routes & start TBT guidance.
                     app = App(applicationContext, mapView!!, messageViewUpdater!!, tripResponse)
-                    Logging.d(TAG, "App instance created: $app")
+                    Log.d(TAG, "App instance created: $app")
 
                     // Enable traffic flows and 3D landmarks, by default.
                     val mapFeatures: MutableMap<String, String> = HashMap()
@@ -391,14 +387,14 @@ class NavigActivity: ComponentActivity() {
                     mapFeatures[MapFeatures.LOW_SPEED_ZONES] = MapFeatureModes.LOW_SPEED_ZONES_ALL
                     mapFeatures[MapFeatures.LANDMARKS] = MapFeatureModes.LANDMARKS_TEXTURED
                     mapView!!.mapScene.enableFeatures(mapFeatures)
-                    
+
                     // Now that App is created, update it with trip data if available
                     if (tripResponse != null) {
-                        Logging.d(TAG, "Updating App with trip data after map scene loaded")
+                        Log.d(TAG, "Updating App with trip data after map scene loaded")
                         app?.updateTripData(tripResponse, isSimulated)
                     }
                 } else {
-                    Logging.d(
+                    Log.d(
                         TAG,
                         "Loading map failed: " + mapError.name
                     )
@@ -415,9 +411,6 @@ class NavigActivity: ComponentActivity() {
     override fun onResume() {
         mapView?.onResume()
         super.onResume()
-        
-        // Set this activity as the active one for logging
-        Logging.setActiveActivity(TAG)
     }
 
     override fun onDestroy() {

@@ -62,6 +62,8 @@ class RouteProgressTracker(
      * Load trip data from database
      */
     private fun loadTripData() {
+        Logging.d(TAG, "=== STARTING TRIP DATA LOADING ===")
+        Logging.d(TAG, "Trip ID: $tripId")
         coroutineScope.launch {
             try {
                 currentTrip = databaseManager.getTripById(tripId)
@@ -73,8 +75,11 @@ class RouteProgressTracker(
                     Logging.d(TAG, "Destination: ${currentTrip!!.route.destination.google_place_name}")
                     Logging.d(TAG, "Total waypoints: ${currentTrip!!.waypoints.size}")
                     Logging.d(TAG, "Status: ${currentTrip!!.status}")
-                    Logging.d(TAG, "================================")
+                    Logging.d(TAG, "Is initialized: $isInitialized")
+                    Logging.d(TAG, "Setting isInitialized = true")
                     isInitialized = true
+                    Logging.d(TAG, "Is initialized after setting: $isInitialized")
+                    Logging.d(TAG, "================================")
                 } else {
                     Logging.e(TAG, "Failed to load trip data for ID: $tripId")
                 }
@@ -82,6 +87,7 @@ class RouteProgressTracker(
                 Logging.e(TAG, "Error loading trip data: ${e.message}", e)
             }
         }
+        Logging.d(TAG, "=== TRIP DATA LOADING INITIATED (ASYNC) ===")
     }
 
     /**
@@ -222,7 +228,12 @@ class RouteProgressTracker(
             }
 
             if (!isInitialized) {
+                Logging.w(TAG, "=== ROUTE PROGRESS UPDATE SKIPPED - NOT INITIALIZED ===")
                 Logging.w(TAG, "RouteProgressTracker not yet initialized, skipping progress update")
+                Logging.w(TAG, "Trip ID: $tripId")
+                Logging.w(TAG, "Current trip: ${currentTrip?.id}")
+                Logging.w(TAG, "Is initialized: $isInitialized")
+                Logging.w(TAG, "=====================================================")
                 return
             }
 
@@ -312,30 +323,23 @@ class RouteProgressTracker(
             // Check for waypoint approaching notifications (5 minutes before)
             checkWaypointApproachingNotifications(currentRemainingDuration)
 
-            // Store trip's total remaining time/distance in database
+            // DISABLED: Store trip's total remaining time/distance in database (testing mode)
+            // Only update in-memory data for testing
             coroutineScope.launch {
                 try {
                     currentTrip?.let { trip ->
-                        databaseManager.updateTripRemaining(
-                            tripId = trip.id,
-                            remainingTimeToDestination = totalRemainingDuration,
-                            remainingDistanceToDestination = totalRemainingDistance
-                        )
-                        
-                        // Update in-memory trip data
+                        // Update in-memory trip data only (no database writes during testing)
                         currentTrip = trip.copy(
                             remaining_time_to_destination = totalRemainingDuration,
                             remaining_distance_to_destination = totalRemainingDistance
                         )
                         
-                        Logging.d(TAG, "Updated trip remaining progress: time=${formatDuration(totalRemainingDuration)}, distance=${String.format("%.1f", totalRemainingDistance)}m")
+                        Logging.d(TAG, "Updated trip remaining progress (in-memory only): time=${formatDuration(totalRemainingDuration)}, distance=${String.format("%.1f", totalRemainingDistance)}m")
                         
                         // Set the next waypoint (first unpassed waypoint)
                         setNextWaypoint()
                         
-                        // Wait a moment for database to be updated, then fetch and log the entire trip data for debugging
-                        kotlinx.coroutines.delay(100) // Small delay to ensure database write completes
-                        logCompleteTripDataFromDatabase()
+                        // Skip database logging during testing
                     }
                 } catch (e: Exception) {
                     Logging.e(TAG, "Failed to update trip remaining progress: ${e.message}", e)
@@ -697,23 +701,11 @@ class RouteProgressTracker(
     ) {
         coroutineScope.launch {
             try {
-                withContext(Dispatchers.IO) {
-                    databaseManager.updateWaypointRemaining(
-                        tripId = tripId,
-                        waypointId = waypointId,
-                        remainingTimeSeconds = remainingTimeSeconds,
-                        remainingDistanceMeters = remainingDistanceMeters
-                    )
-                }
-                Logging.d(TAG, "Updated waypoint $waypointId in database: time=${remainingTimeSeconds?.let { formatDuration(it) } ?: "null"}, distance=${remainingDistanceMeters?.let { String.format("%.1f", it) } ?: "null"}m")
+                // DISABLED: Database writes during testing
+                Logging.d(TAG, "DISABLED: Would update waypoint $waypointId in database: time=${remainingTimeSeconds?.let { formatDuration(it) } ?: "null"}, distance=${remainingDistanceMeters?.let { String.format("%.1f", it) } ?: "null"}m")
                 
-                // Fetch and log the entire trip data for debugging
-                logCompleteTripDataFromDatabase()
-                
-                // Refresh trip data to get updated waypoint values for MQTT (if requested)
-                if (refreshData) {
-                    refreshTripData()
-                }
+                // Skip all database operations during testing
+                // Only log what would have been updated
             } catch (e: Exception) {
                 Logging.e(TAG, "Failed to update waypoint $waypointId in database: ${e.message}", e)
             }
@@ -726,13 +718,10 @@ class RouteProgressTracker(
     private fun markWaypointAsPassed(waypointId: Int) {
         coroutineScope.launch {
             try {
-                withContext(Dispatchers.IO) {
-                    databaseManager.updateWaypointStatus(tripId, waypointId, true)
-                }
-                Logging.d(TAG, "Marked waypoint $waypointId as passed")
+                // DISABLED: Database writes during testing
+                Logging.d(TAG, "DISABLED: Would mark waypoint $waypointId as passed in database")
                 
-                // Refresh trip data to get updated waypoint status
-                refreshTripData()
+                // Skip database operations during testing
             } catch (e: Exception) {
                 Logging.e(TAG, "Failed to mark waypoint $waypointId as passed: ${e.message}", e)
             }
@@ -1036,13 +1025,10 @@ class RouteProgressTracker(
     private fun updateTripStatusToCompleted() {
         coroutineScope.launch {
             try {
-                withContext(Dispatchers.IO) {
-                    databaseManager.updateTripStatus(tripId, "completed")
-                }
-                Logging.d(TAG, "✅ Trip $tripId status updated to 'completed' in database")
+                // DISABLED: Database writes during testing
+                Logging.d(TAG, "DISABLED: Would update trip $tripId status to 'completed' in database")
                 
-                // Refresh trip data to get updated status
-                refreshTripData()
+                // Skip database operations during testing
             } catch (e: Exception) {
                 Logging.e(TAG, "Failed to update trip status to completed: ${e.message}", e)
             }
@@ -1054,13 +1040,10 @@ class RouteProgressTracker(
      */
     private suspend fun updateTripStatusToCompletedAndRefresh() {
         try {
-            withContext(Dispatchers.IO) {
-                databaseManager.updateTripStatus(tripId, "completed")
-            }
-            Logging.d(TAG, "✅ Trip $tripId status updated to 'completed' in database")
+            // DISABLED: Database writes during testing
+            Logging.d(TAG, "DISABLED: Would update trip $tripId status to 'completed' in database")
             
-            // Refresh trip data synchronously to get updated status
-            refreshTripDataSync()
+            // Skip database operations during testing
             Logging.d(TAG, "Trip data refreshed after status update")
         } catch (e: Exception) {
             Logging.e(TAG, "Failed to update trip status to completed: ${e.message}")
@@ -1117,14 +1100,8 @@ class RouteProgressTracker(
                             Logging.d(TAG, "Waypoint ${waypoint.id} (${waypoint.location.google_place_name}): current is_next=${waypoint.is_next}, should be=$isNext")
                             
                             if (waypoint.is_next != isNext) {
-                                // Update waypoint is_next status in database
-                                withContext(Dispatchers.IO) {
-                                    databaseManager.updateWaypointNextStatus(
-                                        tripId = tripId,
-                                        waypointId = waypoint.id,
-                                        isNext = isNext
-                                    )
-                                }
+                                // DISABLED: Database writes during testing
+                                Logging.d(TAG, "DISABLED: Would update waypoint ${waypoint.id} is_next status to $isNext in database")
                                 Logging.d(TAG, "Updated waypoint ${waypoint.id} is_next status to: $isNext")
                             } else {
                                 Logging.d(TAG, "Waypoint ${waypoint.id} is_next status already correct: $isNext")

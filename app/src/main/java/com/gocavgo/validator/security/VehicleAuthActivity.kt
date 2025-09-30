@@ -63,8 +63,8 @@ class VehicleAuthActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_vehicle_auth)
 
-        // Set this activity as active for logging
-        Logging.setActiveActivity(TAG)
+        // Set this activity as active and disable its logging
+        Logging.setActivityLoggingEnabled(TAG, false)
 
         securityManager = VehicleSecurityManager(this)
 

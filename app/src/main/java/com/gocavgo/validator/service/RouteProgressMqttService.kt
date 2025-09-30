@@ -18,6 +18,11 @@ class RouteProgressMqttService private constructor() {
     
     companion object {
         private const val TAG = "RouteProgressMqttService"
+        
+        init {
+            // Disable logging for this service
+            Logging.setTagEnabled(TAG, false)
+        }
         private const val PROGRESS_UPDATE_INTERVAL_MS = 20000L // 20 seconds
         
         @Volatile
