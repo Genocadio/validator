@@ -72,6 +72,60 @@ class DatabaseManager(context: Context) {
         }
     }
 
+    // Waypoint original duration/length persistence (from route sections)
+    suspend fun updateWaypointOriginalData(
+        tripId: Int,
+        waypointId: Int,
+        waypointLengthMeters: Double,
+        waypointTimeSeconds: Long
+    ) {
+        try {
+            tripRepository.updateWaypointOriginalData(tripId, waypointId, waypointLengthMeters, waypointTimeSeconds)
+            android.util.Log.d(
+                "DatabaseManager",
+                "Persisted original waypoint data: trip=$tripId, waypoint=$waypointId, length=${waypointLengthMeters}m, time=${waypointTimeSeconds}s"
+            )
+        } catch (e: Exception) {
+            android.util.Log.e("DatabaseManager", "Failed to persist original waypoint data: ${e.message}", e)
+            throw e
+        }
+    }
+
+    // Waypoint passed timestamp persistence
+    suspend fun updateWaypointPassedTimestamp(
+        tripId: Int,
+        waypointId: Int,
+        passedTimestamp: Long
+    ) {
+        try {
+            tripRepository.updateWaypointPassedTimestamp(tripId, waypointId, passedTimestamp)
+            android.util.Log.d(
+                "DatabaseManager",
+                "Persisted waypoint passed timestamp: trip=$tripId, waypoint=$waypointId, timestamp=$passedTimestamp"
+            )
+        } catch (e: Exception) {
+            android.util.Log.e("DatabaseManager", "Failed to persist waypoint passed timestamp: ${e.message}", e)
+            throw e
+        }
+    }
+
+    // Trip completion timestamp persistence
+    suspend fun updateTripCompletionTimestamp(
+        tripId: Int,
+        completionTimestamp: Long
+    ) {
+        try {
+            tripRepository.updateTripCompletionTimestamp(tripId, completionTimestamp)
+            android.util.Log.d(
+                "DatabaseManager",
+                "Persisted trip completion timestamp: trip=$tripId, timestamp=$completionTimestamp"
+            )
+        } catch (e: Exception) {
+            android.util.Log.e("DatabaseManager", "Failed to persist trip completion timestamp: ${e.message}", e)
+            throw e
+        }
+    }
+
     // Trip remaining progress persistence (route to destination)
     suspend fun updateTripRemaining(
         tripId: Int,

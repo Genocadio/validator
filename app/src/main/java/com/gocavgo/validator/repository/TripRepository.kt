@@ -184,6 +184,73 @@ class TripRepository(context: Context) {
         }
     }
 
+    // Update original duration/length for a waypoint in a trip (from route sections)
+    suspend fun updateWaypointOriginalData(
+        tripId: Int,
+        waypointId: Int,
+        waypointLengthMeters: Double,
+        waypointTimeSeconds: Long
+    ) {
+        val trip = getTripById(tripId)
+        if (trip != null) {
+            val updatedWaypoints = trip.waypoints.map { waypoint ->
+                if (waypoint.id == waypointId) {
+                    waypoint.copy(
+                        waypoint_length_meters = waypointLengthMeters,
+                        waypoint_time_seconds = waypointTimeSeconds
+                    )
+                } else {
+                    waypoint
+                }
+            }
+
+            val updatedTrip = trip.copy(waypoints = updatedWaypoints)
+            saveTrip(updatedTrip)
+            Log.d("TripRepository", "Saved original waypoint data to DB: trip=$tripId, waypoint=$waypointId, length=${waypointLengthMeters}m, time=${waypointTimeSeconds}s")
+        }
+    }
+
+    // Update waypoint passed timestamp
+    suspend fun updateWaypointPassedTimestamp(
+        tripId: Int,
+        waypointId: Int,
+        passedTimestamp: Long
+    ) {
+        val trip = getTripById(tripId)
+        if (trip != null) {
+            val updatedWaypoints = trip.waypoints.map { waypoint ->
+                if (waypoint.id == waypointId) {
+                    waypoint.copy(
+                        is_passed = true,
+                        passed_timestamp = passedTimestamp
+                    )
+                } else {
+                    waypoint
+                }
+            }
+
+            val updatedTrip = trip.copy(waypoints = updatedWaypoints)
+            saveTrip(updatedTrip)
+            Log.d("TripRepository", "Saved waypoint passed timestamp to DB: trip=$tripId, waypoint=$waypointId, timestamp=$passedTimestamp")
+        }
+    }
+
+    // Update trip completion timestamp
+    suspend fun updateTripCompletionTimestamp(
+        tripId: Int,
+        completionTimestamp: Long
+    ) {
+        val trip = getTripById(tripId)
+        if (trip != null) {
+            val updatedTrip = trip.copy(
+                status = "completed",
+                completion_timestamp = completionTimestamp
+            )
+            saveTrip(updatedTrip)
+            Log.d("TripRepository", "Saved trip completion timestamp to DB: trip=$tripId, timestamp=$completionTimestamp")
+        }
+    }
+
     // Update remaining time/distance for the entire trip (route to destination)
     suspend fun updateTripRemaining(
         tripId: Int,

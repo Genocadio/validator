@@ -1,10 +1,12 @@
 package com.gocavgo.validator
 
 import android.annotation.SuppressLint
+import android.content.Context
 import android.os.Bundle
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.util.Log
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -40,6 +42,14 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.withContext
+import com.here.sdk.core.engine.AuthenticationMode
+import com.here.sdk.core.engine.SDKNativeEngine
+import com.here.sdk.core.engine.SDKOptions
+import com.here.sdk.core.errors.InstantiationErrorException
+import com.gocavgo.validator.BuildConfig
 
 
 class MainActivity : ComponentActivity() {
@@ -65,6 +75,15 @@ class MainActivity : ComponentActivity() {
     // Navigation options
     private var showMap by mutableStateOf(true)
     private var isSimulated by mutableStateOf(true)
+    
+    // Map downloader
+    private var mapDownloaderManager: MapDownloaderManager? = null
+    private var mapDownloadProgress by mutableStateOf(0)
+    private var mapDownloadTotalSize by mutableStateOf(0)
+    private var mapDownloadMessage by mutableStateOf("")
+    private var mapDownloadStatus by mutableStateOf("")
+    private var showMapDownloadDialog by mutableStateOf(false)
+    private var isMapDataReady by mutableStateOf(false)
 
     // Managers
     private lateinit var vehicleSecurityManager: VehicleSecurityManager
@@ -107,6 +126,11 @@ class MainActivity : ComponentActivity() {
             isConnected = connected
             connectionType = type
             isMetered = metered
+
+            // Notify map downloader of network availability
+            if (connected) {
+                mapDownloaderManager?.onNetworkAvailable()
+            }
 
             // Log detailed network info when state changes
             logDetailedNetworkInfo()
@@ -273,20 +297,7 @@ class MainActivity : ComponentActivity() {
         
         // Get vehicle info
         vehicleInfo = vehicleSecurityManager.getVehicleInfo()
-        
-        Logging.d(TAG, "=== VEHICLE SECURITY STATUS ===")
-        Logging.d(TAG, "Vehicle Registered: ${vehicleSecurityManager.isVehicleRegistered()}")
-        Logging.d(TAG, "Vehicle ID: ${vehicleSecurityManager.getVehicleId()}")
-        Logging.d(TAG, "Has Key Pair: ${vehicleSecurityManager.hasKeyPair()}")
-        Logging.d(TAG, "Completely Setup: ${vehicleSecurityManager.isCompletelySetup()}")
-        
-        vehicleInfo?.let { info ->
-            Logging.d(TAG, "Vehicle ID: ${info.vehicleId}")
-            Logging.d(TAG, "Company: ${info.companyName}")
-            Logging.d(TAG, "License Plate: ${info.licensePlate}")
-            Logging.d(TAG, "Registration Date: ${info.registrationDateTime}")
-        }
-        Logging.d(TAG, "==============================")
+
         
         // Test database connection
         testDatabaseConnection()
@@ -297,6 +308,64 @@ class MainActivity : ComponentActivity() {
                 startPeriodicTripFetching()
             }
         }
+    }
+    
+    private fun initializeMapDownloader() {
+        Logging.d(TAG, "=== INITIALIZING MAP DOWNLOADER ===")
+        
+        // Check if HERE SDK is initialized
+        val sdkNativeEngine = SDKNativeEngine.getSharedInstance()
+        if (sdkNativeEngine == null) {
+            Logging.e(TAG, "HERE SDK not initialized! Cannot initialize map downloader.")
+            isMapDataReady = true // Proceed without offline maps
+            return
+        }
+        
+        Logging.d(TAG, "HERE SDK is initialized, proceeding with map downloader")
+        
+        mapDownloaderManager = MapDownloaderManager(
+            context = this,
+            onProgressUpdate = { message, progress, totalSizeMB ->
+                mapDownloadMessage = message
+                mapDownloadProgress = progress
+                mapDownloadTotalSize = totalSizeMB
+                Logging.d(TAG, "Map download progress: $message - $progress% (${totalSizeMB}MB)")
+            },
+            onStatusUpdate = { status ->
+                mapDownloadStatus = status
+                Logging.d(TAG, "Map download status: $status")
+            },
+            onDownloadComplete = {
+                isMapDataReady = true
+                showMapDownloadDialog = false
+                Logging.d(TAG, "Map download completed successfully")
+            },
+            onError = { error ->
+                Logging.e(TAG, "Map download error: $error")
+                showMapDownloadDialog = false
+            },
+            onToastMessage = { message ->
+                runOnUiThread {
+                    Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+                }
+            },
+            onShowProgressDialog = {
+                runOnUiThread {
+                    showMapDownloadDialog = true
+                }
+            }
+        )
+        
+        // Initialize the map downloader in background
+        try {
+            mapDownloaderManager?.initialize()
+            Logging.d(TAG, "Map downloader initialized successfully")
+        } catch (e: Exception) {
+            Logging.e(TAG, "Failed to initialize map downloader: ${e.message}", e)
+            isMapDataReady = true // Proceed without offline maps
+        }
+        
+        Logging.d(TAG, "================================")
     }
     
     private fun testDatabaseConnection() {
@@ -447,6 +516,49 @@ class MainActivity : ComponentActivity() {
         })
     }
 
+    private fun initializeHERESDK() {
+        // Initialize HERE SDK in background to prevent ANR
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                // Set your credentials for the HERE SDK.
+                val accessKeyID = BuildConfig.HERE_ACCESS_KEY_ID
+                val accessKeySecret = BuildConfig.HERE_ACCESS_KEY_SECRET
+                val authenticationMode = AuthenticationMode.withKeySecret(accessKeyID, accessKeySecret)
+                val options = SDKOptions(authenticationMode)
+                
+                val context: Context = this@MainActivity
+                
+                // Add timeout protection for HERE SDK initialization
+                withTimeout(15000) { // 15 second timeout
+                    SDKNativeEngine.makeSharedInstance(context, options)
+                }
+                
+                Logging.d(TAG, "HERE SDK initialized successfully in MainActivity")
+                
+                // Initialize map downloader after HERE SDK is ready
+                withContext(Dispatchers.Main) {
+                    initializeMapDownloader()
+                }
+            } catch (e: TimeoutCancellationException) {
+                Logging.e(TAG, "HERE SDK initialization timed out after 15 seconds", e)
+                withContext(Dispatchers.Main) {
+                    isMapDataReady = true // Proceed without offline maps
+                }
+            } catch (e: InstantiationErrorException) {
+                Logging.e(TAG, "Initialization of HERE SDK failed: ${e.error.name}", e)
+                // Don't throw RuntimeException to prevent ANR, just log and continue
+                // The app can still function without HERE SDK in some cases
+                withContext(Dispatchers.Main) {
+                    isMapDataReady = true // Proceed without offline maps
+                }
+            } catch (e: Exception) {
+                Logging.e(TAG, "Unexpected error during HERE SDK initialization: ${e.message}", e)
+                withContext(Dispatchers.Main) {
+                    isMapDataReady = true // Proceed without offline maps
+                }
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -456,6 +568,9 @@ class MainActivity : ComponentActivity() {
         Logging.setActivityLoggingEnabled(TAG, false)
         permissionsRequestor = PermissionsRequestor(this)
 
+        // Initialize HERE SDK in background to prevent ANR
+        initializeHERESDK()
+        
         checkAndRequestNetworkPermissions()
         initializeManagers()
 
@@ -464,20 +579,36 @@ class MainActivity : ComponentActivity() {
         setContent {
             ValidatorTheme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    NavigationScreen(
-                        onStartNavigation = { startNavigator() },
-                        onVehicleAuth = { startVehicleAuth() },
-                        onRefreshTrips = { forceRefreshFromRemote() },
-                        latestTrip = latestTrip,
-                        isLoadingTrips = isLoadingTrips,
-                        tripError = tripError,
-                        vehicleInfo = vehicleInfo,
-                        showMap = showMap,
-                        isSimulated = isSimulated,
-                        onShowMapChanged = { showMap = it },
-                        onIsSimulatedChanged = { isSimulated = it },
-                        modifier = Modifier.padding(innerPadding)
-                    )
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        NavigationScreen(
+                            onStartNavigation = { startNavigator() },
+                            onVehicleAuth = { startVehicleAuth() },
+                            onRefreshTrips = { forceRefreshFromRemote() },
+                            latestTrip = latestTrip,
+                            isLoadingTrips = isLoadingTrips,
+                            tripError = tripError,
+                            vehicleInfo = vehicleInfo,
+                            showMap = showMap,
+                            isSimulated = isSimulated,
+                            onShowMapChanged = { showMap = it },
+                            onIsSimulatedChanged = { isSimulated = it },
+                            modifier = Modifier.padding(innerPadding)
+                        )
+                        
+                        // Map download dialog overlay
+                        if (showMapDownloadDialog) {
+                            MapDownloadDialog(
+                                progress = mapDownloadProgress,
+                                totalSize = mapDownloadTotalSize,
+                                message = mapDownloadMessage,
+                                status = mapDownloadStatus,
+                                onCancel = {
+                                    mapDownloaderManager?.cancelDownloads()
+                                    showMapDownloadDialog = false
+                                }
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -752,6 +883,24 @@ class MainActivity : ComponentActivity() {
         
         // Stop network monitoring
         networkMonitor?.stopMonitoring()
+        
+        // Clean up map downloader
+        mapDownloaderManager?.cleanup()
+        
+        // Dispose HERE SDK
+        disposeHERESDK()
+    }
+    
+    private fun disposeHERESDK() {
+        // Free HERE SDK resources before the application shuts down.
+        val sdkNativeEngine = SDKNativeEngine.getSharedInstance()
+        if (sdkNativeEngine != null) {
+            sdkNativeEngine.dispose()
+            // For safety reasons, we explicitly set the shared instance to null to avoid situations,
+            // where a disposed instance is accidentally reused.
+            SDKNativeEngine.setSharedInstance(null)
+            Logging.d(TAG, "HERE SDK disposed in MainActivity")
+        }
     }
 }
 
@@ -1000,6 +1149,7 @@ fun NavigationScreen(
             }
         }
 
+
         item {
             Button(
                 onClick = onVehicleAuth,
@@ -1043,6 +1193,80 @@ fun NavigationScreen(
     }
 }
 
+@Composable
+fun MapDownloadDialog(
+    progress: Int,
+    totalSize: Int,
+    message: String,
+    status: String,
+    onCancel: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = { /* Dialog cannot be dismissed during download */ },
+        title = {
+            Text(
+                text = "Downloading Map Data",
+                style = MaterialTheme.typography.headlineSmall
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                // Status message
+                Text(
+                    text = status.ifEmpty { "Preparing download..." },
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                
+                // Progress bar
+                LinearProgressIndicator(
+                    progress = progress / 100f,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                
+                // Progress text
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "$progress%",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    if (totalSize > 0) {
+                        Text(
+                            text = "${totalSize}MB",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+                
+                // Detailed message
+                if (message.isNotEmpty()) {
+                    Text(
+                        text = message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                
+                Text(
+                    text = "This may take several minutes depending on your internet connection. The app will work normally once complete.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onCancel) {
+                Text("Cancel")
+            }
+        }
+    )
+}
+
 @Preview(showBackground = true)
 @Composable
 fun NavigationScreenPreview() {
@@ -1058,7 +1282,7 @@ fun NavigationScreenPreview() {
             showMap = true,
             isSimulated = true,
             onShowMapChanged = { },
-            onIsSimulatedChanged = { }
+            onIsSimulatedChanged = { },
         )
     }
 }

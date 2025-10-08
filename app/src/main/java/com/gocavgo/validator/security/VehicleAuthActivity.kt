@@ -36,6 +36,7 @@ class VehicleAuthActivity : AppCompatActivity() {
     private var btnGenerateKey: Button? = null
     private var btnLoginVehicle: Button? = null
     private var btnGenerateKeyLogin: Button? = null
+    private var btnLogoutVehicle: Button? = null
 
     private var cardRegistrationInfo: View? = null
     private var tvRegisteredCompany: TextView? = null
@@ -130,6 +131,7 @@ class VehicleAuthActivity : AppCompatActivity() {
         btnGenerateKey = findViewById(R.id.btn_generate_key)
         btnLoginVehicle = findViewById(R.id.btn_login_vehicle)
         btnGenerateKeyLogin = findViewById(R.id.btn_generate_key_login)
+        btnLogoutVehicle = findViewById(R.id.btn_logout_vehicle)
 
         // Registration info views
         cardRegistrationInfo = findViewById(R.id.card_registration_info)
@@ -195,6 +197,10 @@ class VehicleAuthActivity : AppCompatActivity() {
             generateKeyPair()
         }
 
+        btnLogoutVehicle?.setOnClickListener {
+            logoutVehicle()
+        }
+
         tabLayout?.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
             override fun onTabSelected(tab: TabLayout.Tab) {
                 updateVisibleContainerForTab(tab.position)
@@ -216,6 +222,39 @@ class VehicleAuthActivity : AppCompatActivity() {
         } else {
             Log.e(TAG, "Failed to generate key pair")
             Toast.makeText(this, "Error generating key pair", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun logoutVehicle() {
+        try {
+            Log.d(TAG, "Logging out vehicle and clearing credentials...")
+            
+            // Clear vehicle data from preferences
+            securityManager.clearVehicleData()
+            
+            // Delete the existing key pair
+            securityManager.deleteKeyPair()
+            
+            // Clear all input fields
+            clearAllInputFields()
+            
+            // Reset UI to show registration/login forms
+            resetUIForNewVehicle()
+            
+            // Generate new key pair for the new vehicle
+            generateKeyPair()
+            
+            Toast.makeText(
+                this,
+                "Vehicle logged out successfully. You can now register or login with a new vehicle.",
+                Toast.LENGTH_LONG
+            ).show()
+            
+            Log.d(TAG, "Vehicle logout completed successfully")
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "Error during vehicle logout", e)
+            Toast.makeText(this, "Error during logout: ${e.message}", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -538,6 +577,41 @@ class VehicleAuthActivity : AppCompatActivity() {
         }
 
         return true
+    }
+
+    private fun clearAllInputFields() {
+        // Clear registration fields
+        etCompanyCode?.setText("")
+        etMake?.setText("")
+        etModel?.setText("")
+        etCapacity?.setText("")
+        etLicensePlate?.setText("")
+        
+        // Clear login fields
+        etCompanyCodeLogin?.setText("")
+        etLicensePlateLogin?.setText("")
+        etPasswordLogin?.setText("")
+        
+        // Reset vehicle type display
+        tvVehicleType?.text = "Vehicle Type: Enter capacity"
+    }
+
+    private fun resetUIForNewVehicle() {
+        // Hide registration info card
+        cardRegistrationInfo?.visibility = View.GONE
+        
+        // Show tabs and default to Register tab
+        tabLayout?.visibility = View.VISIBLE
+        tabLayout?.getTabAt(1)?.select() // Select Register tab (index 1)
+        
+        // Show input fields and buttons for registration
+        containerInputFields?.visibility = View.VISIBLE
+        containerButtons?.visibility = View.VISIBLE
+        containerLogin?.visibility = View.GONE
+        
+        // Re-enable buttons
+        btnRegisterVehicle?.isEnabled = true
+        btnLoginVehicle?.isEnabled = true
     }
 
     // Data class for API request

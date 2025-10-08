@@ -96,6 +96,8 @@ import com.here.sdk.trafficawarenavigation.DynamicRoutingListener
 import com.here.sdk.transport.TransportMode
 import com.here.time.Duration
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.TimeUnit
 import androidx.core.graphics.toColorInt
@@ -219,6 +221,30 @@ class Navigator : AppCompatActivity() {
 
     // Navigation state management
     private var isNavigationStarted = false
+    
+    // Performance monitoring
+    private var initializationStartTime = 0L
+    private var lastMainThreadOperationTime = 0L
+    
+    /**
+     * Monitor main thread operations to detect potential ANRs
+     */
+    private fun monitorMainThreadOperation(operationName: String) {
+        val currentTime = System.currentTimeMillis()
+        val timeSinceLastOperation = currentTime - lastMainThreadOperationTime
+        val totalInitializationTime = currentTime - initializationStartTime
+        
+        if (timeSinceLastOperation > 100) { // More than 100ms between operations
+            Log.w(TAG, "⚠️ MAIN THREAD DELAY: $operationName took ${timeSinceLastOperation}ms (Total: ${totalInitializationTime}ms)")
+        }
+        
+        lastMainThreadOperationTime = currentTime
+        
+        // Log completion of initialization
+        if (totalInitializationTime > 0 && operationName.contains("initialization")) {
+            Log.d(TAG, "✅ Initialization completed in ${totalInitializationTime}ms")
+        }
+    }
 
     // Route deviation handling
     private var isReturningToRoute = false
@@ -231,6 +257,9 @@ class Navigator : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        initializationStartTime = System.currentTimeMillis()
+        lastMainThreadOperationTime = initializationStartTime
+        
         enableEdgeToEdge()
         
         // Prevent soft keyboard from appearing
@@ -262,45 +291,75 @@ class Navigator : AppCompatActivity() {
             return
         }
 
-        // Fetch trip from database
-        lifecycleScope.launch {
-            tripResponse = databaseManager.getTripById(tripId)
-            if (tripResponse == null) {
-                Log.e(TAG, "Trip with ID $tripId not found in database. Cannot start navigation.")
-                finish()
-                return@launch
+        // Setup UI first to prevent ANR
+        monitorMainThreadOperation("UI Setup")
+        setupUI(savedInstanceState)
+
+        ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main)) { v, insets ->
+            val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
+            insets
+        }
+
+        // Initialize lightweight components immediately
+        monitorMainThreadOperation("Network Monitoring")
+        initializeNetworkMonitoring()
+        
+        // Perform heavy initialization in background thread
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                // Fetch trip from database
+                tripResponse = databaseManager.getTripById(tripId)
+                if (tripResponse == null) {
+                    Log.e(TAG, "Trip with ID $tripId not found in database. Cannot start navigation.")
+                    withContext(Dispatchers.Main) {
+                        finish()
+                    }
+                    return@launch
+                }
+
+                // Get MQTT service instance
+                mqttService = MqttService.getInstance()
+
+                // Initialize trip progress tracker with MQTT service
+                tripProgressTracker = TripProgressTracker(tripId, databaseManager, lifecycleScope, this@Navigator, mqttService)
+
+                // Switch to main thread for UI operations
+                withContext(Dispatchers.Main) {
+                    monitorMainThreadOperation("Trip Info Logging")
+                    logTripInfo()
+                    
+                    monitorMainThreadOperation("HERE SDK Initialization")
+                    // Initialize HERE SDK in background to prevent ANR
+                    lifecycleScope.launch(Dispatchers.IO) {
+                        initializeHERESDK()
+                    }
+                    
+                    monitorMainThreadOperation("Components Initialization")
+                    initializeComponents()
+
+                    // Initialize NFC reader after trip data is loaded (for headless mode)
+                    if (!showMap) {
+                        monitorMainThreadOperation("NFC Reader Initialization")
+                        initializeNFCReader()
+                        Log.d(TAG, "NFC reader initialized after trip data loaded")
+                    }
+
+                    // Register receiver for booking bundle saved overlay
+                    monitorMainThreadOperation("Receiver Registration")
+                    registerBookingBundleReceiver()
+                    
+                    // Also register direct callback with MQTT service for more reliable notifications
+                    registerMqttBookingBundleCallback()
+                    
+                    monitorMainThreadOperation("Initialization Complete")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error during initialization: ${e.message}", e)
+                withContext(Dispatchers.Main) {
+                    finish()
+                }
             }
-
-            // Get MQTT service instance
-            mqttService = MqttService.getInstance()
-
-            // Initialize trip progress tracker with MQTT service
-            tripProgressTracker = TripProgressTracker(tripId, databaseManager, lifecycleScope, this@Navigator, mqttService)
-
-            logTripInfo()
-            initializeNetworkMonitoring()
-            initializeHERESDK()
-            setupUI(savedInstanceState)
-
-            ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main)) { v, insets ->
-                val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-                v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
-                insets
-            }
-
-            initializeComponents()
-
-            // Initialize NFC reader after trip data is loaded (for headless mode)
-            if (!showMap) {
-                initializeNFCReader()
-                Log.d(TAG, "NFC reader initialized after trip data loaded")
-            }
-
-            // Register receiver for booking bundle saved overlay
-            registerBookingBundleReceiver()
-            
-            // Also register direct callback with MQTT service for more reliable notifications
-            registerMqttBookingBundleCallback()
         }
     }
 
@@ -457,18 +516,31 @@ class Navigator : AppCompatActivity() {
     }
 
     private fun initializeHERESDK(lowMEm: Boolean = false) {
-        val accessKeyID = BuildConfig.HERE_ACCESS_KEY_ID
-        val accessKeySecret = BuildConfig.HERE_ACCESS_KEY_SECRET
-        val authenticationMode = AuthenticationMode.withKeySecret(accessKeyID, accessKeySecret)
-        val options = SDKOptions(authenticationMode)
-        if(lowMEm) {
-            options.lowMemoryMode = true
-            Log.d(TAG, "Initialised in Low memory mode")
-        }
         try {
+            // Check if SDK is already initialized to avoid duplicate initialization
+            if (SDKNativeEngine.getSharedInstance() != null) {
+                Log.d(TAG, "HERE SDK already initialized, skipping")
+                return
+            }
+            
+            val accessKeyID = BuildConfig.HERE_ACCESS_KEY_ID
+            val accessKeySecret = BuildConfig.HERE_ACCESS_KEY_SECRET
+            val authenticationMode = AuthenticationMode.withKeySecret(accessKeyID, accessKeySecret)
+            val options = SDKOptions(authenticationMode)
+            if(lowMEm) {
+                options.lowMemoryMode = true
+                Log.d(TAG, "Initialised in Low memory mode")
+            }
+            
+            // Initialize SDK with timeout protection
             SDKNativeEngine.makeSharedInstance(this, options)
+            Log.d(TAG, "HERE SDK initialized successfully")
         } catch (e: InstantiationErrorException) {
-            throw RuntimeException("Initialization of HERE SDK failed: " + e.error.name)
+            Log.e(TAG, "Initialization of HERE SDK failed: ${e.error.name}", e)
+            // Don't throw RuntimeException to prevent ANR, just log and continue
+            // The app can still function without HERE SDK in some cases
+        } catch (e: Exception) {
+            Log.e(TAG, "Unexpected error during HERE SDK initialization: ${e.message}", e)
         }
     }
 
@@ -662,11 +734,11 @@ class Navigator : AppCompatActivity() {
         // Show loading state
         showTicketValidationLoading()
         
-        lifecycleScope.launch {
+        lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val ticket = databaseManager.getTicketByNumber(ticketNumber)
                 
-                handler.post {
+                withContext(Dispatchers.Main) {
                     if (ticket != null) {
                         Log.d(TAG, "=== TICKET FOUND ===")
                         Log.d(TAG, "Ticket ID: ${ticket.id}")
@@ -691,7 +763,7 @@ class Navigator : AppCompatActivity() {
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error validating ticket: ${e.message}", e)
-                handler.post {
+                withContext(Dispatchers.Main) {
                     showTicketValidationError("Error validating ticket: ${e.message}")
                 }
             }
@@ -888,11 +960,11 @@ class Navigator : AppCompatActivity() {
 
             // Check for existing booking first
             Log.d(TAG, "Checking for existing booking...")
-            lifecycleScope.launch {
+            lifecycleScope.launch(Dispatchers.IO) {
                 try {
                     val existingBookingResult = databaseManager.getExistingBookingByNfcTag(nfcId)
 
-                    handler.post {
+                    withContext(Dispatchers.Main) {
                         if (!isDestroyed) {
                             when (existingBookingResult) {
                                 is com.gocavgo.validator.service.ExistingBookingResult.Found -> {
@@ -923,7 +995,7 @@ class Navigator : AppCompatActivity() {
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Error checking existing booking: ${e.message}", e)
-                    handler.post {
+                    withContext(Dispatchers.Main) {
                         if (!isDestroyed) {
                             showBookingError("Error checking existing booking: ${e.message}")
                         }
@@ -1254,7 +1326,7 @@ class Navigator : AppCompatActivity() {
         priceText: String
     ) {
         tripResponse?.let { trip ->
-            lifecycleScope.launch {
+            lifecycleScope.launch(Dispatchers.IO) {
                 try {
                     val result = databaseManager.createBookingWithPaymentAndTicket(
                         tripId = trip.id,
@@ -1266,35 +1338,39 @@ class Navigator : AppCompatActivity() {
                         userName = "NFC Card User"
                     )
 
-                    when (result) {
-                        is com.gocavgo.validator.service.BookingCreationResult.Success -> {
-                            Log.d(TAG, "=== COMPLETE BOOKING CREATED ===")
-                            Log.d(TAG, "Booking ID: ${result.bookingId}")
-                            Log.d(TAG, "Payment ID: ${result.paymentId}")
-                            Log.d(TAG, "Ticket ID: ${result.ticketId}")
-                            Log.d(TAG, "Ticket Number: ${result.ticketNumber}")
-                            Log.d(TAG, "QR Code: ${result.qrCode}")
-                            Log.d(TAG, "===============================")
+                    withContext(Dispatchers.Main) {
+                        when (result) {
+                            is com.gocavgo.validator.service.BookingCreationResult.Success -> {
+                                Log.d(TAG, "=== COMPLETE BOOKING CREATED ===")
+                                Log.d(TAG, "Booking ID: ${result.bookingId}")
+                                Log.d(TAG, "Payment ID: ${result.paymentId}")
+                                Log.d(TAG, "Ticket ID: ${result.ticketId}")
+                                Log.d(TAG, "Ticket Number: ${result.ticketNumber}")
+                                Log.d(TAG, "QR Code: ${result.qrCode}")
+                                Log.d(TAG, "===============================")
 
-                            // Show booking confirmation dialog with ticket details
-                            showBookingConfirmationWithTicket(
-                                nfcId,
-                                currentLocation,
-                                destinationDisplayName,
-                                priceText,
-                                result.ticketNumber,
-                                result.qrCode
-                            )
-                        }
-                        is com.gocavgo.validator.service.BookingCreationResult.Error -> {
-                            Log.e(TAG, "Failed to create complete booking: ${result.message}")
-                            // Show error dialog
-                            showBookingError("Failed to create booking: ${result.message}")
+                                // Show booking confirmation dialog with ticket details
+                                showBookingConfirmationWithTicket(
+                                    nfcId,
+                                    currentLocation,
+                                    destinationDisplayName,
+                                    priceText,
+                                    result.ticketNumber,
+                                    result.qrCode
+                                )
+                            }
+                            is com.gocavgo.validator.service.BookingCreationResult.Error -> {
+                                Log.e(TAG, "Failed to create complete booking: ${result.message}")
+                                // Show error dialog
+                                showBookingError("Failed to create booking: ${result.message}")
+                            }
                         }
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Error creating complete booking: ${e.message}", e)
-                    showBookingError("Error creating booking: ${e.message}")
+                    withContext(Dispatchers.Main) {
+                        showBookingError("Error creating booking: ${e.message}")
+                    }
                 }
             }
         } ?: run {
@@ -1444,9 +1520,20 @@ class Navigator : AppCompatActivity() {
 
 
     private fun initializeComponents() {
-        initializeRoutingEngine()
-        initializeLocationEngine()
-        initializeMapDownloader()
+        // Initialize components in background to prevent ANR
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                initializeRoutingEngine()
+                initializeLocationEngine()
+                
+                // Switch to main thread for map downloader as it may need UI context
+                withContext(Dispatchers.Main) {
+                    initializeMapDownloader()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error initializing components: ${e.message}", e)
+            }
+        }
     }
 
     private fun initializeLocationEngine() {
@@ -1465,22 +1552,30 @@ class Navigator : AppCompatActivity() {
             createDynamicRoutingEngine()
             Log.d(TAG, "All routing engines initialized successfully")
         } catch (e: InstantiationErrorException) {
-            throw RuntimeException("Initialization of routing engines failed: " + e.error.name)
+            Log.e(TAG, "Initialization of routing engines failed: ${e.error.name}", e)
+            // Don't throw RuntimeException to prevent ANR, just log and continue
+            // The app can still function with limited routing capabilities
+        } catch (e: Exception) {
+            Log.e(TAG, "Unexpected error during routing engine initialization: ${e.message}", e)
         }
     }
 
     private fun createDynamicRoutingEngine() {
-        val dynamicRoutingOptions = DynamicRoutingEngineOptions().apply {
-            minTimeDifference = Duration.ofSeconds(30)
-            minTimeDifferencePercentage = 0.1
-            pollInterval = Duration.ofMinutes(10)
-        }
-
         try {
+            val dynamicRoutingOptions = DynamicRoutingEngineOptions().apply {
+                minTimeDifference = Duration.ofSeconds(30)
+                minTimeDifferencePercentage = 0.1
+                pollInterval = Duration.ofMinutes(10)
+            }
+
             dynamicRoutingEngine = DynamicRoutingEngine(dynamicRoutingOptions)
             Log.d(TAG, "DynamicRoutingEngine initialized successfully")
         } catch (e: InstantiationErrorException) {
-            throw RuntimeException("Initialization of DynamicRoutingEngine failed: " + e.error.name)
+            Log.e(TAG, "Initialization of DynamicRoutingEngine failed: ${e.error.name}", e)
+            // Don't throw RuntimeException to prevent ANR, just log and continue
+            // Dynamic routing is optional, app can work without it
+        } catch (e: Exception) {
+            Log.e(TAG, "Unexpected error during dynamic routing engine initialization: ${e.message}", e)
         }
     }
 
@@ -1570,25 +1665,40 @@ class Navigator : AppCompatActivity() {
     }
 
     private fun initializeMapDownloader() {
-        val sdkNativeEngine = SDKNativeEngine.getSharedInstance()
-            ?: throw RuntimeException("SDKNativeEngine not initialized.")
-
-        val storagePath = sdkNativeEngine.options.cachePath
-        val persistentMapStoragePath = sdkNativeEngine.options.persistentMapStoragePath
-        Log.d(TAG, "Cache storage path: $storagePath")
-        Log.d(TAG, "Persistent map storage path: $persistentMapStoragePath")
-
-        MapDownloader.fromEngineAsync(
-            sdkNativeEngine
-        ) { mapDownloader ->
-            this@Navigator.mapDownloader = mapDownloader
-            Log.d(TAG, "MapDownloader initialized successfully")
-
-            checkExistingMapData()
-
-            if (!isMapDataReady) {
-                downloadRegionsList()
+        try {
+            val sdkNativeEngine = SDKNativeEngine.getSharedInstance()
+            if (sdkNativeEngine == null) {
+                Log.w(TAG, "SDKNativeEngine not initialized, skipping map downloader initialization")
+                return
             }
+
+            val storagePath = sdkNativeEngine.options.cachePath
+            val persistentMapStoragePath = sdkNativeEngine.options.persistentMapStoragePath
+            Log.d(TAG, "Cache storage path: $storagePath")
+            Log.d(TAG, "Persistent map storage path: $persistentMapStoragePath")
+
+            MapDownloader.fromEngineAsync(
+                sdkNativeEngine
+            ) { mapDownloader ->
+                this@Navigator.mapDownloader = mapDownloader
+                Log.d(TAG, "MapDownloader initialized successfully")
+
+                // Perform map data operations in background to prevent ANR
+                lifecycleScope.launch(Dispatchers.IO) {
+                    try {
+                        checkExistingMapData()
+
+                        if (!isMapDataReady) {
+                            downloadRegionsList()
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error during map data operations: ${e.message}", e)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error initializing map downloader: ${e.message}", e)
+            // Don't throw exception to prevent ANR, just log and continue
         }
     }
     
@@ -3724,7 +3834,7 @@ class Navigator : AppCompatActivity() {
                 }
 
                 if (newStatus != normalizedCurrentStatus) {
-                    lifecycleScope.launch {
+                    lifecycleScope.launch(Dispatchers.IO) {
                         try {
                             databaseManager.updateTripStatus(trip.id, newStatus)
                             Log.d(TAG, "Trip ${trip.id} status updated from $currentStatus to $newStatus")

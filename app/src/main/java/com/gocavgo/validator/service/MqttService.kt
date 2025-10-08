@@ -85,6 +85,7 @@ class MqttService private constructor(
     private val json = Json {
         ignoreUnknownKeys = true
         isLenient = true
+        encodeDefaults = true // Include null values in MQTT messages for timestamp fields
     }
 
     // HiveMQ MQTT5 Client
@@ -1074,7 +1075,7 @@ class MqttService private constructor(
             ),
             status = tripResponse.status,
             departure_time = tripResponse.departure_time,
-            completion_time = null, // Will be set when trip is completed
+            completion_time = tripResponse.completion_timestamp, // Use actual completion timestamp
             connection_mode = tripResponse.connection_mode,
             notes = tripResponse.notes,
             seats = tripResponse.seats,
@@ -1130,9 +1131,11 @@ class MqttService private constructor(
                     price = waypoint.price,
                     is_passed = waypoint.is_passed,
                     is_next = waypoint.is_next,
-                    passed_timestamp = null, // Will be set when waypoint is passed
+                    passed_timestamp = waypoint.passed_timestamp, // Use actual passed timestamp
                     remaining_time = freshTime,
                     remaining_distance = freshDistance,
+                    waypoint_length_meters = waypoint.waypoint_length_meters, // Original length from route sections
+                    waypoint_time_seconds = waypoint.waypoint_time_seconds, // Original time from route sections
                     is_custom = waypoint.is_custom,
                     created_at = null, // Not available in TripResponse
                     updated_at = null, // Not available in TripResponse
@@ -1581,10 +1584,13 @@ class MqttService private constructor(
             connection_mode = backendTrip.connection_mode,
             notes = backendTrip.notes,
             seats = backendTrip.seats,
+            remaining_time_to_destination = backendTrip.remaining_time_to_destination,
+            remaining_distance_to_destination = backendTrip.remaining_distance_to_destination,
             is_reversed = backendTrip.is_reversed,
             has_custom_waypoints = backendTrip.has_custom_waypoints,
             created_at = backendTrip.created_at,
             updated_at = backendTrip.updated_at,
+            completion_timestamp = backendTrip.completion_time, // Use completion timestamp from backend
             route = com.gocavgo.validator.dataclass.TripRoute(
                 id = backendTrip.route.id,
                 origin = com.gocavgo.validator.dataclass.SavePlaceResponse(
@@ -1626,6 +1632,9 @@ class MqttService private constructor(
                     is_custom = waypoint.is_custom,
                     remaining_time = waypoint.remaining_time,
                     remaining_distance = waypoint.remaining_distance,
+                    waypoint_length_meters = waypoint.waypoint_length_meters, // Use original length from backend
+                    waypoint_time_seconds = waypoint.waypoint_time_seconds, // Use original time from backend
+                    passed_timestamp = waypoint.passed_timestamp, // Use passed timestamp from backend
                     location = com.gocavgo.validator.dataclass.SavePlaceResponse(
                         id = waypoint.location.id,
                         latitude = waypoint.location.latitude,

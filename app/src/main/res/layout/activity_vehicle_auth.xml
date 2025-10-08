@@ -77,8 +77,20 @@
                     android:id="@+id/tv_registration_date"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
+                    android:layout_marginBottom="16dp"
                     android:text="Registered: Loading..."
                     android:textColor="#666"
+                    android:textSize="14sp" />
+
+                <!-- Logout Button -->
+                <Button
+                    android:id="@+id/btn_logout_vehicle"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:backgroundTint="#F44336"
+                    android:text="Logout &amp; Add New Vehicle"
+                    android:textColor="#fff"
                     android:textSize="14sp" />
 
             </LinearLayout>

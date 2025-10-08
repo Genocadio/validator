@@ -30,6 +30,7 @@ import com.here.sdk.navigation.DynamicCameraBehavior
 import com.here.sdk.navigation.SpeedBasedCameraBehavior
 import com.here.sdk.navigation.VisualNavigator
 import com.here.sdk.prefetcher.RoutePrefetcher
+import com.here.sdk.routing.OfflineRoutingEngine
 import com.here.sdk.routing.Route
 import com.here.sdk.routing.RoutingError
 import com.here.sdk.trafficawarenavigation.DynamicRoutingEngine
@@ -49,20 +50,19 @@ class NavigationExample(
     private val tripSectionValidator: TripSectionValidator
 ) {
     private var visualNavigator: VisualNavigator
-    private val herePositioningProvider: HEREPositioningProvider
-    private val herePositioningSimulator: HEREPositioningSimulator
+    // A class to receive real location events.
+    private val herePositioningProvider: HEREPositioningProvider = HEREPositioningProvider()
+    // A class to receive simulated location events.
+    private val herePositioningSimulator: HEREPositioningSimulator = HEREPositioningSimulator()
     private var dynamicRoutingEngine: DynamicRoutingEngine? = null
-    private val routePrefetcher: RoutePrefetcher
+
+    private var offlineRoutingEngine: OfflineRoutingEngine? = null
+    // The RoutePrefetcher downloads map data in advance into the map cache.
+    // This is not mandatory, but can help to improve the guidance experience.
+    private val routePrefetcher: RoutePrefetcher = RoutePrefetcher(SDKNativeEngine.getSharedInstance()!!)
     private val navigationHandler: NavigationHandler
 
     init {
-        // A class to receive real location events.
-        herePositioningProvider = HEREPositioningProvider()
-        // A class to receive simulated location events.
-        herePositioningSimulator = HEREPositioningSimulator()
-        // The RoutePrefetcher downloads map data in advance into the map cache.
-        // This is not mandatory, but can help to improve the guidance experience.
-        routePrefetcher = RoutePrefetcher(SDKNativeEngine.getSharedInstance()!!)
 
         try {
             // Without a route set, this starts tracking mode.
@@ -88,10 +88,13 @@ class NavigationExample(
 
         messageView.updateText("Initialization completed.")
     }
+    
 
     fun startLocationProvider() {
         // Set navigator as listener to receive locations from HERE Positioning
         // and choose a suitable accuracy for the tbt navigation use case.
+        // Start immediately to begin GPS acquisition
+        Log.d(TAG, "Starting location provider for GPS acquisition...")
         herePositioningProvider.startLocating(visualNavigator, LocationAccuracy.NAVIGATION)
     }
 
@@ -233,8 +236,15 @@ class NavigationExample(
 
     // Provides location updates based on the device's GPS sensor.
     private fun enableDevicePositioning() {
+        Log.d(TAG, "Enabling device positioning...")
         herePositioningSimulator.stopLocating()
-        herePositioningProvider.startLocating(visualNavigator, LocationAccuracy.NAVIGATION)
+        // Don't stop and restart if already running - this can cause location loss
+        if (!herePositioningProvider.isLocating()) {
+            herePositioningProvider.startLocating(visualNavigator, LocationAccuracy.NAVIGATION)
+            Log.d(TAG, "Device positioning started")
+        } else {
+            Log.d(TAG, "Device positioning already active")
+        }
     }
 
     fun startCameraTracking() {
@@ -247,6 +257,15 @@ class NavigationExample(
 
     fun getLastKnownLocation(): Location? {
         return herePositioningProvider.getLastKnownLocation()
+    }
+    
+    fun hasValidLocation(): Boolean {
+        val location = herePositioningProvider.getLastKnownLocation()
+        return location != null && location.coordinates != null
+    }
+    
+    fun isLocationProviderActive(): Boolean {
+        return herePositioningProvider.isLocating()
     }
 
     fun stopLocating() {

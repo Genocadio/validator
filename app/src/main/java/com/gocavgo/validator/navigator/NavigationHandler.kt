@@ -42,6 +42,7 @@ import com.here.sdk.routing.RoutingEngine
 import com.here.sdk.routing.RoutingError
 import com.here.sdk.routing.TrafficOnRoute
 import com.here.sdk.trafficawarenavigation.DynamicRoutingEngine
+import kotlinx.coroutines.launch
 import java.util.Locale
 
 // This class combines the various events that can be emitted during turn-by-turn navigation.
@@ -145,11 +146,13 @@ class NavigationHandler(
         // Notifies on the current map-matched location and other useful information while driving or walking.
         visualNavigator.navigableLocationListener =
             NavigableLocationListener { currentNavigableLocation: NavigableLocation ->
+                Log.d(TAG, "Received navigable location update")
                 lastMapMatchedLocation = currentNavigableLocation.mapMatchedLocation
                 if (lastMapMatchedLocation == null) {
                     Log.d(TAG, "The currentNavigableLocation could not be map-matched. Are you off-road?")
                     return@NavigableLocationListener
                 }
+                Log.d(TAG, "Location successfully map-matched")
 
                 if (lastMapMatchedLocation!!.isDrivingInTheWrongWay) {
                     // For two-way streets, this value is always false. This feature is supported in tracking mode and when deviating from a route.
@@ -190,6 +193,39 @@ class NavigationHandler(
 
         // Process section progress through trip section validator for verified trips
         tripSectionValidator.processSectionProgress(sectionProgressList, totalSections)
+
+        // Update waypoint with first section's remaining time and distance
+        if (sectionProgressList.isNotEmpty()) {
+            val firstSectionProgress = sectionProgressList[0]
+            val remainingTimeToNextWaypoint = firstSectionProgress.remainingDuration.toSeconds()
+            val remainingDistanceToNextWaypoint = firstSectionProgress.remainingDistanceInMeters.toDouble()
+            
+            Log.d(TAG, "=== UPDATING WAYPOINT WITH FIRST SECTION DATA ===")
+            Log.d(TAG, "First section remaining time: ${remainingTimeToNextWaypoint}s")
+            Log.d(TAG, "First section remaining distance: ${remainingDistanceToNextWaypoint}m")
+            
+            // Update the corresponding waypoint with first section data
+            updateWaypointWithFirstSectionData(remainingTimeToNextWaypoint, remainingDistanceToNextWaypoint)
+            
+            // Get calculated waypoint data from TripSectionValidator
+            val calculatedWaypointData = tripSectionValidator.getCurrentWaypointProgress()
+            
+            // Log waypoint progress for debugging
+            Log.d(TAG, "=== WAYPOINT PROGRESS FROM TRIPSECTIONVALIDATOR ===")
+            calculatedWaypointData.forEach { progress ->
+                Log.d(TAG, "Waypoint ${progress.waypointIndex} (${progress.waypointName}):")
+                Log.d(TAG, "  - Is passed: ${progress.isPassed}")
+                Log.d(TAG, "  - Is next: ${progress.isNext}")
+                Log.d(TAG, "  - Remaining time: ${progress.remainingTimeInSeconds?.let { "${it}s" } ?: "null"}")
+                Log.d(TAG, "  - Remaining distance: ${progress.remainingDistanceInMeters?.let { "${it}m" } ?: "null"}m")
+            }
+            Log.d(TAG, "===============================================")
+            
+            // TripSectionValidator now handles MQTT updates internally
+            Log.d(TAG, "TripSectionValidator handles MQTT updates internally - no external RouteProgressTracker needed")
+            
+            Log.d(TAG, "===============================================")
+        }
 
         for (i in sectionProgressList.indices) {
             val sectionProgress = sectionProgressList[i]
@@ -356,6 +392,41 @@ class NavigationHandler(
                 Log.d(TAG, "Updated traffic on route.")
             })
     }
+
+    /**
+     * Updates the corresponding waypoint with first section's remaining time and distance data
+     */
+    private fun updateWaypointWithFirstSectionData(
+        remainingTimeToNextWaypoint: Long,
+        remainingDistanceToNextWaypoint: Double
+    ) {
+        try {
+            // Get current waypoint progress from trip section validator
+            val waypointProgressList = tripSectionValidator.getCurrentWaypointProgress()
+            
+            if (waypointProgressList.isNotEmpty()) {
+                // Find the next unpassed waypoint (the one we're currently navigating to)
+                val nextWaypoint = waypointProgressList.find { it.isNext }
+                
+                if (nextWaypoint != null) {
+                    Log.d(TAG, "Updating next waypoint: ${nextWaypoint.waypointName}")
+                    Log.d(TAG, "  - Remaining time: ${remainingTimeToNextWaypoint}s")
+                    Log.d(TAG, "  - Remaining distance: ${String.format("%.1f", remainingDistanceToNextWaypoint)}m")
+                    
+                    // Here you can add any additional waypoint update logic
+                    // For example, updating UI, sending MQTT messages, etc.
+                    
+                } else {
+                    Log.d(TAG, "No next waypoint found - all waypoints may be passed")
+                }
+            } else {
+                Log.d(TAG, "No waypoint progress data available")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error updating waypoint with first section data: ${e.message}", e)
+        }
+    }
+
 
     companion object {
         private val TAG: String = NavigationHandler::class.java.name

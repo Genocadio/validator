@@ -22,6 +22,7 @@ data class TripResponse(
     val has_custom_waypoints: Boolean,
     val created_at: String,
     val updated_at: String,
+    val completion_timestamp: Long? = null, // Timestamp when trip was completed (in milliseconds)
     val route: TripRoute,
     val waypoints: List<TripWaypoint>
 )
@@ -69,6 +70,9 @@ data class TripWaypoint(
     val is_custom: Boolean,
     val remaining_time: Long?,
     val remaining_distance: Double?,
+    val waypoint_length_meters: Double? = null, // Length from previous waypoint to this waypoint
+    val waypoint_time_seconds: Long? = null, // Time from previous waypoint to this waypoint
+    val passed_timestamp: Long? = null, // Timestamp when waypoint was passed (in milliseconds)
     val location: SavePlaceResponse
 )
 

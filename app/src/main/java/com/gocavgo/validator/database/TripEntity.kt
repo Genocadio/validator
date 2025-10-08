@@ -28,6 +28,7 @@ data class TripEntity(
     val has_custom_waypoints: Boolean,
     val created_at: String,
     val updated_at: String,
+    val completion_timestamp: Long? = null, // Timestamp when trip was completed (in milliseconds)
     val route: TripRoute,
     val waypoints: List<TripWaypoint>
 ) {
@@ -48,6 +49,7 @@ data class TripEntity(
             has_custom_waypoints = has_custom_waypoints,
             created_at = created_at,
             updated_at = updated_at,
+            completion_timestamp = completion_timestamp,
             route = route,
             waypoints = waypoints
         )
@@ -71,6 +73,7 @@ data class TripEntity(
                 has_custom_waypoints = trip.has_custom_waypoints,
                 created_at = trip.created_at,
                 updated_at = trip.updated_at,
+                completion_timestamp = trip.completion_timestamp,
                 route = trip.route,
                 waypoints = trip.waypoints
             )

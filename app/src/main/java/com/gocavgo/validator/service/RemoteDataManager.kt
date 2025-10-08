@@ -88,22 +88,28 @@ class RemoteDataManager {
                         val paginatedResponse =
                             json.decodeFromString<PaginatedTripsResponse>(responseBody)
 
+                        // Filter out completed trips
+                        val filteredTrips = paginatedResponse.trips.filter { trip ->
+                            trip.status.lowercase() != "completed"
+                        }
+
                         val pagination = PaginationInfo(
-                            total = paginatedResponse.total,
-                            total_pages = (paginatedResponse.total + paginatedResponse.limit - 1) / paginatedResponse.limit,
+                            total = filteredTrips.size, // Use filtered count for total
+                            total_pages = (filteredTrips.size + paginatedResponse.limit - 1) / paginatedResponse.limit,
                             page = (paginatedResponse.offset / paginatedResponse.limit) + 1,
                             limit = paginatedResponse.limit,
-                            has_next = (paginatedResponse.offset + paginatedResponse.limit) < paginatedResponse.total,
+                            has_next = (paginatedResponse.offset + paginatedResponse.limit) < filteredTrips.size,
                             has_prev = paginatedResponse.offset > 0
                         )
                         Log.d(TAG, "phaase 1 passed")
+                        Log.d(TAG, "Filtered out ${paginatedResponse.trips.size - filteredTrips.size} completed trips")
                         val paginatedResult = RemoteDataManager.PaginatedResult(
-                            data = paginatedResponse.trips,
+                            data = filteredTrips,
                             pagination = pagination
                         )
                         Log.d(
                             TAG,
-                            "Retrieved ${paginatedResponse.trips.size} trips for vehicle $vehicleId (page ${pagination.page} of ${pagination.total_pages})"
+                            "Retrieved ${filteredTrips.size} trips for vehicle $vehicleId (page ${pagination.page} of ${pagination.total_pages})"
                         )
                         Log.d(TAG, "Total trips: ${pagination.total}")
                         Log.d(TAG, "===============================")

@@ -58,37 +58,76 @@ class HEREPositioningProvider {
     fun getLastKnownLocation(): Location? {
         return locationEngine.lastKnownLocation
     }
+    
+    fun isLocating(): Boolean {
+        return this::locationEngine.isInitialized && locationEngine.isStarted
+    }
 
     // Does nothing when engine is already running.
     fun startLocating(updateListener: LocationListener?, accuracy: LocationAccuracy?) {
-        if (!this::locationEngine.isInitialized || locationEngine.isStarted) {
+        Log.d(LOG_TAG, "startLocating called - engine initialized: ${this::locationEngine.isInitialized}, isStarted: ${if (this::locationEngine.isInitialized) locationEngine.isStarted else "N/A"}")
+        
+        if (!this::locationEngine.isInitialized) {
+            Log.e(LOG_TAG, "Location engine not initialized, cannot start")
+            return
+        }
+        
+        if (locationEngine.isStarted) {
+            Log.d(LOG_TAG, "Location engine already running, skipping start")
             return
         }
 
         this.updateListener = updateListener
 
-        // Set listeners to get location updates.
-        locationEngine.addLocationListener(updateListener!!)
-        locationEngine.addLocationStatusListener(locationStatusListener)
+        try {
+            // Set listeners to get location updates.
+            locationEngine.addLocationListener(updateListener!!)
+            locationEngine.addLocationStatusListener(locationStatusListener)
 
-        // By calling confirmHEREPrivacyNoticeInclusion() you confirm that this app informs on
-        // data collection, which is done for this app via HEREPositioningTermsAndPrivacyHelper,
-        // which shows a possible example for this.
-        locationEngine.confirmHEREPrivacyNoticeInclusion();
+            // By calling confirmHEREPrivacyNoticeInclusion() you confirm that this app informs on
+            // data collection, which is done for this app via HEREPositioningTermsAndPrivacyHelper,
+            // which shows a possible example for this.
+            locationEngine.confirmHEREPrivacyNoticeInclusion()
 
-        locationEngine.start(accuracy!!)
+            locationEngine.start(accuracy!!)
+            Log.d(LOG_TAG, "Location engine started successfully with accuracy: ${accuracy?.name}")
+        } catch (e: Exception) {
+            Log.e(LOG_TAG, "Failed to start location engine: ${e.message}", e)
+            // Clean up listeners if start failed
+            try {
+                locationEngine.removeLocationListener(updateListener!!)
+                locationEngine.removeLocationStatusListener(locationStatusListener)
+            } catch (cleanupException: Exception) {
+                Log.w(LOG_TAG, "Error during cleanup after failed start: ${cleanupException.message}")
+            }
+        }
     }
 
     // Does nothing when engine is already stopped.
     fun stopLocating() {
-        if (!this::locationEngine.isInitialized || !locationEngine.isStarted) {
+        Log.d(LOG_TAG, "stopLocating called - engine initialized: ${this::locationEngine.isInitialized}, isStarted: ${if (this::locationEngine.isInitialized) locationEngine.isStarted else "N/A"}")
+        
+        if (!this::locationEngine.isInitialized) {
+            Log.d(LOG_TAG, "Location engine not initialized, nothing to stop")
+            return
+        }
+        
+        if (!locationEngine.isStarted) {
+            Log.d(LOG_TAG, "Location engine not running, nothing to stop")
             return
         }
 
-        // Remove listeners and stop location engine.
-        locationEngine.removeLocationListener(updateListener!!)
-        locationEngine.removeLocationStatusListener(locationStatusListener)
-        locationEngine.stop()
+        try {
+            // Remove listeners and stop location engine.
+            updateListener?.let { locationEngine.removeLocationListener(it) }
+            locationEngine.removeLocationStatusListener(locationStatusListener)
+            locationEngine.stop()
+            Log.d(LOG_TAG, "Location engine stopped successfully")
+        } catch (e: Exception) {
+            Log.e(LOG_TAG, "Error stopping location engine: ${e.message}", e)
+        } finally {
+            updateListener = null
+        }
     }
 
     companion object {

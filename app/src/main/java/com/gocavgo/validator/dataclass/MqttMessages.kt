@@ -175,6 +175,8 @@ data class WaypointData(
     val passed_timestamp: Long? = null,
     val remaining_time: Long?,
     val remaining_distance: Double?,
+    val waypoint_length_meters: Double? = null, // Original length from route sections
+    val waypoint_time_seconds: Long? = null, // Original time from route sections
     val is_custom: Boolean,
     val created_at: String? = null,
     val updated_at: String? = null,
