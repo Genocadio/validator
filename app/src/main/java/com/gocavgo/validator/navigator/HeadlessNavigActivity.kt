@@ -270,7 +270,7 @@ class HeadlessNavigActivity : ComponentActivity() {
         }
     }
 
-    private fun initializeHERESDK() {
+    private fun initializeHERESDK(lowMEm: Boolean = false) {
         try {
             // Check if SDK is already initialized to avoid duplicate initialization
             if (SDKNativeEngine.getSharedInstance() != null) {
@@ -282,6 +282,10 @@ class HeadlessNavigActivity : ComponentActivity() {
             val accessKeySecret = com.gocavgo.validator.BuildConfig.HERE_ACCESS_KEY_SECRET
             val authenticationMode = AuthenticationMode.withKeySecret(accessKeyID, accessKeySecret)
             val options = SDKOptions(authenticationMode)
+            if(lowMEm) {
+                options.lowMemoryMode = true
+                Log.d(TAG, "Initialised in Low memory mode")
+            }
             
             // Initialize SDK
             SDKNativeEngine.makeSharedInstance(this, options)
@@ -1478,6 +1482,21 @@ class HeadlessNavigActivity : ComponentActivity() {
                 Log.w(TAG, "Error disabling NFC reader during pause: ${e.message}")
             }
         }
+    }
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= TRIM_MEMORY_RUNNING_CRITICAL) {
+            handleLowMemory()
+        }
+    }
+
+    override fun onLowMemory() {
+        super.onLowMemory()
+        handleLowMemory()
+    }
+    fun handleLowMemory() {
+        SDKNativeEngine.getSharedInstance()?.purgeMemoryCaches(SDKNativeEngine.PurgeMemoryStrategy.FULL)
+        initializeHERESDK(true)
     }
 
     override fun onDestroy() {

@@ -87,3 +87,4 @@ enum class NetworkStatus {
     WEAK,         // Orange - isMetered && (EDGE, GPRS, 2G, 3G, 1xRTT, CDMA)
     GOOD          // Hidden - Everything else
 }
+

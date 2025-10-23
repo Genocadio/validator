@@ -67,6 +67,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.gocavgo.validator.BuildConfig
+import com.gocavgo.validator.Navigator
 import com.gocavgo.validator.ui.theme.ValidatorTheme
 import com.gocavgo.validator.ui.components.NetworkStatusIndicator
 import com.gocavgo.validator.dataclass.TripResponse
@@ -405,13 +406,21 @@ class NavigActivity: ComponentActivity() {
         }
     }
 
-    private fun initializeHERESDK() {
+    private fun initializeHERESDK(lowMEm: Boolean = false) {
         // Set your credentials for the HERE SDK.
         val accessKeyID = BuildConfig.HERE_ACCESS_KEY_ID
         val accessKeySecret = BuildConfig.HERE_ACCESS_KEY_SECRET
         val authenticationMode = AuthenticationMode.withKeySecret(accessKeyID, accessKeySecret)
         val options = SDKOptions(authenticationMode)
+        if(lowMEm) {
+            options.lowMemoryMode = true
+            Log.d(TAG, "Initialised in Low memory mode")
+        }
         try {
+            if (SDKNativeEngine.getSharedInstance() != null) {
+                Log.d(TAG, "HERE SDK already initialized, skipping")
+                return
+            }
             val context: Context = this
             SDKNativeEngine.makeSharedInstance(context, options)
             
@@ -504,6 +513,22 @@ class NavigActivity: ComponentActivity() {
         }
     }
 
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= TRIM_MEMORY_RUNNING_CRITICAL) {
+            handleLowMemory()
+        }
+    }
+
+    override fun onLowMemory() {
+        super.onLowMemory()
+        handleLowMemory()
+    }
+    fun handleLowMemory() {
+        SDKNativeEngine.getSharedInstance()?.purgeMemoryCaches(SDKNativeEngine.PurgeMemoryStrategy.FULL)
+        initializeHERESDK(true)
+    }
+
     override fun onPause() {
         mapView?.onPause()
         super.onPause()
@@ -569,12 +594,36 @@ class NavigActivity: ComponentActivity() {
         // Free HERE SDK resources before the application shuts down.
         // Usually, this should be called only on application termination.
         // Afterwards, the HERE SDK is no longer usable unless it is initialized again.
-        val sdkNativeEngine = SDKNativeEngine.getSharedInstance()
-        if (sdkNativeEngine != null) {
-            sdkNativeEngine.dispose()
-            // For safety reasons, we explicitly set the shared instance to null to avoid situations,
-            // where a disposed instance is accidentally reused.
-            SDKNativeEngine.setSharedInstance(null)
+        try {
+            val sdkNativeEngine = SDKNativeEngine.getSharedInstance()
+            if (sdkNativeEngine != null) {
+                Log.d(TAG, "Disposing HERE SDK...")
+                
+                // Additional cleanup to ensure all service connections are released
+                try {
+                    // Force stop any remaining location services
+                    val locationEngine = com.here.sdk.location.LocationEngine()
+                    if (locationEngine.isStarted) {
+                        locationEngine.stop()
+                        Log.d(TAG, "Stopped remaining location engine before disposal")
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error stopping location engine before disposal: ${e.message}")
+                }
+                
+                // Dispose the SDK
+                sdkNativeEngine.dispose()
+                Log.d(TAG, "HERE SDK disposed successfully")
+                
+                // For safety reasons, we explicitly set the shared instance to null to avoid situations,
+                // where a disposed instance is accidentally reused.
+                SDKNativeEngine.setSharedInstance(null)
+                Log.d(TAG, "HERE SDK shared instance cleared")
+            } else {
+                Log.d(TAG, "HERE SDK not initialized, nothing to dispose")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error disposing HERE SDK: ${e.message}", e)
         }
     }
     
@@ -585,7 +634,45 @@ class NavigActivity: ComponentActivity() {
         try {
             Log.d(TAG, "Stopping all location services...")
             
-            // First, stop and disconnect HERE SDK location services to prevent leaks
+            // Set shutdown flag first to prevent starting new services during cleanup
+            app?.getNavigationExample()?.setShuttingDown(true)
+            
+            // Stop navigation after location services are stopped
+            app?.getNavigationExample()?.let { navExample ->
+                try {
+                    // Stop headless navigation first (this will skip enabling device positioning due to shutdown flag)
+                    navExample.stopHeadlessNavigation()
+                    Log.d(TAG, "Headless navigation stopped")
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error stopping headless navigation: ${e.message}")
+                }
+                
+                try {
+                    // Stop location services
+                    navExample.stopLocating()
+                    Log.d(TAG, "Location services stopped")
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error stopping location services: ${e.message}")
+                }
+                
+                try {
+                    // Force disconnect HERE SDK location services to prevent leaks
+                    navExample.getHerePositioningProvider().forceDisconnect()
+                    Log.d(TAG, "HERE SDK location services force disconnected")
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error force disconnecting location services: ${e.message}")
+                }
+                
+                try {
+                    // Stop rendering
+                    navExample.stopRendering()
+                    Log.d(TAG, "Rendering stopped")
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error stopping rendering: ${e.message}")
+                }
+            }
+            
+            // Finally, stop and disconnect HERE SDK location services to prevent leaks
             try {
                 val sdkNativeEngine = SDKNativeEngine.getSharedInstance()
                 if (sdkNativeEngine != null) {
@@ -598,41 +685,6 @@ class NavigActivity: ComponentActivity() {
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Error stopping HERE SDK LocationEngine: ${e.message}")
-            }
-            
-            // Stop navigation after location services are stopped
-            app?.getNavigationExample()?.let { navExample ->
-                try {
-                    // Force disconnect HERE SDK location services to prevent leaks
-                    navExample.getHerePositioningProvider().forceDisconnect()
-                    Log.d(TAG, "HERE SDK location services force disconnected")
-                } catch (e: Exception) {
-                    Log.w(TAG, "Error force disconnecting location services: ${e.message}")
-                }
-                
-                try {
-                    // Stop location services
-                    navExample.stopLocating()
-                    Log.d(TAG, "Location services stopped")
-                } catch (e: Exception) {
-                    Log.w(TAG, "Error stopping location services: ${e.message}")
-                }
-                
-                try {
-                    // Stop headless navigation
-                    navExample.stopHeadlessNavigation()
-                    Log.d(TAG, "Headless navigation stopped")
-                } catch (e: Exception) {
-                    Log.w(TAG, "Error stopping headless navigation: ${e.message}")
-                }
-                
-                try {
-                    // Stop rendering
-                    navExample.stopRendering()
-                    Log.d(TAG, "Rendering stopped")
-                } catch (e: Exception) {
-                    Log.w(TAG, "Error stopping rendering: ${e.message}")
-                }
             }
             
             Log.d(TAG, "All location services stopped successfully")

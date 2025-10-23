@@ -394,6 +394,13 @@ class NavigationExample(
     // Provides location updates based on the device's GPS sensor.
     private fun enableDevicePositioning() {
         Log.d(TAG, "Enabling device positioning...")
+        
+        // Don't start location services if we're shutting down
+        if (isShuttingDown) {
+            Log.d(TAG, "Skipping device positioning enable during shutdown")
+            return
+        }
+        
         herePositioningSimulator.stopLocating()
         // Don't stop and restart if already running - this can cause location loss
         if (!herePositioningProvider.isLocating()) {
