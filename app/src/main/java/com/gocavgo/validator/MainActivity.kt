@@ -35,12 +35,14 @@ import com.gocavgo.validator.dataclass.TripStatus
 import com.gocavgo.validator.database.DatabaseManager
 import com.gocavgo.validator.service.MqttForegroundService
 import com.gocavgo.validator.service.MqttHealthCheckWorker
+import com.gocavgo.validator.service.NetworkMonitorWorker
 import android.Manifest
 import android.os.Build
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.core.app.ActivityCompat
 import com.gocavgo.validator.service.MqttService
 import com.gocavgo.validator.util.Logging
+import com.gocavgo.validator.ui.components.NetworkStatusIndicator
 import com.here.sdk.core.engine.AuthenticationMode
 import com.here.sdk.core.engine.SDKNativeEngine
 import com.here.sdk.core.engine.SDKOptions
@@ -90,6 +92,9 @@ class MainActivity : ComponentActivity() {
     private var mapDownloadStatus by mutableStateOf("")
     private var showMapDownloadDialog by mutableStateOf(false)
     private var isMapDataReady by mutableStateOf(false)
+    
+    // HERE SDK offline mode state
+    private var pendingOfflineMode: Boolean? = null
 
     // Managers
     private lateinit var vehicleSecurityManager: VehicleSecurityManager
@@ -132,6 +137,9 @@ class MainActivity : ComponentActivity() {
             isConnected = connected
             connectionType = type
             isMetered = metered
+
+            // Update HERE SDK offline mode
+            updateHERESDKOfflineMode(connected)
 
             // Notify map downloader of network availability
             if (connected) {
@@ -311,6 +319,9 @@ class MainActivity : ComponentActivity() {
             
             // Schedule WorkManager health checks
             MqttHealthCheckWorker.schedule(this)
+            
+            // Schedule network monitoring worker
+            NetworkMonitorWorker.schedule(this)
             
             Logging.d(TAG, "MQTT background services initialized successfully")
         } catch (e: Exception) {
@@ -616,6 +627,17 @@ class MainActivity : ComponentActivity() {
                 
                 Logging.d(TAG, "HERE SDK initialized successfully in MainActivity")
                 
+                // Apply pending offline mode if any
+                pendingOfflineMode?.let { offlineMode ->
+                    try {
+                        SDKNativeEngine.getSharedInstance()?.setOfflineMode(offlineMode)
+                        Logging.d(TAG, "Applied pending HERE SDK offline mode: $offlineMode")
+                        pendingOfflineMode = null
+                    } catch (e: Exception) {
+                        Logging.e(TAG, "Failed to apply pending offline mode: ${e.message}", e)
+                    }
+                }
+                
                 // Initialize map downloader after HERE SDK is ready
                 withContext(Dispatchers.Main) {
                     initializeMapDownloader()
@@ -679,6 +701,13 @@ class MainActivity : ComponentActivity() {
                             modifier = Modifier.padding(innerPadding)
                         )
                         
+                        // Network status indicator overlay
+                        NetworkStatusIndicator(
+                            isConnected = isConnected,
+                            connectionType = connectionType,
+                            isMetered = isMetered
+                        )
+                        
                         // Map download dialog overlay
                         if (showMapDownloadDialog) {
                             MapDownloadDialog(
@@ -731,7 +760,12 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        val intent = Intent(this, com.gocavgo.validator.navigator.NavigActivity::class.java)
+        val intent = if (showMap) {
+            Intent(this, com.gocavgo.validator.navigator.NavigActivity::class.java)
+        } else {
+            Intent(this, com.gocavgo.validator.navigator.HeadlessNavigActivity::class.java)
+        }
+        
         intent.putExtra(com.gocavgo.validator.navigator.NavigActivity.EXTRA_TRIP_ID, latestTrip!!.id)
         intent.putExtra(com.gocavgo.validator.navigator.NavigActivity.EXTRA_SHOW_MAP, showMap)
         intent.putExtra(com.gocavgo.validator.navigator.NavigActivity.EXTRA_IS_SIMULATED, isSimulated)
@@ -979,6 +1013,27 @@ class MainActivity : ComponentActivity() {
         disposeHERESDK()
     }
     
+    private fun updateHERESDKOfflineMode(isConnected: Boolean) {
+        try {
+            // Check if HERE SDK is initialized before accessing it
+            val sdkNativeEngine = SDKNativeEngine.getSharedInstance()
+            if (sdkNativeEngine != null) {
+                sdkNativeEngine.setOfflineMode(!isConnected)
+                Logging.d(TAG, "HERE SDK offline mode set to: ${!isConnected}")
+            } else {
+                Logging.d(TAG, "HERE SDK not yet initialized, will set offline mode when ready")
+                // Store the desired offline mode state for when SDK is ready
+                pendingOfflineMode = !isConnected
+            }
+        } catch (e: UnsatisfiedLinkError) {
+            Logging.d(TAG, "HERE SDK native library not loaded yet, will set offline mode when ready")
+            // Store the desired offline mode state for when SDK is ready
+            pendingOfflineMode = !isConnected
+        } catch (e: Exception) {
+            Logging.e(TAG, "Failed to update HERE SDK offline mode: ${e.message}", e)
+        }
+    }
+
     private fun disposeHERESDK() {
         // Free HERE SDK resources before the application shuts down.
         val sdkNativeEngine = SDKNativeEngine.getSharedInstance()

@@ -39,13 +39,15 @@ import com.here.sdk.trafficawarenavigation.DynamicRoutingEngineOptions
 import com.here.sdk.trafficawarenavigation.DynamicRoutingListener
 import com.here.time.Duration
 import com.here.sdk.navigation.Navigator
+import com.gocavgo.validator.network.NetworkMonitor
+import android.widget.Toast
 
 // Shows how to start and stop turn-by-turn navigation on a car route.
 // By default, tracking mode is enabled. When navigation is stopped, tracking mode is enabled again.
 // The preferred device language determines the language for voice notifications used for TTS.
 // (Make sure to set language + region in device settings.)
 class NavigationExample(
-    context: Context?,
+    private val context: Context?,
     mapView: MapView?,
     private val messageView: MessageViewUpdater,
     private val tripSectionValidator: TripSectionValidator
@@ -57,8 +59,12 @@ class NavigationExample(
     // A class to receive simulated location events.
     private val herePositioningSimulator: HEREPositioningSimulator = HEREPositioningSimulator()
     private var dynamicRoutingEngine: DynamicRoutingEngine? = null
-
     private var offlineRoutingEngine: OfflineRoutingEngine? = null
+    
+    // Network monitoring for routing engine switching
+    private var networkMonitor: NetworkMonitor? = null
+    private var isNetworkConnected = true
+    private var currentRoutingMode = "online" // Track current mode
     // The RoutePrefetcher downloads map data in advance into the map cache.
     // This is not mandatory, but can help to improve the guidance experience.
     private val routePrefetcher: RoutePrefetcher = RoutePrefetcher(SDKNativeEngine.getSharedInstance()!!)
@@ -84,6 +90,8 @@ class NavigationExample(
         visualNavigator.startRendering(mapView!!)
 
         createDynamicRoutingEngine()
+        initializeOfflineRoutingEngine()
+        initializeNetworkMonitoring(context)
 
         // A class to handle various kinds of guidance events.
         navigationHandler = NavigationHandler(context, messageView, tripSectionValidator)
@@ -139,6 +147,101 @@ class NavigationExample(
         }
     }
 
+    private fun initializeOfflineRoutingEngine() {
+        try {
+            offlineRoutingEngine = OfflineRoutingEngine()
+            Log.d(TAG, "OfflineRoutingEngine initialized successfully")
+        } catch (e: InstantiationErrorException) {
+            Log.e(TAG, "Initialization of OfflineRoutingEngine failed: ${e.error.name}")
+            // Don't throw exception, offline routing is optional
+        }
+    }
+
+    private fun initializeNetworkMonitoring(context: Context?) {
+        if (context == null) {
+            Log.w(TAG, "Context is null, skipping network monitoring initialization")
+            return
+        }
+
+        try {
+            networkMonitor = NetworkMonitor(context) { connected, type, metered ->
+                handleNetworkChange(connected, type, metered)
+            }
+            networkMonitor?.startMonitoring()
+            Log.d(TAG, "Network monitoring initialized successfully")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to initialize network monitoring: ${e.message}", e)
+        }
+    }
+
+    private fun handleNetworkChange(connected: Boolean, type: String, metered: Boolean) {
+        Log.d(TAG, "=== NETWORK STATE CHANGED ===")
+        Log.d(TAG, "Connected: $connected, Type: $type, Metered: $metered")
+        Log.d(TAG, "Previous mode: $currentRoutingMode")
+
+        val shouldUseOnline = determineRoutingMode(connected, type, metered)
+        val newMode = if (shouldUseOnline) "online" else "offline"
+
+        // Only switch if mode actually changed
+        if (newMode != currentRoutingMode) {
+            Log.d(TAG, "Switching routing mode: $currentRoutingMode -> $newMode")
+            switchRoutingMode(shouldUseOnline)
+            currentRoutingMode = newMode
+        } else {
+            Log.d(TAG, "Routing mode unchanged: $currentRoutingMode")
+        }
+
+        Log.d(TAG, "==============================")
+    }
+
+    private fun determineRoutingMode(connected: Boolean, type: String, metered: Boolean): Boolean {
+        return when {
+            !connected -> false
+            type == "WIFI" && !metered -> true
+            type.startsWith("CELLULAR") && metered -> false
+            type.startsWith("CELLULAR") && !metered -> true
+            else -> connected
+        }
+    }
+
+    private fun switchRoutingMode(useOnline: Boolean) {
+        Log.d(TAG, "=== SWITCHING ROUTING MODE ===")
+        Log.d(TAG, "New mode: ${if (useOnline) "Online" else "Offline"}")
+
+        if (useOnline) {
+            // Switching to online - resume DynamicRoutingEngine if we have a route
+            visualNavigator.route?.let { route ->
+                try {
+                    startDynamicSearchForBetterRoutes(route)
+                    Log.d(TAG, "DynamicRoutingEngine resumed for online mode")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to resume DynamicRoutingEngine: ${e.message}")
+                }
+            }
+            showRoutingModeToast(true)
+        } else {
+            // Switching to offline - stop DynamicRoutingEngine polling
+            try {
+                dynamicRoutingEngine?.stop()
+                Log.d(TAG, "DynamicRoutingEngine stopped for offline mode")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to stop DynamicRoutingEngine: ${e.message}")
+            }
+            showRoutingModeToast(false)
+        }
+
+        Log.d(TAG, "==============================")
+    }
+
+    private fun showRoutingModeToast(isOnline: Boolean) {
+        val message = if (isOnline) {
+            "Switched to Online Routing (Live Traffic)"
+        } else {
+            "Switched to Offline Routing (Cached Maps)"
+        }
+        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+    }
+
     fun startNavigation(route: Route, isSimulated: Boolean, isCameraTrackingEnabled: Boolean) {
         val startGeoCoordinates = route.geometry.vertices[0]
         prefetchMapData(startGeoCoordinates)
@@ -161,6 +264,24 @@ class NavigationExample(
 
         // Synchronize with the toggle button state.
         updateCameraTracking(isCameraTrackingEnabled)
+    }
+
+    fun startHeadlessNavigation(route: Route, isSimulated: Boolean) {
+        val startGeoCoordinates = route.geometry.vertices[0]
+        prefetchMapData(startGeoCoordinates)
+
+        // Set the route for headless navigation only
+        navigator.route = route
+
+        if (isSimulated) {
+            enableRoutePlayback(route)
+            messageView.updateText("Starting simulated headless navigation.")
+        } else {
+            enableDevicePositioning()
+            messageView.updateText("Starting headless navigation.")
+        }
+
+        startDynamicSearchForBetterRoutes(route)
     }
 
     private fun startDynamicSearchForBetterRoutes(route: Route) {
@@ -214,14 +335,47 @@ class NavigationExample(
         visualNavigator.route = null
         // SpeedBasedCameraBehavior is recommended for tracking mode.
         visualNavigator.cameraBehavior = SpeedBasedCameraBehavior()
-        enableDevicePositioning()
-        messageView.updateText("Tracking device's location.")
+        
+        // Only enable device positioning if we're not shutting down
+        // This prevents starting location services during cleanup
+        if (!isShuttingDown) {
+            enableDevicePositioning()
+            messageView.updateText("Tracking device's location.")
+        } else {
+            Log.d(TAG, "Skipping device positioning enable during shutdown")
+            messageView.updateText("Navigation stopped.")
+        }
 
         dynamicRoutingEngine!!.stop()
         routePrefetcher.stopPrefetchAroundRoute()
         // Synchronize with the toggle button state.
         updateCameraTracking(isCameraTrackingEnabled)
+        
+        // Cleanup network monitoring
+        cleanupNetworkMonitoring()
     }
+
+    fun stopHeadlessNavigation() {
+        // Stop headless navigation
+        navigator.route = null
+        
+        // Only enable device positioning if we're not shutting down
+        if (!isShuttingDown) {
+            enableDevicePositioning()
+        } else {
+            Log.d(TAG, "Skipping device positioning enable during shutdown")
+        }
+        
+        messageView.updateText("Stopped headless navigation.")
+
+        dynamicRoutingEngine!!.stop()
+        routePrefetcher.stopPrefetchAroundRoute()
+        
+        // Cleanup network monitoring
+        cleanupNetworkMonitoring()
+    }
+
+    fun getHeadlessNavigator(): Navigator = navigator
 
     private fun updateCameraTracking(isCameraTrackingEnabled: Boolean) {
         if (isCameraTrackingEnabled) {
@@ -280,8 +434,52 @@ class NavigationExample(
         // This also removes the current location marker.
         visualNavigator.stopRendering()
     }
+    
+    /**
+     * Set shutdown flag to prevent starting services during cleanup
+     */
+    fun setShuttingDown(shuttingDown: Boolean) {
+        isShuttingDown = shuttingDown
+        Log.d(TAG, "Shutdown flag set to: $shuttingDown")
+    }
+    
+    /**
+     * Gets the HERE positioning provider for cleanup operations
+     */
+    fun getHerePositioningProvider(): HEREPositioningProvider = herePositioningProvider
+    
+    /**
+     * Cleanup network monitoring resources
+     */
+    private fun cleanupNetworkMonitoring() {
+        try {
+            networkMonitor?.stopMonitoring()
+            networkMonitor = null
+            Log.d(TAG, "Network monitoring cleaned up successfully")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error cleaning up network monitoring: ${e.message}", e)
+        }
+    }
+    
+    /**
+     * Get current routing mode for external access
+     */
+    fun getCurrentRoutingMode(): String = currentRoutingMode
+    
+    /**
+     * Get offline routing engine for external access
+     */
+    fun getOfflineRoutingEngine(): OfflineRoutingEngine? = offlineRoutingEngine
+    
+    /**
+     * Get navigation handler for external access
+     */
+    fun getNavigationHandler(): NavigationHandler = navigationHandler
 
     companion object {
         private val TAG: String = NavigationExample::class.java.name
     }
+    
+    // Flag to track if we're shutting down to prevent starting services during cleanup
+    private var isShuttingDown = false
 }

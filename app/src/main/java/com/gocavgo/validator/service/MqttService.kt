@@ -490,6 +490,27 @@ class MqttService private constructor(
     }
     
     /**
+     * Handle network state changes from NetworkMonitor
+     */
+    fun onNetworkStateChanged(connected: Boolean, connectionType: String, metered: Boolean) {
+        Log.d(TAG, "Network state changed: connected=$connected, type=$connectionType, metered=$metered")
+        
+        val wasNetworkAvailable = isNetworkAvailable.get()
+        isNetworkAvailable.set(connected)
+        
+        if (connected && !wasNetworkAvailable) {
+            Log.d(TAG, "Network became available, attempting reconnection...")
+            if (isServiceActive.get() && !isConnected()) {
+                scheduleReconnection()
+            }
+        } else if (!connected && wasNetworkAvailable) {
+            Log.d(TAG, "Network became unavailable, pausing operations...")
+            // Network is down, but don't disconnect immediately
+            // Let the connection timeout handle it naturally
+        }
+    }
+    
+    /**
      * Schedule reconnection with exponential backoff
      */
     private fun scheduleReconnection() {

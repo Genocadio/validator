@@ -159,13 +159,13 @@ class DatabaseManager(context: Context) {
     suspend fun createBookingWithPaymentAndTicket(
         tripId: Int,
         nfcId: String,
-        fromLocation: String,
-        toLocation: String,
+        fromLocationId: Int,
+        toLocationId: Int,
         price: Double,
-        userPhone: String = "N/A",
-        userName: String = "NFC User"
+        userPhone: String = "NFC_USER",
+        userName: String = "NFC Card User"
     ) = bookingService.createBookingWithPaymentAndTicket(
-        tripId, nfcId, fromLocation, toLocation, price, userPhone, userName
+        tripId, nfcId, fromLocationId, toLocationId, price, userPhone, userName
     )
     
     suspend fun getBookingById(bookingId: String) = bookingService.getBookingById(bookingId)
@@ -180,6 +180,15 @@ class DatabaseManager(context: Context) {
     
     suspend fun countPaidPassengersForWaypoint(tripId: Int, waypointLocationName: String) = 
         bookingService.countPaidPassengersForWaypoint(tripId, waypointLocationName)
+    
+    suspend fun getPassengerCountsForLocation(tripId: Int, locationId: Int) = 
+        bookingService.getPassengerCountsForLocation(tripId, locationId)
+    
+    suspend fun getPassengersPickingUpAtLocation(tripId: Int, locationId: Int) = 
+        bookingService.getPassengersPickingUpAtLocation(tripId, locationId)
+    
+    suspend fun getPassengersDroppingOffAtLocation(tripId: Int, locationId: Int) = 
+        bookingService.getPassengersDroppingOffAtLocation(tripId, locationId)
     
     companion object {
         @Volatile

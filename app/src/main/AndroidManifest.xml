@@ -41,6 +41,11 @@
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
             android:theme="@style/Theme.Validator"
             android:launchMode="singleTop" />
+        <!-- HeadlessNavigActivity -->
+        <activity android:name=".navigator.HeadlessNavigActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
+            android:theme="@style/Theme.Validator"
+            android:launchMode="singleTop" />
         <!-- Main Activity -->
         <activity
             android:name=".MainActivity"

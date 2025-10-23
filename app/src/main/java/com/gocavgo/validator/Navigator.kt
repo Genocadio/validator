@@ -1047,6 +1047,20 @@ class Navigator : AppCompatActivity() {
         return "Unknown"
     }
 
+    private fun getCurrentLocationId(): Int {
+        tripResponse?.let { trip ->
+            // Find the last passed waypoint to determine current location ID
+            val passedWaypoints = trip.waypoints.filter { it.is_passed }.sortedBy { it.order }
+
+            return when {
+                passedWaypoints.isEmpty() -> trip.route.origin.id
+                passedWaypoints.size == trip.waypoints.size -> trip.route.destination.id
+                else -> passedWaypoints.last().location_id
+            }
+        }
+        return -1
+    }
+
     private fun getLocationDisplayName(location: SavePlaceResponse): String {
         return location.custom_name?.takeIf { it.isNotBlank() } ?: location.google_place_name
     }
@@ -1074,6 +1088,7 @@ class Navigator : AppCompatActivity() {
                 availableDestinations.add(
                     AvailableDestination(
                         id = waypoint.id,
+                        locationId = waypoint.location_id,
                         location = waypoint.location,
                         price = waypoint.price,
                         order = waypoint.order,
@@ -1087,6 +1102,7 @@ class Navigator : AppCompatActivity() {
             availableDestinations.add(
                 AvailableDestination(
                     id = -1, // Special ID for final destination
+                    locationId = trip.route.destination.id,
                     location = trip.route.destination,
                     price = finalDestinationPrice,
                     order = Int.MAX_VALUE, // Always last
@@ -1140,6 +1156,7 @@ class Navigator : AppCompatActivity() {
     // Data class for available destinations (both waypoints and final destination)
     data class AvailableDestination(
         val id: Int,
+        val locationId: Int,
         val location: SavePlaceResponse,
         val price: Double,
         val order: Int,
@@ -1328,11 +1345,14 @@ class Navigator : AppCompatActivity() {
         tripResponse?.let { trip ->
             lifecycleScope.launch(Dispatchers.IO) {
                 try {
+                    val fromLocationId = getCurrentLocationId()
+                    val toLocationId = destination.locationId
+
                     val result = databaseManager.createBookingWithPaymentAndTicket(
                         tripId = trip.id,
                         nfcId = nfcId,
-                        fromLocation = currentLocation,
-                        toLocation = destinationDisplayName,
+                        fromLocationId = fromLocationId,
+                        toLocationId = toLocationId,
                         price = destination.price,
                         userPhone = "NFC_USER",
                         userName = "NFC Card User"

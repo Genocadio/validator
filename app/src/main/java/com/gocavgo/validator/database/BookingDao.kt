@@ -56,4 +56,38 @@ interface BookingDao {
         AND b.status != 'CANCELLED'
     """)
     suspend fun countPaidPassengersForLocation(tripId: Int, dropoffLocationName: String): Int
+
+    @Query("""
+        SELECT SUM(number_of_tickets) FROM bookings 
+        WHERE trip_id = :tripId 
+        AND pickup_location_id = :locationId 
+        AND status = 'CONFIRMED'
+    """)
+    suspend fun countTicketsPickingUpAtLocation(tripId: Int, locationId: String): Int?
+
+    @Query("""
+        SELECT SUM(number_of_tickets) FROM bookings 
+        WHERE trip_id = :tripId 
+        AND dropoff_location_id = :locationId 
+        AND status = 'CONFIRMED'
+    """)
+    suspend fun countTicketsDroppingOffAtLocation(tripId: Int, locationId: String): Int?
+
+    @Query("""
+        SELECT * FROM bookings 
+        WHERE trip_id = :tripId 
+        AND pickup_location_id = :locationId 
+        AND status = 'CONFIRMED'
+        ORDER BY user_name ASC
+    """)
+    suspend fun getBookingsPickingUpAtLocation(tripId: Int, locationId: String): List<BookingEntity>
+
+    @Query("""
+        SELECT * FROM bookings 
+        WHERE trip_id = :tripId 
+        AND dropoff_location_id = :locationId 
+        AND status = 'CONFIRMED'
+        ORDER BY user_name ASC
+    """)
+    suspend fun getBookingsDroppingOffAtLocation(tripId: Int, locationId: String): List<BookingEntity>
 }

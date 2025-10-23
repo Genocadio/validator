@@ -6,7 +6,9 @@ import com.gocavgo.validator.database.AppDatabase
 import com.gocavgo.validator.database.BookingEntity
 import com.gocavgo.validator.database.PaymentEntity
 import com.gocavgo.validator.database.TicketEntity
+import com.gocavgo.validator.database.TripEntity
 import com.gocavgo.validator.dataclass.BookingStatus
+import com.gocavgo.validator.dataclass.TripWaypoint
 import com.gocavgo.validator.dataclass.PaymentMethod
 import com.gocavgo.validator.dataclass.PaymentStatus
 import kotlinx.coroutines.Dispatchers
@@ -20,6 +22,7 @@ class BookingService(private val context: Context) {
     private val bookingDao = database.bookingDao()
     private val paymentDao = database.paymentDao()
     private val ticketDao = database.ticketDao()
+    private val tripDao = database.tripDao()
     
     /**
      * Creates a complete booking with USED status, payment with CARD type and NFC tag ID,
@@ -28,8 +31,8 @@ class BookingService(private val context: Context) {
     suspend fun createBookingWithPaymentAndTicket(
         tripId: Int,
         nfcId: String,
-        fromLocation: String,
-        toLocation: String,
+        fromLocationId: Int,
+        toLocationId: Int,
         price: Double,
         userPhone: String = "N/A",
         userName: String = "NFC User"
@@ -45,6 +48,10 @@ class BookingService(private val context: Context) {
             // Generate 6-digit ticket number
             val ticketNumber = generateTicketNumberSync()
             
+            // Fetch location names from trip data using IDs
+            val fromLocationName = getLocationNameById(fromLocationId, tripId) ?: "Unknown Location"
+            val toLocationName = getLocationNameById(toLocationId, tripId) ?: "Unknown Location"
+            
             // Create booking with USED status
             val booking = BookingEntity(
                 id = bookingId,
@@ -53,8 +60,8 @@ class BookingService(private val context: Context) {
                 user_email = null,
                 user_phone = userPhone,
                 user_name = userName,
-                pickup_location_id = fromLocation,
-                dropoff_location_id = toLocation,
+                pickup_location_id = fromLocationId.toString(),
+                dropoff_location_id = toLocationId.toString(),
                 number_of_tickets = 1,
                 total_amount = price,
                 status = BookingStatus.USED,
@@ -89,8 +96,8 @@ class BookingService(private val context: Context) {
                 validated_by = "NFC_VALIDATOR",
                 created_at = currentTime,
                 updated_at = currentTime,
-                pickup_location_name = fromLocation,
-                dropoff_location_name = toLocation,
+                pickup_location_name = fromLocationName,
+                dropoff_location_name = toLocationName,
                 car_plate = "N/A", // Will be updated with actual vehicle info
                 car_company = "N/A", // Will be updated with actual company info
                 pickup_time = currentTime
@@ -121,8 +128,8 @@ class BookingService(private val context: Context) {
             Log.d("BookingService", "Ticket Number: $ticketNumber")
             Log.d("BookingService", "NFC Tag ID: $nfcId")
             Log.d("BookingService", "Amount: $price RWF")
-            Log.d("BookingService", "From: $fromLocation")
-            Log.d("BookingService", "To: $toLocation")
+            Log.d("BookingService", "From: $fromLocationName (ID: $fromLocationId)")
+            Log.d("BookingService", "To: $toLocationName (ID: $toLocationId)")
             Log.d("BookingService", "=====================================")
             
             BookingCreationResult.Success(
@@ -195,6 +202,46 @@ class BookingService(private val context: Context) {
      */
     private fun generateUniqueId(): String {
         return UUID.randomUUID().toString()
+    }
+    
+    /**
+     * Get location name by ID from the database
+     */
+    private suspend fun getLocationNameById(locationId: Int, tripId: Int): String? {
+        return try {
+            val trip = tripDao.getTripById(tripId)
+            if (trip == null) {
+                Log.w("BookingService", "Trip with ID $tripId not found")
+                return null
+            }
+            
+            // Check if it's the origin location
+            if (trip.route.origin.id == locationId) {
+                return trip.route.origin.custom_name ?: trip.route.origin.google_place_name
+            }
+            
+            // Check if it's the destination location
+            if (trip.route.destination.id == locationId) {
+                return trip.route.destination.custom_name ?: trip.route.destination.google_place_name
+            }
+            
+            // Check waypoints - search through the waypoints list
+            val waypoints = trip.waypoints
+            // Search through waypoints to find matching location ID
+            for (waypoint in waypoints) {
+                if (waypoint.location_id == locationId) {
+                    Log.d("BookingService", "Location ID $locationId found in waypoints: ${waypoint.location.google_place_name}")
+                    return waypoint.location.custom_name ?: waypoint.location.google_place_name
+                }
+            }
+            Log.d("BookingService", "Location ID $locationId not found in waypoints list")
+
+            Log.w("BookingService", "Location ID $locationId not found in trip $tripId")
+            null
+        } catch (e: Exception) {
+            Log.w("BookingService", "Failed to get location name for ID $locationId: ${e.message}")
+            null
+        }
     }
     
     /**
@@ -331,6 +378,74 @@ class BookingService(private val context: Context) {
         } catch (e: Exception) {
             Log.e("BookingService", "Error checking existing booking by NFC tag: ${e.message}", e)
             ExistingBookingResult.Error(e.message ?: "Unknown error occurred")
+        }
+    }
+
+    suspend fun getPassengerCountsForLocation(tripId: Int, locationId: Int): Pair<Int, Int> = withContext(Dispatchers.IO) {
+        try {
+            val locationIdStr = locationId.toString()
+            val pickups = bookingDao.countTicketsPickingUpAtLocation(tripId, locationIdStr) ?: 0
+            val dropoffs = bookingDao.countTicketsDroppingOffAtLocation(tripId, locationIdStr) ?: 0
+            Pair(pickups, dropoffs)
+        } catch (e: Exception) {
+            Log.e("BookingService", "Error getting passenger counts for location: ${e.message}", e)
+            Pair(0, 0)
+        }
+    }
+    
+    /**
+     * Data class for passenger information
+     */
+    data class PassengerInfo(
+        val bookingId: String,
+        val passengerName: String,
+        val numberOfTickets: Int,
+        val destinationName: String? = null,
+        val originName: String? = null,
+        val isPickup: Boolean
+    )
+    
+    /**
+     * Gets passengers picking up at a specific location
+     */
+    suspend fun getPassengersPickingUpAtLocation(tripId: Int, locationId: Int): List<PassengerInfo> = withContext(Dispatchers.IO) {
+        try {
+            val locationIdStr = locationId.toString()
+            val bookings = bookingDao.getBookingsPickingUpAtLocation(tripId, locationIdStr)
+            bookings.map { booking ->
+                PassengerInfo(
+                    bookingId = booking.id,
+                    passengerName = booking.user_name,
+                    numberOfTickets = booking.number_of_tickets,
+                    destinationName = getLocationNameById(booking.dropoff_location_id.toInt(), tripId) ?: "Unknown",
+                    isPickup = true
+                )
+            }
+        } catch (e: Exception) {
+            Log.e("BookingService", "Error getting passengers picking up at location: ${e.message}", e)
+            emptyList()
+        }
+    }
+    
+    /**
+     * Gets passengers dropping off at a specific location
+     */
+    suspend fun getPassengersDroppingOffAtLocation(tripId: Int, locationId: Int): List<PassengerInfo> = withContext(Dispatchers.IO) {
+        try {
+            val locationIdStr = locationId.toString()
+            val bookings = bookingDao.getBookingsDroppingOffAtLocation(tripId, locationIdStr)
+            bookings.map { booking ->
+                PassengerInfo(
+                    bookingId = booking.id,
+                    passengerName = booking.user_name,
+                    numberOfTickets = booking.number_of_tickets,
+                    originName = getLocationNameById(booking.pickup_location_id.toInt(), tripId) ?: "Unknown",
+                    isPickup = false
+                )
+            }
+        } catch (e: Exception) {
+            Log.e("BookingService", "Error getting passengers dropping off at location: ${e.message}", e)
+            emptyList()
         }
     }
     

@@ -334,4 +334,13 @@ fun isRoaming(context: Context): Boolean {
 
     return !networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_ROAMING)
 }
+
+/**
+ * Check if the connection is considered weak
+ * Weak = metered AND slow connection types (2G, 3G, EDGE, GPRS, etc.)
+ */
+fun isWeakConnection(connectionType: String, isMetered: Boolean): Boolean {
+    val weakTypes = listOf("EDGE", "GPRS", "1xRTT", "CDMA", "2G", "3G")
+    return isMetered && weakTypes.any { connectionType.contains(it, ignoreCase = true) }
+}
 }

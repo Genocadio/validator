@@ -5,6 +5,7 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.os.PowerManager
 import android.util.Log
 
 /**
@@ -23,9 +24,24 @@ class NetworkMonitor(
     private var connectivityManager: ConnectivityManager? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private var isMonitoring = false
+    private var wakeLock: PowerManager.WakeLock? = null
 
     init {
         connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager?
+        initializeWakeLock()
+    }
+    
+    private fun initializeWakeLock() {
+        try {
+            val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+            wakeLock = powerManager.newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK,
+                "GoCavGo:NetworkMonitor"
+            )
+            Log.d(TAG, "Wake lock initialized for network monitoring")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to initialize wake lock: ${e.message}", e)
+        }
     }
 
     fun startMonitoring() {
@@ -97,13 +113,21 @@ class NetworkMonitor(
             return
         }
 
-        val isConnected = NetworkUtils.isConnectedToInternet(context)
-        val isMetered = NetworkUtils.isConnectionMetered(context)
-        val connectionType = getConnectionType()
+        // Acquire wake lock for critical network operations
+        acquireWakeLock()
 
-        Log.d(TAG, "Network state: Connected=$isConnected, Type=$connectionType, Metered=$isMetered")
+        try {
+            val isConnected = NetworkUtils.isConnectedToInternet(context)
+            val isMetered = NetworkUtils.isConnectionMetered(context)
+            val connectionType = getConnectionType()
 
-        onNetworkChanged(isConnected, connectionType, isMetered)
+            Log.d(TAG, "Network state: Connected=$isConnected, Type=$connectionType, Metered=$isMetered")
+
+            onNetworkChanged(isConnected, connectionType, isMetered)
+        } finally {
+            // Always release wake lock
+            releaseWakeLock()
+        }
     }
 
     private fun getConnectionType(): String {
@@ -172,5 +196,37 @@ class NetworkMonitor(
 
     fun isCurrentlyMonitoring(): Boolean {
         return isMonitoring
+    }
+    
+    /**
+     * Acquire wake lock for critical network operations
+     */
+    private fun acquireWakeLock() {
+        try {
+            wakeLock?.let { lock ->
+                if (!lock.isHeld) {
+                    lock.acquire(30 * 1000L) // 30 seconds timeout
+                    Log.d(TAG, "Wake lock acquired for network operation")
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to acquire wake lock: ${e.message}", e)
+        }
+    }
+    
+    /**
+     * Release wake lock
+     */
+    private fun releaseWakeLock() {
+        try {
+            wakeLock?.let { lock ->
+                if (lock.isHeld) {
+                    lock.release()
+                    Log.d(TAG, "Wake lock released")
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to release wake lock: ${e.message}", e)
+        }
     }
 }

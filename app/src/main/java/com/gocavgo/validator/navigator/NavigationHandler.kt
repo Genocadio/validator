@@ -30,6 +30,9 @@ import com.here.sdk.navigation.ManeuverNotificationOptions
 import com.here.sdk.navigation.MapMatchedLocation
 import com.here.sdk.navigation.NavigableLocation
 import com.here.sdk.navigation.NavigableLocationListener
+import com.here.sdk.navigation.Navigator
+import com.here.sdk.navigation.RouteDeviation
+import com.here.sdk.navigation.RouteDeviationListener
 import com.here.sdk.navigation.RouteProgress
 import com.here.sdk.navigation.RouteProgressListener
 import com.here.sdk.navigation.TextNotificationType
@@ -41,9 +44,13 @@ import com.here.sdk.routing.RoadType
 import com.here.sdk.routing.RoutingEngine
 import com.here.sdk.routing.RoutingError
 import com.here.sdk.routing.TrafficOnRoute
+import com.here.sdk.routing.Waypoint
+import com.here.sdk.routing.OfflineRoutingEngine
+import com.here.sdk.routing.RoutingInterface
 import com.here.sdk.trafficawarenavigation.DynamicRoutingEngine
 import kotlinx.coroutines.launch
 import java.util.Locale
+import android.widget.Toast
 
 // This class combines the various events that can be emitted during turn-by-turn navigation.
 // Note that this class does not show an exhaustive list of all possible events.
@@ -54,17 +61,40 @@ class NavigationHandler(
 ) {
     private var previousManeuverIndex = -1
     private var lastMapMatchedLocation: MapMatchedLocation? = null
+    private var currentSpeedInMetersPerSecond: Double = 0.0
 
     private val timeUtils = TimeUtils()
     private val routingEngine: RoutingEngine
+    private val offlineRoutingEngine: OfflineRoutingEngine
+    private var isNetworkConnected = true
     private var lastTrafficUpdateInMilliseconds = 0L
     private lateinit var voiceAssistant: VoiceAssistant
+    
+    // Route deviation handling
+    private var isReturningToRoute = false
+    private var deviationCounter = 0
+    private val DEVIATION_THRESHOLD_METERS = 50
+    private val MIN_DEVIATION_EVENTS = 3
 
     init {
         try {
             routingEngine = RoutingEngine()
+            offlineRoutingEngine = OfflineRoutingEngine()
         } catch (e: InstantiationErrorException) {
             throw RuntimeException("Initialization of RoutingEngine failed: " + e.error.name)
+        }
+    }
+
+    /**
+     * Set network state for routing engine selection
+     */
+    fun setNetworkState(isConnected: Boolean) {
+        val previousState = isNetworkConnected
+        isNetworkConnected = isConnected
+        
+        if (previousState != isConnected) {
+            Log.d(TAG, "Network state changed: $previousState -> $isConnected")
+            showRoutingModeToast(isConnected)
         }
     }
 
@@ -165,11 +195,21 @@ class NavigationHandler(
                 val speed = currentNavigableLocation.originalLocation.speedInMetersPerSecond
                 val accuracy =
                     currentNavigableLocation.originalLocation.speedAccuracyInMetersPerSecond
+                currentSpeedInMetersPerSecond = speed ?: 0.0
                 Log.d(
                     TAG,
                     "Driving speed (m/s): " + speed + "plus/minus an accuracy of: " + accuracy
                 )
             }
+
+        // Notifies on route deviation events
+        visualNavigator.routeDeviationListener = RouteDeviationListener { routeDeviation ->
+            try {
+                handleRouteDeviation(routeDeviation, visualNavigator)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error in route deviation listener: ${e.message}", e)
+            }
+        }
 
         // Notifies on messages that can be fed into TTS engines to guide the user with audible instructions.
         // The texts can be maneuver instructions or warn on certain obstacles, such as speed cameras.
@@ -183,6 +223,113 @@ class NavigationHandler(
                     eventText.maneuverNotificationDetails!!.maneuver
                 }
             }
+    }
+
+    fun setupHeadlessListeners(
+        navigator: Navigator,
+        dynamicRoutingEngine: DynamicRoutingEngine
+    ) {
+        // Notifies on the progress along the route including maneuver instructions.
+        navigator.routeProgressListener =
+            RouteProgressListener { routeProgress: RouteProgress ->
+                // Contains the progress for the next maneuver ahead and the next-next maneuvers, if any.
+                val nextManeuverList = routeProgress.maneuverProgress
+
+                val nextManeuverProgress = nextManeuverList[0]
+                if (nextManeuverProgress == null) {
+                    Log.d(TAG, "No next maneuver available.")
+                    return@RouteProgressListener
+                }
+
+                val nextManeuverIndex = nextManeuverProgress.maneuverIndex
+                val nextManeuver = navigator.getManeuver(nextManeuverIndex)
+                    ?: // Should never happen as we retrieved the next maneuver progress above.
+                    return@RouteProgressListener
+
+                val action = nextManeuver.action
+                val roadName = getRoadName(nextManeuver)
+                val logMessage = action.name + " on " + roadName + " in " + nextManeuverProgress.remainingDistanceInMeters + " meters."
+
+                // Angle is null for some maneuvers like Depart, Arrive and Roundabout.
+                val turnAngle = nextManeuver.turnAngleInDegrees
+                if (turnAngle != null) {
+                    if (turnAngle > 10) {
+                        Log.d(TAG, "At the next maneuver: Make a right turn of $turnAngle degrees.")
+                    } else if (turnAngle < -10) {
+                        Log.d(TAG, "At the next maneuver: Make a left turn of $turnAngle degrees.")
+                    } else {
+                        Log.d(TAG, "At the next maneuver: Go straight.")
+                    }
+                }
+
+                // Angle is null when the roundabout maneuver is not an enter, exit or keep maneuver.
+                val roundaboutAngle = nextManeuver.roundaboutAngleInDegrees
+                if (roundaboutAngle != null) {
+                    // Note that the value is negative only for left-driving countries such as UK.
+                    Log.d(TAG, "At the next maneuver: Follow the roundabout for " + roundaboutAngle + " degrees to reach the exit."
+                    )
+                }
+
+                var currentETAString = getETA(routeProgress)
+
+                currentETAString = if (previousManeuverIndex != nextManeuverIndex) {
+                    "$currentETAString\nNew maneuver: $logMessage"
+                } else {
+                    // A maneuver update contains a different distance to reach the next maneuver.
+                    "$currentETAString\nManeuver update: $logMessage"
+                }
+                messageView.updateText(currentETAString)
+
+                previousManeuverIndex = nextManeuverIndex
+
+                if (lastMapMatchedLocation != null) {
+                    // Update the route based on the current location of the driver.
+                    // We periodically want to search for better traffic-optimized routes.
+                    dynamicRoutingEngine.updateCurrentLocation(
+                        lastMapMatchedLocation!!,
+                        routeProgress.sectionIndex
+                    )
+                }
+                updateTrafficOnRoute(routeProgress, navigator)
+            }
+
+        // Notifies on the current map-matched location and other useful information while driving or walking.
+        navigator.navigableLocationListener =
+            NavigableLocationListener { currentNavigableLocation: NavigableLocation ->
+                Log.d(TAG, "Received navigable location update")
+                lastMapMatchedLocation = currentNavigableLocation.mapMatchedLocation
+                if (lastMapMatchedLocation == null) {
+                    Log.d(TAG, "The currentNavigableLocation could not be map-matched. Are you off-road?")
+                    return@NavigableLocationListener
+                }
+                Log.d(TAG, "Location successfully map-matched")
+
+                if (lastMapMatchedLocation!!.isDrivingInTheWrongWay) {
+                    // For two-way streets, this value is always false. This feature is supported in tracking mode and when deviating from a route.
+                    Log.d(
+                        TAG,
+                        "This is a one way road. User is driving against the allowed traffic direction."
+                    )
+                }
+
+                val speed = currentNavigableLocation.originalLocation.speedInMetersPerSecond
+                val accuracy =
+                    currentNavigableLocation.originalLocation.speedAccuracyInMetersPerSecond
+                currentSpeedInMetersPerSecond = speed ?: 0.0
+                Log.d(
+                    TAG,
+                    "Driving speed (m/s): " + speed + "plus/minus an accuracy of: " + accuracy
+                )
+            }
+
+        // Notifies on route deviation events for headless navigation
+        navigator.routeDeviationListener = RouteDeviationListener { routeDeviation ->
+            try {
+                handleRouteDeviationHeadless(routeDeviation, navigator)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error in route deviation listener: ${e.message}", e)
+            }
+        }
     }
 
     private fun getETA(routeProgress: RouteProgress): String {
@@ -245,18 +392,17 @@ class NavigationHandler(
             }
         }
 
-        val currentETAString = "ETA: " + timeUtils.getETAinDeviceTimeZone(
-            lastSectionProgress.remainingDuration.toSeconds().toInt()
-        )
+        val speedInKmh = currentSpeedInMetersPerSecond * 3.6
+        val currentSpeedString = "Speed: ${String.format("%.1f", speedInKmh)} km/h"
 
         Log.d(
             TAG,
             "Distance to destination in meters: " + lastSectionProgress.remainingDistanceInMeters
         )
         Log.d(TAG, "Traffic delay ahead in seconds: " + lastSectionProgress.trafficDelay.seconds)
-        // Logs current ETA.
-        Log.d(TAG, currentETAString)
-        return currentETAString
+        // Logs current speed.
+        Log.d(TAG, currentSpeedString)
+        return currentSpeedString
     }
 
     private fun setupVoiceGuidance(visualNavigator: VisualNavigator) {
@@ -427,6 +573,174 @@ class NavigationHandler(
         }
     }
 
+    // Overloaded version for Navigator (headless)
+    private fun updateTrafficOnRoute(
+        routeProgress: RouteProgress,
+        navigator: Navigator
+    ) {
+        val currentRoute = navigator.route
+            ?: // Should never happen.
+            return
+
+        // Below, we use 10 minutes. A common range is between 5 and 15 minutes.
+        val trafficUpdateIntervalInMilliseconds = (10 * 60000).toLong() // 10 minutes.
+        val now = System.currentTimeMillis()
+        if ((now - lastTrafficUpdateInMilliseconds) < trafficUpdateIntervalInMilliseconds) {
+            return
+        }
+        // Store the current time when we update trafficOnRoute.
+        lastTrafficUpdateInMilliseconds = now
+
+        val sectionProgressList = routeProgress.sectionProgress
+        val lastSectionProgress = sectionProgressList[sectionProgressList.size - 1]
+        val traveledDistanceOnLastSectionInMeters =
+            currentRoute.lengthInMeters - lastSectionProgress.remainingDistanceInMeters
+        val lastTraveledSectionIndex = routeProgress.sectionIndex
+
+        routingEngine.calculateTrafficOnRoute(
+            currentRoute,
+            lastTraveledSectionIndex,
+            traveledDistanceOnLastSectionInMeters,
+            CalculateTrafficOnRouteCallback { routingError: RoutingError?, trafficOnRoute: TrafficOnRoute? ->
+                if (routingError != null) {
+                    Log.d(TAG, "CalculateTrafficOnRoute error: " + routingError.name)
+                    return@CalculateTrafficOnRouteCallback
+                }
+                // Sets traffic data for the current route, affecting RouteProgress duration in SectionProgress,
+                // while preserving route distance and geometry.
+                navigator.trafficOnRoute = trafficOnRoute
+                Log.d(TAG, "Updated traffic on route.")
+            })
+    }
+
+    private fun handleRouteDeviation(routeDeviation: RouteDeviation, visualNavigator: VisualNavigator) {
+        val route = visualNavigator.route ?: return
+        
+        // Get current coordinates
+        val currentMapMatchedLocation = routeDeviation.currentLocation.mapMatchedLocation
+        val currentGeoCoordinates = currentMapMatchedLocation?.coordinates
+            ?: routeDeviation.currentLocation.originalLocation.coordinates
+        
+        // Get last coordinates on route
+        val lastGeoCoordinatesOnRoute = if (routeDeviation.lastLocationOnRoute != null) {
+            val lastMapMatched = routeDeviation.lastLocationOnRoute!!.mapMatchedLocation
+            lastMapMatched?.coordinates ?: routeDeviation.lastLocationOnRoute!!.originalLocation.coordinates
+        } else {
+            route.sections[0].departurePlace.originalCoordinates
+        }
+        
+        val distanceInMeters = currentGeoCoordinates.distanceTo(lastGeoCoordinatesOnRoute!!).toInt()
+        deviationCounter++
+        
+        if (isReturningToRoute) {
+            Log.d(TAG, "Rerouting already in progress")
+            return
+        }
+        
+        if (distanceInMeters > DEVIATION_THRESHOLD_METERS && deviationCounter >= MIN_DEVIATION_EVENTS) {
+            Log.d(TAG, "Route deviation: ${distanceInMeters}m - starting reroute")
+            isReturningToRoute = true
+            
+            val newStartingPoint = Waypoint(currentGeoCoordinates)
+            currentMapMatchedLocation?.bearingInDegrees?.let { 
+newStartingPoint.headingInDegrees = it 
+            }
+            
+            val selectedEngine = getRoutingEngineForReroute()
+            selectedEngine.returnToRoute(
+                route,
+                newStartingPoint,
+                routeDeviation.lastTraveledSectionIndex,
+                routeDeviation.traveledDistanceOnLastSectionInMeters
+            ) { routingError, routes ->
+                if (routingError == null && routes != null && routes.isNotEmpty()) {
+                    val newRoute = routes[0]
+                    visualNavigator.route = newRoute
+                    Log.d(TAG, "Rerouting successful using ${if (isNetworkConnected) "online" else "offline"} engine")
+                } else {
+                    Log.e(TAG, "Rerouting failed: ${routingError?.name}")
+                }
+                isReturningToRoute = false
+                deviationCounter = 0
+            }
+        }
+    }
+
+    private fun handleRouteDeviationHeadless(routeDeviation: RouteDeviation, navigator: Navigator) {
+        val route = navigator.route ?: return
+        
+        // Get current coordinates
+        val currentMapMatchedLocation = routeDeviation.currentLocation.mapMatchedLocation
+        val currentGeoCoordinates = currentMapMatchedLocation?.coordinates
+            ?: routeDeviation.currentLocation.originalLocation.coordinates
+        
+        // Get last coordinates on route
+        val lastGeoCoordinatesOnRoute = if (routeDeviation.lastLocationOnRoute != null) {
+            val lastMapMatched = routeDeviation.lastLocationOnRoute!!.mapMatchedLocation
+            lastMapMatched?.coordinates ?: routeDeviation.lastLocationOnRoute!!.originalLocation.coordinates
+        } else {
+            route.sections[0].departurePlace.originalCoordinates
+        }
+        
+        val distanceInMeters = currentGeoCoordinates.distanceTo(lastGeoCoordinatesOnRoute!!).toInt()
+        deviationCounter++
+        
+        if (isReturningToRoute) {
+            Log.d(TAG, "Rerouting already in progress")
+            return
+        }
+        
+        if (distanceInMeters > DEVIATION_THRESHOLD_METERS && deviationCounter >= MIN_DEVIATION_EVENTS) {
+            Log.d(TAG, "Route deviation: ${distanceInMeters}m - starting reroute")
+            isReturningToRoute = true
+            
+            val newStartingPoint = Waypoint(currentGeoCoordinates)
+            currentMapMatchedLocation?.bearingInDegrees?.let { 
+                newStartingPoint.headingInDegrees = it 
+            }
+            
+            val selectedEngine = getRoutingEngineForReroute()
+            selectedEngine.returnToRoute(
+                route,
+                newStartingPoint,
+                routeDeviation.lastTraveledSectionIndex,
+                routeDeviation.traveledDistanceOnLastSectionInMeters
+            ) { routingError, routes ->
+                if (routingError == null && routes != null && routes.isNotEmpty()) {
+                    val newRoute = routes[0]
+                    navigator.route = newRoute
+                    Log.d(TAG, "Headless rerouting successful using ${if (isNetworkConnected) "online" else "offline"} engine")
+                } else {
+                    Log.e(TAG, "Headless rerouting failed: ${routingError?.name}")
+                }
+                isReturningToRoute = false
+                deviationCounter = 0
+            }
+        }
+    }
+
+    /**
+     * Get the appropriate routing engine based on network state
+     */
+    private fun getRoutingEngineForReroute(): RoutingInterface {
+        return if (isNetworkConnected) {
+            routingEngine
+        } else {
+            offlineRoutingEngine
+        }
+    }
+
+    /**
+     * Show toast notification for routing mode changes
+     */
+    private fun showRoutingModeToast(isOnline: Boolean) {
+        val message = if (isOnline) {
+            "Switched to Online Routing (Live Traffic)"
+        } else {
+            "Switched to Offline Routing (Cached Maps)"
+        }
+        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+    }
 
     companion object {
         private val TAG: String = NavigationHandler::class.java.name

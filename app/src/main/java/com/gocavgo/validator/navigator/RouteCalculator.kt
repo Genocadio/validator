@@ -24,17 +24,35 @@ import com.here.sdk.core.errors.InstantiationErrorException
 import com.here.sdk.routing.CalculateRouteCallback
 import com.here.sdk.routing.CarOptions
 import com.here.sdk.routing.RoutingEngine
+import com.here.sdk.routing.OfflineRoutingEngine
+import com.here.sdk.routing.RoutingInterface
+import com.here.sdk.routing.RoutingError
 import com.here.sdk.routing.Waypoint
 
 // A class that creates car Routes with the HERE SDK.
 class RouteCalculator {
-    private var routingEngine: RoutingEngine? = null
+    private var onlineRoutingEngine: RoutingEngine? = null
+    private var offlineRoutingEngine: OfflineRoutingEngine? = null
+    private var isNetworkConnected = true
 
     init {
         try {
-            routingEngine = RoutingEngine()
+            onlineRoutingEngine = RoutingEngine()
+            offlineRoutingEngine = OfflineRoutingEngine()
         } catch (e: InstantiationErrorException) {
             throw RuntimeException("Initialization of RoutingEngine failed: " + e.error.name)
+        }
+    }
+
+    /**
+     * Set network state for routing engine selection
+     */
+    fun setNetworkState(isConnected: Boolean) {
+        val previousState = isNetworkConnected
+        isNetworkConnected = isConnected
+        
+        if (previousState != isConnected) {
+            Log.d("RouteCalculator", "Network state changed: $previousState -> $isConnected")
         }
     }
 
@@ -49,11 +67,7 @@ class RouteCalculator {
         val routingOptions = CarOptions()
         routingOptions.routeOptions.enableRouteHandle = true
 
-        routingEngine!!.calculateRoute(
-            waypoints,
-            routingOptions,
-            calculateRouteCallback!!
-        )
+        calculateRouteWithEngine(waypoints, routingOptions, calculateRouteCallback)
     }
 
     fun calculateRouteWithWaypoints(
@@ -79,10 +93,55 @@ class RouteCalculator {
         routingOptions.routeOptions.optimizeWaypointsOrder = false
 
         Log.d("RouteCalculator", "Starting route calculation with ${waypoints.size} waypoints...")
-        routingEngine!!.calculateRoute(
-            waypoints,
-            routingOptions,
-            calculateRouteCallback!!
-        )
+        calculateRouteWithEngine(waypoints, routingOptions, calculateRouteCallback)
+    }
+
+    /**
+     * Calculate route using appropriate engine with automatic fallback
+     */
+    private fun calculateRouteWithEngine(
+        waypoints: List<Waypoint>,
+        routingOptions: CarOptions,
+        calculateRouteCallback: CalculateRouteCallback?
+    ) {
+        val primaryEngine = getSelectedRoutingEngine()
+        val engineName = if (isNetworkConnected) "online" else "offline"
+        
+        Log.d("RouteCalculator", "Using $engineName routing engine for calculation")
+
+        primaryEngine.calculateRoute(waypoints, routingOptions) { routingError, routes ->
+            if (routingError == null && routes != null && routes.isNotEmpty()) {
+                // Success with primary engine
+                Log.d("RouteCalculator", "Route calculated successfully using $engineName engine")
+                calculateRouteCallback?.onRouteCalculated(null, routes)
+            } else if (isNetworkConnected && routingError != null) {
+                // Online routing failed, try offline fallback
+                Log.w("RouteCalculator", "Online routing failed: ${routingError?.name}, trying offline fallback")
+                offlineRoutingEngine?.calculateRoute(waypoints, routingOptions) { offlineError, offlineRoutes ->
+                    if (offlineError == null && offlineRoutes != null && offlineRoutes.isNotEmpty()) {
+                        Log.d("RouteCalculator", "Route calculated successfully using offline engine (fallback)")
+                        calculateRouteCallback?.onRouteCalculated(null, offlineRoutes)
+                    } else {
+                        Log.e("RouteCalculator", "Both online and offline routing failed")
+                        calculateRouteCallback?.onRouteCalculated(offlineError ?: routingError, null)
+                    }
+                }
+            } else {
+                // Offline routing failed or no fallback needed
+                Log.e("RouteCalculator", "Route calculation failed: ${routingError?.name}")
+                calculateRouteCallback?.onRouteCalculated(routingError, null)
+            }
+        }
+    }
+
+    /**
+     * Get the appropriate routing engine based on network state
+     */
+    private fun getSelectedRoutingEngine(): RoutingInterface {
+        return if (isNetworkConnected) {
+            onlineRoutingEngine!!
+        } else {
+            offlineRoutingEngine!!
+        }
     }
 }

@@ -68,8 +68,11 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.gocavgo.validator.BuildConfig
 import com.gocavgo.validator.ui.theme.ValidatorTheme
+import com.gocavgo.validator.ui.components.NetworkStatusIndicator
 import com.gocavgo.validator.dataclass.TripResponse
 import com.gocavgo.validator.database.DatabaseManager
+import com.gocavgo.validator.network.NetworkMonitor
+import com.gocavgo.validator.network.NetworkUtils
 import com.here.sdk.core.engine.AuthenticationMode
 import com.here.sdk.core.engine.SDKNativeEngine
 import com.here.sdk.core.engine.SDKOptions
@@ -125,6 +128,15 @@ class NavigActivity: ComponentActivity() {
     // Database manager
     private lateinit var databaseManager: DatabaseManager
 
+    // Network monitoring
+    private var networkMonitor: NetworkMonitor? = null
+    private var isConnected by mutableStateOf(true)
+    private var connectionType by mutableStateOf("UNKNOWN")
+    private var isMetered by mutableStateOf(true)
+    
+    // HERE SDK offline mode state
+    private var pendingOfflineMode: Boolean? = null
+
     // Coroutine scope
     private val coroutineScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     
@@ -165,6 +177,9 @@ class NavigActivity: ComponentActivity() {
         // Initialize database manager
         databaseManager = DatabaseManager.getInstance(this)
 
+        // Initialize network monitoring
+        initializeNetworkMonitoring()
+
         // Fetch trip data from database
         coroutineScope.launch {
             Log.d(TAG, "=== Starting trip data fetch ===")
@@ -196,6 +211,13 @@ class NavigActivity: ComponentActivity() {
                             WaypointProgressOverlay(waypointProgressData)
                         }
                         DialogScreen()
+                        
+                        // Network status indicator overlay
+                        NetworkStatusIndicator(
+                            isConnected = isConnected,
+                            connectionType = connectionType,
+                            isMetered = isMetered
+                        )
                     }
                 }
             }
@@ -392,9 +414,45 @@ class NavigActivity: ComponentActivity() {
         try {
             val context: Context = this
             SDKNativeEngine.makeSharedInstance(context, options)
+            
+            // Apply pending offline mode if any
+            pendingOfflineMode?.let { offlineMode ->
+                try {
+                    SDKNativeEngine.getSharedInstance()?.setOfflineMode(offlineMode)
+                    Log.d(TAG, "Applied pending HERE SDK offline mode: $offlineMode")
+                    pendingOfflineMode = null
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to apply pending offline mode: ${e.message}", e)
+                }
+            }
         } catch (e: InstantiationErrorException) {
             throw RuntimeException("Initialization of HERE SDK failed: " + e.error.name)
         }
+    }
+
+    private fun initializeNetworkMonitoring() {
+        Log.d(TAG, "Initializing network monitoring...")
+
+        // Check if we have network permissions
+        if (!NetworkUtils.hasNetworkPermissions(this)) {
+            Log.w(TAG, "Network permissions not available, using basic monitoring")
+            return
+        }
+
+        networkMonitor = NetworkMonitor(this) { connected, type, metered ->
+            Log.d(TAG, "Network state changed: connected=$connected, type=$type, metered=$metered")
+            
+            // Update UI state
+            isConnected = connected
+            connectionType = type
+            isMetered = metered
+            
+            // Update HERE SDK offline mode
+            updateHERESDKOfflineMode(connected)
+        }
+
+        networkMonitor?.startMonitoring()
+        Log.d(TAG, "Network monitoring started")
     }
 
     private fun handleAndroidPermissions() {
@@ -457,16 +515,54 @@ class NavigActivity: ComponentActivity() {
     }
 
     override fun onDestroy() {
+        Log.d(TAG, "NavigActivity onDestroy - starting cleanup")
+        
+        // Stop network monitoring
+        networkMonitor?.stopMonitoring()
+        
+        // First, stop all location services and navigation
+        stopAllLocationServices()
+        
+        // Then detach the app (which stops navigation)
         app?.detach()
+        
+        // Clean up map view
         mapView?.onDestroy()
+        
+        // Dispose HERE SDK resources
         disposeHERESDK()
+        
+        // Cancel coroutines
         coroutineScope.cancel()
+        
+        Log.d(TAG, "NavigActivity onDestroy - cleanup completed")
         super.onDestroy()
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
         mapView?.onSaveInstanceState(outState)
         super.onSaveInstanceState(outState)
+    }
+
+    private fun updateHERESDKOfflineMode(isConnected: Boolean) {
+        try {
+            // Check if HERE SDK is initialized before accessing it
+            val sdkNativeEngine = SDKNativeEngine.getSharedInstance()
+            if (sdkNativeEngine != null) {
+                sdkNativeEngine.setOfflineMode(!isConnected)
+                Log.d(TAG, "HERE SDK offline mode set to: ${!isConnected}")
+            } else {
+                Log.d(TAG, "HERE SDK not yet initialized, will set offline mode when ready")
+                // Store the desired offline mode state for when SDK is ready
+                pendingOfflineMode = !isConnected
+            }
+        } catch (e: UnsatisfiedLinkError) {
+            Log.d(TAG, "HERE SDK native library not loaded yet, will set offline mode when ready")
+            // Store the desired offline mode state for when SDK is ready
+            pendingOfflineMode = !isConnected
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to update HERE SDK offline mode: ${e.message}", e)
+        }
     }
 
     private fun disposeHERESDK() {
@@ -479,6 +575,69 @@ class NavigActivity: ComponentActivity() {
             // For safety reasons, we explicitly set the shared instance to null to avoid situations,
             // where a disposed instance is accidentally reused.
             SDKNativeEngine.setSharedInstance(null)
+        }
+    }
+    
+    /**
+     * Stop all location services and clean up connections to prevent service leaks
+     */
+    private fun stopAllLocationServices() {
+        try {
+            Log.d(TAG, "Stopping all location services...")
+            
+            // First, stop and disconnect HERE SDK location services to prevent leaks
+            try {
+                val sdkNativeEngine = SDKNativeEngine.getSharedInstance()
+                if (sdkNativeEngine != null) {
+                    // Stop location engine first to disconnect services
+                    val locationEngine = com.here.sdk.location.LocationEngine()
+                    if (locationEngine.isStarted) {
+                        locationEngine.stop()
+                        Log.d(TAG, "HERE SDK LocationEngine stopped")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Error stopping HERE SDK LocationEngine: ${e.message}")
+            }
+            
+            // Stop navigation after location services are stopped
+            app?.getNavigationExample()?.let { navExample ->
+                try {
+                    // Force disconnect HERE SDK location services to prevent leaks
+                    navExample.getHerePositioningProvider().forceDisconnect()
+                    Log.d(TAG, "HERE SDK location services force disconnected")
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error force disconnecting location services: ${e.message}")
+                }
+                
+                try {
+                    // Stop location services
+                    navExample.stopLocating()
+                    Log.d(TAG, "Location services stopped")
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error stopping location services: ${e.message}")
+                }
+                
+                try {
+                    // Stop headless navigation
+                    navExample.stopHeadlessNavigation()
+                    Log.d(TAG, "Headless navigation stopped")
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error stopping headless navigation: ${e.message}")
+                }
+                
+                try {
+                    // Stop rendering
+                    navExample.stopRendering()
+                    Log.d(TAG, "Rendering stopped")
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error stopping rendering: ${e.message}")
+                }
+            }
+            
+            Log.d(TAG, "All location services stopped successfully")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error during location services cleanup: ${e.message}", e)
         }
     }
     

@@ -16,6 +16,7 @@ import androidx.core.app.NotificationCompat
 import com.gocavgo.validator.MainActivity
 import com.gocavgo.validator.R
 import com.gocavgo.validator.navigator.NavigActivity
+import com.gocavgo.validator.network.NetworkMonitor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -42,12 +43,18 @@ class MqttForegroundService : Service() {
         private var isServiceRunning = AtomicBoolean(false)
         
         fun isRunning(): Boolean = isServiceRunning.get()
+        
+        @Volatile
+        private var INSTANCE: MqttForegroundService? = null
+        
+        fun getInstance(): MqttForegroundService? = INSTANCE
     }
     
     private val binder = MqttServiceBinder()
     private var mqttService: MqttService? = null
     private var notificationManager: MqttNotificationManager? = null
     private var wakeLock: PowerManager.WakeLock? = null
+    private var networkMonitor: NetworkMonitor? = null
     private val serviceScope = CoroutineScope(Dispatchers.IO)
     
     inner class MqttServiceBinder : Binder() {
@@ -73,6 +80,10 @@ class MqttForegroundService : Service() {
         // Set notification manager in MQTT service
         mqttService?.setNotificationManager(notificationManager!!)
         
+        // Initialize network monitoring for background operation
+        initializeNetworkMonitoring()
+        
+        INSTANCE = this
         isServiceRunning.set(true)
     }
     
@@ -106,6 +117,11 @@ class MqttForegroundService : Service() {
         // Clear notification manager from MQTT service
         mqttService?.setNotificationManager(null)
         
+        // Stop network monitoring
+        networkMonitor?.stopMonitoring()
+        networkMonitor = null
+        
+        INSTANCE = null
         isServiceRunning.set(false)
         super.onDestroy()
     }
@@ -266,4 +282,78 @@ class MqttForegroundService : Service() {
      * Check if service is running
      */
     fun isServiceRunning(): Boolean = isServiceRunning.get()
+    
+    /**
+     * Initialize network monitoring for background operation
+     */
+    private fun initializeNetworkMonitoring() {
+        try {
+            Log.d(TAG, "Initializing background network monitoring...")
+            
+            networkMonitor = NetworkMonitor(this) { connected, type, metered ->
+                Log.d(TAG, "=== BACKGROUND NETWORK STATE CHANGED ===")
+                Log.d(TAG, "Connected: $connected")
+                Log.d(TAG, "Connection Type: $type")
+                Log.d(TAG, "Is Metered: $metered")
+                Log.d(TAG, "=========================================")
+                
+                // Notify MQTT service of network changes
+                mqttService?.onNetworkStateChanged(connected, type, metered)
+                
+                // Update notification with network status
+                updateNotification()
+                
+                // Store network state for persistence
+                storeNetworkState(connected, type, metered)
+            }
+            
+            networkMonitor?.startMonitoring()
+            Log.d(TAG, "Background network monitoring started successfully")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to initialize background network monitoring: ${e.message}", e)
+        }
+    }
+    
+    /**
+     * Store network state in SharedPreferences for persistence
+     */
+    private fun storeNetworkState(connected: Boolean, type: String, metered: Boolean) {
+        try {
+            val prefs = getSharedPreferences("network_state", Context.MODE_PRIVATE)
+            prefs.edit().apply {
+                putBoolean("is_connected", connected)
+                putString("connection_type", type)
+                putBoolean("is_metered", metered)
+                putLong("last_updated", System.currentTimeMillis())
+                apply()
+            }
+            Log.d(TAG, "Network state stored: connected=$connected, type=$type, metered=$metered")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to store network state: ${e.message}", e)
+        }
+    }
+    
+    /**
+     * Get current network state from storage
+     */
+    fun getStoredNetworkState(): NetworkMonitor.NetworkState? {
+        return try {
+            val prefs = getSharedPreferences("network_state", Context.MODE_PRIVATE)
+            val connected = prefs.getBoolean("is_connected", false)
+            val type = prefs.getString("connection_type", "UNKNOWN") ?: "UNKNOWN"
+            val metered = prefs.getBoolean("is_metered", true)
+            val lastUpdated = prefs.getLong("last_updated", 0)
+            
+            // Consider state stale if older than 5 minutes
+            if (System.currentTimeMillis() - lastUpdated > 5 * 60 * 1000) {
+                Log.w(TAG, "Stored network state is stale, ignoring")
+                null
+            } else {
+                NetworkMonitor.NetworkState(connected, type, metered)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to get stored network state: ${e.message}", e)
+            null
+        }
+    }
 }

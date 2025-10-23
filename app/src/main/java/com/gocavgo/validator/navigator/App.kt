@@ -39,13 +39,15 @@ import com.here.sdk.routing.Route
 import com.here.sdk.routing.RoutingError
 import com.here.sdk.routing.Waypoint
 import com.here.sdk.routing.WaypointType
+import com.gocavgo.validator.network.NetworkMonitor
+import com.gocavgo.validator.network.NetworkUtils
 
 
 // An app that allows to calculate a route and start navigation, using either platform positioning or
 // simulated locations.
 class App(
     private val context: Context,
-    private val mapView: MapView,
+    private val mapView: MapView?,
     private val messageView: MessageViewUpdater,
     private var tripResponse: TripResponse? = null
 ) {
@@ -56,6 +58,10 @@ class App(
     private val navigationExample: NavigationExample
     private var isCameraTrackingEnabled = true
     private val timeUtils: TimeUtils
+    
+    // Network monitoring
+    private var networkMonitor: NetworkMonitor? = null
+    private var isNetworkConnected = true
 
     // Waypoint markers for trip navigation
     private val waypointMarkers: MutableList<MapMarker> = ArrayList()
@@ -64,11 +70,14 @@ class App(
     private val tripSectionValidator: TripSectionValidator = TripSectionValidator(context)
 
     init {
-        val mapMeasureZoom =
-            MapMeasure(MapMeasure.Kind.DISTANCE_IN_METERS, DEFAULT_DISTANCE_IN_METERS.toDouble())
-        mapView.camera.lookAt(DEFAULT_MAP_CENTER, mapMeasureZoom)
+        mapView?.let {
+            val mapMeasureZoom =
+                MapMeasure(MapMeasure.Kind.DISTANCE_IN_METERS, DEFAULT_DISTANCE_IN_METERS.toDouble())
+            it.camera.lookAt(DEFAULT_MAP_CENTER, mapMeasureZoom)
+        }
 
         routeCalculator = RouteCalculator()
+        initializeNetworkMonitoring()
 
         navigationExample = NavigationExample(context, mapView, messageView, tripSectionValidator)
         navigationExample.startLocationProvider()
@@ -82,7 +91,52 @@ class App(
         }
     }
 
+    /**
+     * Initialize network monitoring for routing engine selection
+     */
+    private fun initializeNetworkMonitoring() {
+        try {
+            // Get initial network state
+            isNetworkConnected = NetworkUtils.isConnectedToInternet(context)
+            Log.d("App", "Initial network state: $isNetworkConnected")
+            
+            // Set initial network state in route calculator
+            routeCalculator.setNetworkState(isNetworkConnected)
+            
+            // Initialize network monitor for future changes
+            networkMonitor = NetworkMonitor(context) { connected, type, metered ->
+                handleNetworkChange(connected, type, metered)
+            }
+            networkMonitor?.startMonitoring()
+            Log.d("App", "Network monitoring initialized successfully")
+        } catch (e: Exception) {
+            Log.e("App", "Failed to initialize network monitoring: ${e.message}", e)
+        }
+    }
 
+    /**
+     * Handle network state changes
+     */
+    private fun handleNetworkChange(connected: Boolean, type: String, metered: Boolean) {
+        val previousState = isNetworkConnected
+        isNetworkConnected = connected
+        
+        Log.d("App", "=== NETWORK STATE CHANGED ===")
+        Log.d("App", "Previous: $previousState, New: $connected")
+        Log.d("App", "Type: $type, Metered: $metered")
+        
+        if (previousState != connected) {
+            // Update route calculator with new network state
+            routeCalculator.setNetworkState(connected)
+            
+            // Update navigation handler if available
+            navigationExample.getNavigationHandler()?.setNetworkState(connected)
+            
+            Log.d("App", "Network state updated in all components")
+        }
+        
+        Log.d("App", "==============================")
+    }
 
     // Update trip data when it becomes available
     fun updateTripData(newTripResponse: TripResponse?, isSimulated: Boolean = true) {
@@ -225,7 +279,7 @@ class App(
                 startWaypoint = Waypoint(location.coordinates)
                 // If a driver is moving, the bearing value can help to improve the route calculation.
                 startWaypoint!!.headingInDegrees = location.bearingInDegrees
-                mapView.camera.lookAt(location.coordinates)
+                mapView?.camera?.lookAt(location.coordinates)
                 Log.d("App", "Set start waypoint from device location")
             }
         } else {
@@ -326,93 +380,95 @@ class App(
     }
 
     private fun addWaypointMarkersToMap(isSimulated: Boolean) {
-        Log.d("App", "=== STARTING addWaypointMarkersToMap ===")
-        Log.d("App", "Simulation mode: $isSimulated")
+        mapView?.let { mapView ->
+            Log.d("App", "=== STARTING addWaypointMarkersToMap ===")
+            Log.d("App", "Simulation mode: $isSimulated")
 
-        // Clear existing waypoint markers
-        clearWaypointMarkers()
+            // Clear existing waypoint markers
+            clearWaypointMarkers()
 
-        tripResponse?.let { trip ->
-            Log.d("App", "Trip data available, adding waypoint markers")
-            Log.d("App", "Trip ID: ${trip.id}")
-            Log.d("App", "Origin: ${trip.route.origin.google_place_name}")
-            Log.d("App", "Destination: ${trip.route.destination.google_place_name}")
-            Log.d("App", "Intermediate waypoints: ${trip.waypoints.size}")
+            tripResponse?.let { trip ->
+                Log.d("App", "Trip data available, adding waypoint markers")
+                Log.d("App", "Trip ID: ${trip.id}")
+                Log.d("App", "Origin: ${trip.route.origin.google_place_name}")
+                Log.d("App", "Destination: ${trip.route.destination.google_place_name}")
+                Log.d("App", "Intermediate waypoints: ${trip.waypoints.size}")
 
-            // Note: Device location is not marked on map when isSimulated = false
-            // The camera will automatically look at the device location
-            if (!isSimulated) {
-                Log.d("App", "Device location mode: Camera will look at device location, no marker needed")
-            }
-
-            // Add origin marker only in simulated mode
-            if (isSimulated) {
-                Log.d("App", "Adding origin marker...")
-                val originMarker = createWaypointMarker(
-                    GeoCoordinates(trip.route.origin.latitude, trip.route.origin.longitude),
-                    R.drawable.green_dot,
-                    "Origin: ${trip.route.origin.google_place_name}"
-                )
-                if (originMarker != null) {
-                    waypointMarkers.add(originMarker)
-                    mapView.mapScene.addMapMarker(originMarker)
-                    Log.d("App", "Origin marker added to map")
-                } else {
-                    Log.e("App", "Failed to create origin marker")
+                // Note: Device location is not marked on map when isSimulated = false
+                // The camera will automatically look at the device location
+                if (!isSimulated) {
+                    Log.d("App", "Device location mode: Camera will look at device location, no marker needed")
                 }
-            } else {
-                Log.d("App", "Device location mode: Skipping origin marker (device location replaces origin)")
-            }
 
-            // Add intermediate waypoint markers
-            val sortedWaypoints = trip.waypoints.sortedBy { it.order }
-            Log.d("App", "Adding ${sortedWaypoints.size} intermediate waypoint markers...")
-            sortedWaypoints.forEachIndexed { index, tripWaypoint ->
-                Log.d("App", "Adding waypoint $index: ${tripWaypoint.location.google_place_name}")
-                val marker = createWaypointMarker(
-                    GeoCoordinates(tripWaypoint.location.latitude, tripWaypoint.location.longitude),
-                    R.drawable.green_dot,
-                    "Waypoint: ${tripWaypoint.location.google_place_name}"
-                )
-                if (marker != null) {
-                    waypointMarkers.add(marker)
-                    mapView.mapScene.addMapMarker(marker)
-                    Log.d("App", "Waypoint $index marker added to map")
+                // Add origin marker only in simulated mode
+                if (isSimulated) {
+                    Log.d("App", "Adding origin marker...")
+                    val originMarker = createWaypointMarker(
+                        GeoCoordinates(trip.route.origin.latitude, trip.route.origin.longitude),
+                        R.drawable.green_dot,
+                        "Origin: ${trip.route.origin.google_place_name}"
+                    )
+                    if (originMarker != null) {
+                        waypointMarkers.add(originMarker)
+                        mapView.mapScene.addMapMarker(originMarker)
+                        Log.d("App", "Origin marker added to map")
+                    } else {
+                        Log.e("App", "Failed to create origin marker")
+                    }
                 } else {
-                    Log.e("App", "Failed to create waypoint $index marker")
+                    Log.d("App", "Device location mode: Skipping origin marker (device location replaces origin)")
                 }
-            }
 
-            // Add destination marker
-            Log.d("App", "Adding destination marker...")
-            val destinationMarker = createWaypointMarker(
-                GeoCoordinates(trip.route.destination.latitude, trip.route.destination.longitude),
-                R.drawable.green_dot,
-                "Destination: ${trip.route.destination.google_place_name}"
-            )
-            if (destinationMarker != null) {
-                waypointMarkers.add(destinationMarker)
-                mapView.mapScene.addMapMarker(destinationMarker)
-                Log.d("App", "Destination marker added to map")
-            } else {
-                Log.e("App", "Failed to create destination marker")
-            }
+                // Add intermediate waypoint markers
+                val sortedWaypoints = trip.waypoints.sortedBy { it.order }
+                Log.d("App", "Adding ${sortedWaypoints.size} intermediate waypoint markers...")
+                sortedWaypoints.forEachIndexed { index, tripWaypoint ->
+                    Log.d("App", "Adding waypoint $index: ${tripWaypoint.location.google_place_name}")
+                    val marker = createWaypointMarker(
+                        GeoCoordinates(tripWaypoint.location.latitude, tripWaypoint.location.longitude),
+                        R.drawable.green_dot,
+                        "Waypoint: ${tripWaypoint.location.google_place_name}"
+                    )
+                    if (marker != null) {
+                        waypointMarkers.add(marker)
+                        mapView.mapScene.addMapMarker(marker)
+                        Log.d("App", "Waypoint $index marker added to map")
+                    } else {
+                        Log.e("App", "Failed to create waypoint $index marker")
+                    }
+                }
 
-            Log.d("App", "=== COMPLETED addWaypointMarkersToMap ===")
-            Log.d("App", "Total waypoint markers added: ${waypointMarkers.size}")
-            Log.d("App", "Marker structure:")
-            waypointMarkers.forEachIndexed { index, marker ->
-                Log.d("App", "  Marker $index: ${marker.coordinates.latitude}, ${marker.coordinates.longitude}")
+                // Add destination marker
+                Log.d("App", "Adding destination marker...")
+                val destinationMarker = createWaypointMarker(
+                    GeoCoordinates(trip.route.destination.latitude, trip.route.destination.longitude),
+                    R.drawable.green_dot,
+                    "Destination: ${trip.route.destination.google_place_name}"
+                )
+                if (destinationMarker != null) {
+                    waypointMarkers.add(destinationMarker)
+                    mapView.mapScene.addMapMarker(destinationMarker)
+                    Log.d("App", "Destination marker added to map")
+                } else {
+                    Log.e("App", "Failed to create destination marker")
+                }
+
+                Log.d("App", "=== COMPLETED addWaypointMarkersToMap ===")
+                Log.d("App", "Total waypoint markers added: ${waypointMarkers.size}")
+                Log.d("App", "Marker structure:")
+                waypointMarkers.forEachIndexed { index, marker ->
+                    Log.d("App", "  Marker $index: ${marker.coordinates.latitude}, ${marker.coordinates.longitude}")
+                }
+                val markerText = if (!isSimulated) {
+                    "Added ${waypointMarkers.size} trip waypoint markers to map (device location not marked)"
+                } else {
+                    "Added ${waypointMarkers.size} waypoint markers to map"
+                }
+                messageView.updateText(markerText)
+            } ?: run {
+                Log.e("App", "Trip response is null, cannot add waypoint markers")
+                messageView.updateText("No trip data available for waypoint markers")
             }
-            val markerText = if (!isSimulated) {
-                "Added ${waypointMarkers.size} trip waypoint markers to map (device location not marked)"
-            } else {
-                "Added ${waypointMarkers.size} waypoint markers to map"
-            }
-            messageView.updateText(markerText)
-        } ?: run {
-            Log.e("App", "Trip response is null, cannot add waypoint markers")
-            messageView.updateText("No trip data available for waypoint markers")
         }
     }
 
@@ -436,8 +492,10 @@ class App(
     }
 
     private fun clearWaypointMarkers() {
-        for (marker in waypointMarkers) {
-            mapView.mapScene.removeMapMarker(marker)
+        mapView?.let { mapView ->
+            for (marker in waypointMarkers) {
+                mapView.mapScene.removeMapMarker(marker)
+            }
         }
         waypointMarkers.clear()
         Log.d("App", "Cleared waypoint markers")
@@ -505,27 +563,29 @@ class App(
     }
 
     private fun showRouteOnMap(route: Route) {
-        // Show route as polyline.
-        val routeGeoPolyline = route.geometry
-        val widthInPixels = 20f
-        val polylineColor = Color.valueOf(0f, 0.56f, 0.54f, 0.63f)
-        var routeMapPolyline: MapPolyline? = null
-        try {
-            routeMapPolyline = MapPolyline(
-                routeGeoPolyline, SolidRepresentation(
-                    MapMeasureDependentRenderSize(RenderSize.Unit.PIXELS, widthInPixels.toDouble()),
-                    polylineColor,
-                    LineCap.ROUND
+        mapView?.let { mapView ->
+            // Show route as polyline.
+            val routeGeoPolyline = route.geometry
+            val widthInPixels = 20f
+            val polylineColor = Color.valueOf(0f, 0.56f, 0.54f, 0.63f)
+            var routeMapPolyline: MapPolyline? = null
+            try {
+                routeMapPolyline = MapPolyline(
+                    routeGeoPolyline, SolidRepresentation(
+                        MapMeasureDependentRenderSize(RenderSize.Unit.PIXELS, widthInPixels.toDouble()),
+                        polylineColor,
+                        LineCap.ROUND
+                    )
                 )
-            )
-        } catch (e: MapPolyline.Representation.InstantiationException) {
-            Log.e("MapPolyline Representation Exception:", e.error.name)
-        } catch (e: MapMeasureDependentRenderSize.InstantiationException) {
-            Log.e("MapMeasureDependentRenderSize Exception:", e.error.name)
-        }
+            } catch (e: MapPolyline.Representation.InstantiationException) {
+                Log.e("MapPolyline Representation Exception:", e.error.name)
+            } catch (e: MapMeasureDependentRenderSize.InstantiationException) {
+                Log.e("MapMeasureDependentRenderSize Exception:", e.error.name)
+            }
 
-        mapView.mapScene.addMapPolyline(routeMapPolyline!!)
-        mapPolylines.add(routeMapPolyline)
+            mapView.mapScene.addMapPolyline(routeMapPolyline!!)
+            mapPolylines.add(routeMapPolyline)
+        }
     }
 
     private fun clearMap() {
@@ -536,15 +596,19 @@ class App(
     }
 
     private fun clearWaypointMapMarker() {
-        for (mapMarker in mapMarkerList) {
-            mapView.mapScene.removeMapMarker(mapMarker)
+        mapView?.let { mapView ->
+            for (mapMarker in mapMarkerList) {
+                mapView.mapScene.removeMapMarker(mapMarker)
+            }
         }
         mapMarkerList.clear()
     }
 
     private fun clearRoute() {
-        for (mapPolyline in mapPolylines) {
-            mapView.mapScene.removeMapPolyline(mapPolyline!!)
+        mapView?.let { mapView ->
+            for (mapPolyline in mapPolylines) {
+                mapView.mapScene.removeMapPolyline(mapPolyline!!)
+            }
         }
         mapPolylines.clear()
     }
@@ -565,18 +629,46 @@ class App(
     }
 
     fun detach() {
+        Log.d("App", "Detaching app - setting shutdown flag")
+        
+        // Set shutdown flag to prevent starting services during cleanup
+        navigationExample.setShuttingDown(true)
+        
         // Disables TBT guidance (if running) and enters tracking mode.
         navigationExample.stopNavigation(isCameraTrackingEnabled)
         // Disables positioning.
         navigationExample.stopLocating()
         // Disables rendering.
         navigationExample.stopRendering()
+        
+        // Cleanup network monitoring
+        cleanupNetworkMonitoring()
+        
+        Log.d("App", "App detached successfully")
+    }
+
+    /**
+     * Cleanup network monitoring resources
+     */
+    private fun cleanupNetworkMonitoring() {
+        try {
+            networkMonitor?.stopMonitoring()
+            networkMonitor = null
+            Log.d("App", "Network monitoring cleaned up successfully")
+        } catch (e: Exception) {
+            Log.e("App", "Error cleaning up network monitoring: ${e.message}", e)
+        }
     }
     
     /**
      * Gets the trip section validator for UI access
      */
     fun getTripSectionValidator(): TripSectionValidator = tripSectionValidator
+    
+    /**
+     * Gets the navigation example for cleanup operations
+     */
+    fun getNavigationExample(): NavigationExample = navigationExample
     
     /**
      * Callback to notify when route is calculated
@@ -615,7 +707,7 @@ class App(
     }
 
     companion object {
-        val DEFAULT_MAP_CENTER: GeoCoordinates = GeoCoordinates(52.520798, 13.409408)
+        val DEFAULT_MAP_CENTER: GeoCoordinates = GeoCoordinates(-1.95, 30.06)
         const val DEFAULT_DISTANCE_IN_METERS: Int = 1000 * 2
     }
 }

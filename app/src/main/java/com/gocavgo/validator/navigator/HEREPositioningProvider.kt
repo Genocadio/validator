@@ -129,6 +129,52 @@ class HEREPositioningProvider {
             updateListener = null
         }
     }
+    
+    /**
+     * Force disconnect and cleanup all HERE SDK location services
+     * This method ensures complete cleanup to prevent service connection leaks
+     */
+    fun forceDisconnect() {
+        Log.d(LOG_TAG, "Force disconnecting HERE SDK location services...")
+        
+        try {
+            if (this::locationEngine.isInitialized) {
+                // Remove all listeners first
+                updateListener?.let { 
+                    try {
+                        locationEngine.removeLocationListener(it)
+                        Log.d(LOG_TAG, "Removed location listener")
+                    } catch (e: Exception) {
+                        Log.w(LOG_TAG, "Error removing location listener: ${e.message}")
+                    }
+                }
+                
+                try {
+                    locationEngine.removeLocationStatusListener(locationStatusListener)
+                    Log.d(LOG_TAG, "Removed location status listener")
+                } catch (e: Exception) {
+                    Log.w(LOG_TAG, "Error removing location status listener: ${e.message}")
+                }
+                
+                // Stop the engine
+                if (locationEngine.isStarted) {
+                    try {
+                        locationEngine.stop()
+                        Log.d(LOG_TAG, "Location engine stopped")
+                    } catch (e: Exception) {
+                        Log.w(LOG_TAG, "Error stopping location engine: ${e.message}")
+                    }
+                }
+            }
+            
+            // Clear references
+            updateListener = null
+            
+            Log.d(LOG_TAG, "HERE SDK location services force disconnected")
+        } catch (e: Exception) {
+            Log.e(LOG_TAG, "Error during force disconnect: ${e.message}", e)
+        }
+    }
 
     companion object {
         private val LOG_TAG: String = HEREPositioningProvider::class.java.name
