@@ -54,6 +54,10 @@ class MqttService private constructor(
         private const val FOREGROUND_RECONNECT_DELAY_MS = 2000L
         private const val MAX_QUEUE_SIZE = 100
         private const val MAX_RECONNECT_BACKOFF_MS = 60000L // Max 1 minute between attempts
+        
+        // Background optimization constants
+        private const val FOREGROUND_HEARTBEAT_INTERVAL_MS = 30000L // 30s when active
+        private const val BACKGROUND_HEARTBEAT_INTERVAL_MS = 120000L // 2min when background
 
         // Broadcast action for UI when a booking bundle is saved locally
         const val ACTION_BOOKING_BUNDLE_SAVED = "com.gocavgo.validator.BOOKING_BUNDLE_SAVED"
@@ -102,6 +106,9 @@ class MqttService private constructor(
     
     // Booking bundle callback for direct UI notification
     private var bookingBundleCallback: ((String, String, String, String, Int, Boolean) -> Unit)? = null
+    
+    // Notification manager for background notifications
+    private var notificationManager: MqttNotificationManager? = null
 
     // Connection state management
     private val isConnecting = AtomicBoolean(false)
@@ -542,14 +549,15 @@ class MqttService private constructor(
         heartbeatJob = ioScope.launch {
             try {
                 while (isActive && isServiceActive.get()) {
-                    delay(HEARTBEAT_INTERVAL_MS)
+                    val heartbeatInterval = getHeartbeatInterval()
+                    delay(heartbeatInterval)
                     
                     if (isConnected() && !isDisconnecting.get()) {
                         try {
                             // Send heartbeat
                             sendHeartbeat()
                             lastHeartbeatTime.set(System.currentTimeMillis())
-                            Log.d(TAG, "Heartbeat sent successfully")
+                            Log.d(TAG, "Heartbeat sent successfully (interval: ${heartbeatInterval}ms)")
                         } catch (e: Exception) {
                             Log.e(TAG, "Heartbeat send failed: ${e.message}", e)
                             
@@ -573,6 +581,17 @@ class MqttService private constructor(
             } catch (e: Exception) {
                 Log.e(TAG, "Heartbeat error: ${e.message}", e)
             }
+        }
+    }
+    
+    /**
+     * Get heartbeat interval based on app foreground state
+     */
+    private fun getHeartbeatInterval(): Long {
+        return if (isAppInForeground.get()) {
+            FOREGROUND_HEARTBEAT_INTERVAL_MS
+        } else {
+            BACKGROUND_HEARTBEAT_INTERVAL_MS
         }
     }
     
@@ -1319,6 +1338,13 @@ class MqttService private constructor(
 
                         Log.d(TAG, "Broadcasting booking bundle saved event: trip=${bundle.trip_id}, passenger=$passengerName, pickup=$pickup, dropoff=$dropoff, tickets=$numTickets, paid=$isPaid")
                         
+                        // Show notification if app is not in foreground
+                        if (!isAppInForeground.get()) {
+                            notificationManager?.showBookingUpdateNotification(
+                                bundle.trip_id, passengerName, pickup, dropoff, numTickets, isPaid
+                            )
+                        }
+                        
                         // Send broadcast (for any activity listening)
                         val intent = Intent(ACTION_BOOKING_BUNDLE_SAVED).apply {
                             putExtra("trip_id", bundle.trip_id)
@@ -1550,6 +1576,11 @@ class MqttService private constructor(
             val tripResponse = convertBackendTripToAndroid(tripEvent.data)
             Log.d(TAG, "Converted trip response: $tripResponse")
 
+            // Show notification if app is not in foreground
+            if (!isAppInForeground.get()) {
+                notificationManager?.showTripUpdateNotification(tripEvent)
+            }
+
             // Handle trip event logic here
             // You can add callbacks or listeners for trip events
 
@@ -1753,6 +1784,13 @@ class MqttService private constructor(
      */
     fun setBookingBundleCallback(callback: ((String, String, String, String, Int, Boolean) -> Unit)?) {
         bookingBundleCallback = callback
+    }
+    
+    /**
+     * Set notification manager for background notifications
+     */
+    fun setNotificationManager(manager: MqttNotificationManager?) {
+        notificationManager = manager
     }
 
     /**

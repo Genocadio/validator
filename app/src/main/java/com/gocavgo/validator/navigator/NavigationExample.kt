@@ -38,6 +38,7 @@ import com.here.sdk.trafficawarenavigation.DynamicRoutingEngine.StartException
 import com.here.sdk.trafficawarenavigation.DynamicRoutingEngineOptions
 import com.here.sdk.trafficawarenavigation.DynamicRoutingListener
 import com.here.time.Duration
+import com.here.sdk.navigation.Navigator
 
 // Shows how to start and stop turn-by-turn navigation on a car route.
 // By default, tracking mode is enabled. When navigation is stopped, tracking mode is enabled again.
@@ -50,6 +51,7 @@ class NavigationExample(
     private val tripSectionValidator: TripSectionValidator
 ) {
     private var visualNavigator: VisualNavigator
+    private var navigator: Navigator
     // A class to receive real location events.
     private val herePositioningProvider: HEREPositioningProvider = HEREPositioningProvider()
     // A class to receive simulated location events.
@@ -67,6 +69,7 @@ class NavigationExample(
         try {
             // Without a route set, this starts tracking mode.
             visualNavigator = VisualNavigator()
+            navigator = Navigator()
         } catch (e: InstantiationErrorException) {
             throw RuntimeException("Initialization of VisualNavigator failed: " + e.error.name)
         }
@@ -261,7 +264,7 @@ class NavigationExample(
     
     fun hasValidLocation(): Boolean {
         val location = herePositioningProvider.getLastKnownLocation()
-        return location != null && location.coordinates != null
+        return location != null
     }
     
     fun isLocationProviderActive(): Boolean {

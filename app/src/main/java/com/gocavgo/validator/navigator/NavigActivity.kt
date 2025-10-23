@@ -25,6 +25,7 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -57,7 +58,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.MutableState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -77,7 +77,6 @@ import com.here.sdk.core.errors.InstantiationErrorException
 import com.here.sdk.mapview.MapError
 import com.here.sdk.mapview.MapFeatureModes
 import com.here.sdk.mapview.MapFeatures
-import com.here.sdk.mapview.MapScene
 import com.here.sdk.mapview.MapScheme
 import com.here.sdk.mapview.MapView
 import com.here.sdk.units.core.utils.EnvironmentLogger
@@ -103,6 +102,19 @@ class NavigActivity: ComponentActivity() {
     private var mapView: MapView? = null
     private var app: App? = null
     private var messageViewUpdater: MessageViewUpdater? = null
+    
+    // Modern permission handling using Activity Result API
+    private val requestPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val allGranted = permissions.values.all { it }
+        if (allGranted) {
+            Log.d(TAG, "All permissions granted")
+            loadMapScene()
+        } else {
+            Log.e(TAG, "Permissions denied by user.")
+        }
+    }
 
     // Trip data
     private var tripResponse: TripResponse? = null
@@ -160,22 +172,11 @@ class NavigActivity: ComponentActivity() {
 
             tripResponse = databaseManager.getTripById(tripId)
             if (tripResponse == null) {
-                Log.e(TAG, "Trip with ID $tripId not found in database. Cannot start navigation.")
                 finish()
                 return@launch
             }
 
-            Log.d(TAG, "=== Trip data loaded successfully ===")
-            Log.d(TAG, "Trip loaded: ${tripResponse?.id}")
-            Log.d(TAG, "Origin: ${tripResponse?.route?.origin?.google_place_name}")
-            Log.d(TAG, "Destination: ${tripResponse?.route?.destination?.google_place_name}")
-            Log.d(TAG, "Waypoints: ${tripResponse?.waypoints?.size}")
-            Log.d(TAG, "App instance: $app")
-
-            // Update the App with the loaded trip data if it's available
-            Log.d(TAG, "About to call app?.updateTripData...")
             if (app == null) {
-                Log.d(TAG, "App instance not yet created. Trip data will be passed when App is ready.")
                 messageViewUpdater?.updateText("Trip data loaded. Waiting for map...")
             } else {
                 app?.updateTripData(tripResponse, isSimulated)
@@ -235,11 +236,6 @@ class NavigActivity: ComponentActivity() {
             MapView(context).apply {
                 mapView = this
                 mapView?.onCreate(savedInstanceState)
-
-                // Shows an example of how to present application terms and a privacy policy dialog as
-                // required by legal requirements when using HERE Positioning.
-                // See the Positioning section in our Developer Guide for more details.
-                // Afterwards, Android permissions need to be checked to allow using the device's sensors.
                 val privacyHelper = HEREPositioningTermsAndPrivacyHelper(context)
                 privacyHelper.showAppTermsAndPrivacyPolicyDialogIfNeeded(object :
                     HEREPositioningTermsAndPrivacyHelper.OnAgreedListener {
@@ -403,61 +399,51 @@ class NavigActivity: ComponentActivity() {
 
     private fun handleAndroidPermissions() {
         permissionsRequestor = PermissionsRequestor(this)
-        permissionsRequestor!!.request(object :
-            PermissionsRequestor.ResultListener {
-            override fun permissionsGranted() {
-                loadMapScene()
-            }
-
-            override fun permissionsDenied() {
-                Log.e(TAG, "Permissions denied by user.")
-            }
-        })
+        val missingPermissions = permissionsRequestor!!.getPermissionsToRequest()
+        
+        if (missingPermissions.isEmpty()) {
+            Log.d(TAG, "All permissions already granted")
+            loadMapScene()
+        } else {
+            Log.d(TAG, "Requesting permissions: ${missingPermissions.joinToString()}")
+            requestPermissionLauncher.launch(missingPermissions)
+        }
     }
 
-    override fun onRequestPermissionsResult(
-        requestCode: Int,
-        permissions: Array<String>,
-        grantResults: IntArray
-    ) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        permissionsRequestor!!.onRequestPermissionsResult(requestCode, grantResults)
-    }
 
     private fun loadMapScene() {
         mapView!!.mapScene.loadScene(
-            MapScheme.NORMAL_DAY,
-            MapScene.LoadSceneCallback { mapError: MapError? ->
-                if (mapError == null) {
-                    // Start the app that contains the logic to calculate routes & start TBT guidance.
-                    app = App(applicationContext, mapView!!, messageViewUpdater!!, tripResponse)
-                    Log.d(TAG, "App instance created: $app")
-                    
-                    // Set up route calculation callback
-                    app?.setOnRouteCalculatedCallback {
-                        updateRouteCalculationStatus(true)
-                    }
+            MapScheme.NORMAL_DAY
+        ) { mapError: MapError? ->
+            if (mapError == null) {
+                // Start the app that contains the logic to calculate routes & start TBT guidance.
+                app = App(applicationContext, mapView!!, messageViewUpdater!!, tripResponse)
+                Log.d(TAG, "App instance created: $app")
 
-                    // Enable traffic flows and 3D landmarks, by default.
-                    val mapFeatures: MutableMap<String, String> = HashMap()
-                    mapFeatures[MapFeatures.TRAFFIC_FLOW] = MapFeatureModes.TRAFFIC_FLOW_WITH_FREE_FLOW
-                    mapFeatures[MapFeatures.LOW_SPEED_ZONES] = MapFeatureModes.LOW_SPEED_ZONES_ALL
-                    mapFeatures[MapFeatures.LANDMARKS] = MapFeatureModes.LANDMARKS_TEXTURED
-                    mapView!!.mapScene.enableFeatures(mapFeatures)
-
-                    // Now that App is created, update it with trip data if available
-                    if (tripResponse != null) {
-                        Log.d(TAG, "Updating App with trip data after map scene loaded")
-                        app?.updateTripData(tripResponse, isSimulated)
-                    }
-                } else {
-                    Log.d(
-                        TAG,
-                        "Loading map failed: " + mapError.name
-                    )
+                // Set up route calculation callback
+                app?.setOnRouteCalculatedCallback {
+                    updateRouteCalculationStatus(true)
                 }
+
+                // Enable traffic flows and 3D landmarks, by default.
+                val mapFeatures: MutableMap<String, String> = HashMap()
+                mapFeatures[MapFeatures.TRAFFIC_FLOW] = MapFeatureModes.TRAFFIC_FLOW_WITH_FREE_FLOW
+                mapFeatures[MapFeatures.LOW_SPEED_ZONES] = MapFeatureModes.LOW_SPEED_ZONES_ALL
+                mapFeatures[MapFeatures.LANDMARKS] = MapFeatureModes.LANDMARKS_TEXTURED
+                mapView!!.mapScene.enableFeatures(mapFeatures)
+
+                // Now that App is created, update it with trip data if available
+                if (tripResponse != null) {
+                    Log.d(TAG, "Updating App with trip data after map scene loaded")
+                    app?.updateTripData(tripResponse, isSimulated)
+                }
+            } else {
+                Log.d(
+                    TAG,
+                    "Loading map failed: " + mapError.name
+                )
             }
-        )
+        }
     }
 
     override fun onPause() {
@@ -639,7 +625,8 @@ class NavigActivity: ComponentActivity() {
                     waypoint.remainingDistanceInMeters?.let { distanceInMeters ->
                         val distanceKm = distanceInMeters / 1000.0
                         if (distanceKm >= 1.0) {
-                            remainingInfo.add(String.format("%.1f km", distanceKm))
+                            val add = remainingInfo.add(String.format("%.1f km", distanceKm))
+                            add
                         } else {
                             remainingInfo.add("${distanceInMeters.toInt()}m")
                         }

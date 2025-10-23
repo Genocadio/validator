@@ -27,22 +27,18 @@ import java.util.Locale
 
 // A simple class that uses Android's TextToSpeech engine to speak texts.
 class VoiceAssistant(context: Context?, voiceAssistantListener: VoiceAssistantListener) {
-    private val textToSpeech: TextToSpeech
+    private val textToSpeech: TextToSpeech = TextToSpeech(context!!.applicationContext) { status: Int ->
+        if (status != TextToSpeech.SUCCESS) {
+            Log.d(TAG, ("ERROR: Initialization of Android's TextToSpeech failed."))
+            return@TextToSpeech
+        }
+        voiceAssistantListener.onInitialized()
+    }
     private var utteranceId: String? = null
     private var messageId = 0
 
     interface VoiceAssistantListener {
         fun onInitialized()
-    }
-
-    init {
-        textToSpeech = TextToSpeech(context!!.applicationContext) { status: Int ->
-            if (status != TextToSpeech.SUCCESS) {
-                Log.d(TAG, ("ERROR: Initialization of Android's TextToSpeech failed."))
-                return@TextToSpeech
-            }
-            voiceAssistantListener.onInitialized()
-        }
     }
 
     fun isLanguageAvailable(locale: Locale?): Boolean {

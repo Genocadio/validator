@@ -35,7 +35,6 @@ import com.here.sdk.mapview.MapPolyline
 import com.here.sdk.mapview.MapPolyline.SolidRepresentation
 import com.here.sdk.mapview.MapView
 import com.here.sdk.mapview.RenderSize
-import com.here.sdk.routing.CalculateRouteCallback
 import com.here.sdk.routing.Route
 import com.here.sdk.routing.RoutingError
 import com.here.sdk.routing.Waypoint
@@ -53,7 +52,6 @@ class App(
     private val mapMarkerList: MutableList<MapMarker> = ArrayList()
     private val mapPolylines: MutableList<MapPolyline?> = ArrayList()
     private var startWaypoint: Waypoint? = null
-    private var destinationWaypoint: Waypoint? = null
     private val routeCalculator: RouteCalculator
     private val navigationExample: NavigationExample
     private var isCameraTrackingEnabled = true
@@ -61,7 +59,6 @@ class App(
 
     // Waypoint markers for trip navigation
     private val waypointMarkers: MutableList<MapMarker> = ArrayList()
-    private var currentWaypointIndex = 0
     
     // Trip section validator for route validation and waypoint tracking (now includes MQTT functionality)
     private val tripSectionValidator: TripSectionValidator = TripSectionValidator(context)
@@ -85,43 +82,6 @@ class App(
         }
     }
 
-    // Calculate a route and start navigation using a location simulator.
-    // Start is map center and destination location is set random within viewport,
-    // unless a destination is set via long press.
-    fun addRouteSimulatedLocation() {
-        calculateRoute(true)
-    }
-
-    // Calculate a route and start navigation using locations from device.
-    // Start is current location and destination is set random within viewport,
-    // unless a destination is set via long press.
-    fun addRouteDeviceLocation() {
-        // Check if location provider is active and has a valid location
-        if (!navigationExample.isLocationProviderActive()) {
-            Log.w("App", "Location provider not active, starting it now...")
-            navigationExample.startLocationProvider()
-            messageView.updateText("Starting GPS... Please wait for location fix.")
-            
-            // Wait a moment and try again
-            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                if (navigationExample.hasValidLocation()) {
-                    calculateRoute(false)
-                } else {
-                    messageView.updateText("Waiting for GPS location... This may take a few moments.")
-                    showDialog("GPS Location", "Acquiring GPS location. Please ensure you have a clear view of the sky and try again in a moment.")
-                }
-            }, 2000)
-            return
-        }
-        
-        if (!navigationExample.hasValidLocation()) {
-            messageView.updateText("Waiting for GPS location... Please wait.")
-            showDialog("GPS Location", "GPS is starting up. Please wait a moment for location acquisition.")
-            return
-        }
-        
-        calculateRoute(false)
-    }
 
 
     // Update trip data when it becomes available
@@ -171,14 +131,14 @@ class App(
             override fun run() {
                 attempts++
                 if (navigationExample.hasValidLocation()) {
-                    Log.d("App", "GPS location acquired after ${attempts} attempts")
+                    Log.d("App", "GPS location acquired after $attempts attempts")
                     messageView.updateText("GPS location acquired. Calculating route...")
                     calculateRouteFromTrip(isSimulated)
                 } else if (attempts < maxAttempts) {
                     messageView.updateText("Waiting for GPS location... (${attempts}/${maxAttempts})")
                     handler.postDelayed(this, 1000) // Check every second
                 } else {
-                    Log.w("App", "GPS location not acquired after ${maxAttempts} attempts, proceeding anyway")
+                    Log.w("App", "GPS location not acquired after $maxAttempts attempts, proceeding anyway")
                     messageView.updateText("GPS timeout. Calculating route with trip waypoints...")
                     calculateRouteFromTrip(isSimulated)
                 }
@@ -199,32 +159,6 @@ class App(
         isCameraTrackingEnabled = false
     }
 
-    private fun calculateRoute(isSimulated: Boolean) {
-        clearMap()
-
-        if (!determineRouteWaypoints(isSimulated)) {
-            return
-        }
-
-        // Calculates a car route.
-        startWaypoint?.let { startWaypoint ->
-            destinationWaypoint?.let { destinationWaypoint ->
-                routeCalculator.calculateRoute(
-                    startWaypoint,
-                    destinationWaypoint,
-                    CalculateRouteCallback { routingError: RoutingError?, routes: List<Route>? ->
-                        if (routingError == null) {
-                            val route: Route = routes!![0]
-                            showRouteOnMap(route)
-                            showRouteDetails(route, isSimulated)
-                        } else {
-                            showDialog("Error while calculating a route:", routingError.toString())
-                        }
-                    }
-                )
-            }
-        }
-    }
 
     private fun calculateRouteFromTrip(isSimulated: Boolean) {
         Log.d("App", "Starting calculateRouteFromTrip with isSimulated: $isSimulated")
@@ -253,52 +187,26 @@ class App(
 
         // Calculate route with multiple waypoints
         routeCalculator.calculateRouteWithWaypoints(
-            waypoints,
-            CalculateRouteCallback { routingError: RoutingError?, routes: List<Route>? ->
-                if (routingError == null) {
-                    val route: Route = routes!![0]
-                    Log.d("App", "Route calculated successfully. Length: ${route.lengthInMeters}m, Duration: ${route.duration.seconds}s")
-                    showRouteOnMap(route)
+            waypoints
+        ) { routingError: RoutingError?, routes: List<Route>? ->
+            if (routingError == null) {
+                val route: Route = routes!![0]
+                Log.d(
+                    "App",
+                    "Route calculated successfully. Length: ${route.lengthInMeters}m, Duration: ${route.duration.seconds}s"
+                )
+                showRouteOnMap(route)
 
-                    // Add waypoint markers after route is calculated
-                    Log.d("App", "About to add waypoint markers...")
-                    addWaypointMarkersToMap(isSimulated)
+                // Add waypoint markers after route is calculated
+                Log.d("App", "About to add waypoint markers...")
+                addWaypointMarkersToMap(isSimulated)
 
-                    showRouteDetails(route, isSimulated)
-                } else {
-                    Log.e("App", "Route calculation failed: $routingError")
-                    showDialog("Error while calculating a route:", routingError.toString())
-                }
-            }
-        )
-    }
-
-    private fun determineRouteWaypoints(isSimulated: Boolean): Boolean {
-        if (!isSimulated && navigationExample.getLastKnownLocation() == null) {
-            showDialog("Error", "No GPS location found.")
-            return false
-        }
-
-        // When using real GPS locations, we always start from the current location of user.
-        if (!isSimulated) {
-            val location: Location? = navigationExample.getLastKnownLocation()
-            location?.let {
-                startWaypoint = Waypoint(it.coordinates)
-                // If a driver is moving, the bearing value can help to improve the route calculation.
-                startWaypoint!!.headingInDegrees = it.bearingInDegrees
-                mapView.camera.lookAt(it.coordinates)
+                showRouteDetails(route, isSimulated)
+            } else {
+                Log.e("App", "Route calculation failed: $routingError")
+                showDialog("Error while calculating a route:", routingError.toString())
             }
         }
-
-        if (startWaypoint == null) {
-            startWaypoint = Waypoint(createRandomGeoCoordinatesAroundMapCenter())
-        }
-
-        if (destinationWaypoint == null) {
-            destinationWaypoint = Waypoint(createRandomGeoCoordinatesAroundMapCenter())
-        }
-
-        return true
     }
 
     private fun determineRouteWaypointsFromTrip(isSimulated: Boolean): Boolean {
@@ -340,8 +248,9 @@ class App(
             Log.d("App", "Destination: ${trip.route.destination.google_place_name} (${trip.route.destination.latitude}, ${trip.route.destination.longitude})")
             Log.d("App", "Intermediate waypoints: ${trip.waypoints.size}")
 
-            // Add device location first if not in simulation mode and location is available
+            // Add device location or origin based on simulation mode
             if (!isSimulated) {
+                // Device location mode: use device location, skip trip origin
                 val deviceLocation = navigationExample.getLastKnownLocation()
                 if (deviceLocation != null) {
                     val deviceWaypoint = Waypoint(deviceLocation.coordinates).apply {
@@ -349,24 +258,34 @@ class App(
                         headingInDegrees = deviceLocation.bearingInDegrees
                     }
                     waypoints.add(deviceWaypoint)
-                    Log.d("App", "Added device location waypoint: ${deviceLocation.coordinates.latitude}, ${deviceLocation.coordinates.longitude}")
+                    Log.d("App", "Added device location waypoint (replacing trip origin): ${deviceLocation.coordinates.latitude}, ${deviceLocation.coordinates.longitude}")
                 } else {
-                    Log.w("App", "Device location not yet available, starting with trip origin")
-                    // This is OK - navigation will use device location when it becomes available
+                    Log.w("App", "Device location not yet available, starting with trip origin as fallback")
+                    // Fallback to trip origin only if device location unavailable
+                    val origin = Waypoint(
+                        GeoCoordinates(
+                            trip.route.origin.latitude,
+                            trip.route.origin.longitude
+                        )
+                    ).apply {
+                        type = WaypointType.STOPOVER
+                    }
+                    waypoints.add(origin)
+                    Log.d("App", "Added origin waypoint (fallback)")
                 }
+            } else {
+                // Simulated mode: always use trip origin
+                val origin = Waypoint(
+                    GeoCoordinates(
+                        trip.route.origin.latitude,
+                        trip.route.origin.longitude
+                    )
+                ).apply {
+                    type = WaypointType.STOPOVER
+                }
+                waypoints.add(origin)
+                Log.d("App", "Added origin waypoint")
             }
-
-            // Add origin
-            val origin = Waypoint(
-                GeoCoordinates(
-                    trip.route.origin.latitude,
-                    trip.route.origin.longitude
-                )
-            ).apply {
-                type = WaypointType.STOPOVER
-            }
-            waypoints.add(origin)
-            Log.d("App", "Added origin waypoint")
 
             // Add intermediate waypoints sorted by order
             val sortedWaypoints = trip.waypoints.sortedBy { it.order }
@@ -426,19 +345,23 @@ class App(
                 Log.d("App", "Device location mode: Camera will look at device location, no marker needed")
             }
 
-            // Add origin marker
-            Log.d("App", "Adding origin marker...")
-            val originMarker = createWaypointMarker(
-                GeoCoordinates(trip.route.origin.latitude, trip.route.origin.longitude),
-                R.drawable.green_dot,
-                "Origin: ${trip.route.origin.google_place_name}"
-            )
-            if (originMarker != null) {
-                waypointMarkers.add(originMarker)
-                mapView.mapScene.addMapMarker(originMarker)
-                Log.d("App", "Origin marker added to map")
+            // Add origin marker only in simulated mode
+            if (isSimulated) {
+                Log.d("App", "Adding origin marker...")
+                val originMarker = createWaypointMarker(
+                    GeoCoordinates(trip.route.origin.latitude, trip.route.origin.longitude),
+                    R.drawable.green_dot,
+                    "Origin: ${trip.route.origin.google_place_name}"
+                )
+                if (originMarker != null) {
+                    waypointMarkers.add(originMarker)
+                    mapView.mapScene.addMapMarker(originMarker)
+                    Log.d("App", "Origin marker added to map")
+                } else {
+                    Log.e("App", "Failed to create origin marker")
+                }
             } else {
-                Log.e("App", "Failed to create origin marker")
+                Log.d("App", "Device location mode: Skipping origin marker (device location replaces origin)")
             }
 
             // Add intermediate waypoint markers
@@ -495,7 +418,7 @@ class App(
 
     private fun createWaypointMarker(geoCoordinates: GeoCoordinates, resourceId: Int, title: String): MapMarker? {
         Log.d("App", "Creating waypoint marker at: ${geoCoordinates.latitude}, ${geoCoordinates.longitude}")
-        Log.d("App", "Using resource ID: $resourceId")
+        Log.d("App", "Using resource ID: $resourceId $title")
 
         return try {
             val mapImage = MapImageFactory.fromResource(context.resources, resourceId)
@@ -520,17 +443,6 @@ class App(
         Log.d("App", "Cleared waypoint markers")
     }
 
-    fun markWaypointAsPassed(waypointIndex: Int) {
-        if (waypointIndex >= 0 && waypointIndex < waypointMarkers.size) {
-            // Remove the passed waypoint marker
-            val marker = waypointMarkers[waypointIndex]
-            mapView.mapScene.removeMapMarker(marker)
-            waypointMarkers.removeAt(waypointIndex)
-
-            Log.d("App", "Marked waypoint $waypointIndex as passed and removed from map")
-            messageView.updateText("Waypoint $waypointIndex passed")
-        }
-    }
 
 
     private fun showRouteDetails(route: Route, isSimulated: Boolean) {
@@ -548,6 +460,7 @@ class App(
             
             val verificationPassed = tripSectionValidator.verifyRouteSections(tripResponse!!, route, isSimulated, deviceLocation)
             if (verificationPassed) {
+                Log.d("App", "Route Verified well")
             } else {
                 Log.e("App", "❌ Route verification failed - continuing with navigation anyway")
             }
@@ -578,9 +491,6 @@ class App(
 //
 //        }
 
-        val routeDetails =
-            (("Travel Time: " + timeUtils.formatTime(estimatedTravelTimeInSeconds)
-                    ) + ", Length: " + timeUtils.formatLength(lengthInMeters))
 
         // Automatically start navigation without confirmation
 //        Log.d("App", "Route Details: $routeDetails")
@@ -639,23 +549,6 @@ class App(
         mapPolylines.clear()
     }
 
-
-    private fun createRandomGeoCoordinatesAroundMapCenter(): GeoCoordinates {
-        val centerGeoCoordinates = mapViewCenter
-        val lat = centerGeoCoordinates.latitude
-        val lon = centerGeoCoordinates.longitude
-        return GeoCoordinates(
-            getRandom(lat - 0.02, lat + 0.02),
-            getRandom(lon - 0.02, lon + 0.02)
-        )
-    }
-
-    private fun getRandom(min: Double, max: Double): Double {
-        return min + Math.random() * (max - min)
-    }
-
-    private val mapViewCenter: GeoCoordinates
-        get() = mapView.camera.state.targetCoordinates
 
 
     private fun showDialog(title: String, text: String) {

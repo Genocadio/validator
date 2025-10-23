@@ -1,12 +1,7 @@
 package com.gocavgo.validator.service
 
-import android.util.Log
 import com.gocavgo.validator.dataclass.TripResponse
-import com.gocavgo.validator.dataclass.TripWaypoint
 import com.gocavgo.validator.util.Logging
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import java.util.concurrent.CompletableFuture
 
 /**
@@ -169,11 +164,11 @@ class RouteProgressMqttService private constructor() {
                         remainingTimeToDestination = 0L, // Trip completed
                         remainingDistanceToDestination = 0.0 // Trip completed
                     )
-                    
+
                     mqtt.sendTripEventMessage(
                         event = "progress_update",
                         tripData = tripData
-                    )?.whenComplete { result, throwable ->
+                    ).whenComplete { result, throwable ->
                         if (throwable != null) {
                             Logging.e(TAG, "Failed to send trip completion event: ${throwable.message}", throwable)
                         } else {
@@ -194,23 +189,4 @@ class RouteProgressMqttService private constructor() {
         }
     }
 
-    
-    /**
-     * Format duration in seconds to human-readable format
-     */
-    private fun formatDuration(seconds: Long): String {
-        return try {
-            when {
-                seconds < 60 -> "${seconds}s"
-                seconds < 3600 -> "${seconds / 60}m ${seconds % 60}s"
-                else -> {
-                    val hours = seconds / 3600
-                    val minutes = (seconds % 3600) / 60
-                    "${hours}h ${minutes}m"
-                }
-            }
-        } catch (e: Exception) {
-            "Unknown"
-        }
-    }
 }

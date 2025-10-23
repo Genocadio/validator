@@ -141,34 +141,13 @@ class TripSectionValidator(private val context: Context) {
         val actualSections = route.sections.size
         
         if (isDeviceLocationMode) {
-            // Check if device location is close to trip origin
-            val deviceLocationCloseToOrigin = deviceLocation?.let { deviceLoc ->
-                val tripOrigin = GeoCoordinates(tripResponse.route.origin.latitude, tripResponse.route.origin.longitude)
-                val distance = calculateDistance(deviceLoc, tripOrigin)
-                val isClose = areLocationsClose(deviceLoc, tripOrigin)
-                
-                Log.d(TAG, "🔍 DEVICE LOCATION ANALYSIS:")
-                Log.d(TAG, "  Device location: ${deviceLoc.latitude}, ${deviceLoc.longitude}")
-                Log.d(TAG, "  Trip origin: ${tripOrigin.latitude}, ${tripOrigin.longitude}")
-                Log.d(TAG, "  Distance: ${String.format("%.2f", distance)}m")
-                Log.d(TAG, "  Within ${LOCATION_PROXIMITY_THRESHOLD_METERS}m threshold: $isClose")
-                
-                isClose
-            } ?: false
-            
-            if (deviceLocationCloseToOrigin) {
-                // Device location is close to trip origin - treat as same location
-                expectedSections = tripLocations - 1 // n-1 sections for n locations (same as simulated)
-                deviceLocationOffset = 0 // No extra waypoints
-                Log.d(TAG, "🎯 DEVICE LOCATION = TRIP ORIGIN: Route starts from trip origin (device location is close)")
-                Log.d(TAG, "  Route structure: Trip Origin (Device Location) -> Waypoints -> Destination")
-            } else {
-                // Device location is different from trip origin - need extra waypoint
-                expectedSections = tripLocations // n sections for n+1 locations (device + trip locations)
-                deviceLocationOffset = 1 // One extra waypoint at the start (device location)
-                Log.d(TAG, "🔍 DEVICE LOCATION ≠ TRIP ORIGIN: Route starts from current device location")
-                Log.d(TAG, "  Route structure: Device Location -> Trip Origin -> Waypoints -> Destination")
-            }
+            // Device location completely replaces trip origin
+            // Route structure: Device Location -> Waypoints -> Destination (no trip origin)
+            // Same as simulated mode: n-1 sections for n locations
+            expectedSections = tripLocations - 1
+            deviceLocationOffset = 0 // No extra waypoints (device location replaces origin)
+            Log.d(TAG, "🔍 DEVICE LOCATION MODE: Route starts from device location (replaces trip origin)")
+            Log.d(TAG, "  Route structure: Device Location -> Waypoints -> Destination")
         } else {
             // In simulated mode, route starts from trip origin
             expectedSections = tripLocations - 1 // n-1 sections for n locations
@@ -503,13 +482,14 @@ class TripSectionValidator(private val context: Context) {
     private fun buildWaypointNamesList(tripResponse: TripResponse, includeDeviceLocation: Boolean = false): List<String> {
         val names = mutableListOf<String>()
         
-        // Add device location if in device location mode
+        // Add starting location based on mode
         if (includeDeviceLocation) {
+            // Device location mode: device location replaces origin
             names.add("Device Location: Current Position")
+        } else {
+            // Simulated mode: use trip origin
+            names.add("Origin: ${tripResponse.route.origin.custom_name}")
         }
-        
-        // Add origin
-        names.add("Origin: ${tripResponse.route.origin.custom_name}")
         
         // Add intermediate waypoints sorted by order
         val sortedWaypoints = tripResponse.waypoints.sortedBy { it.order }

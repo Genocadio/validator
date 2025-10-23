@@ -53,7 +53,7 @@ class PermissionsRequestor(private val activity: Activity) {
         }
     }
 
-    private fun getPermissionsToRequest(): Array<String> {
+    fun getPermissionsToRequest(): Array<String> {
         val permissionList = mutableListOf<String>()
         try {
             val packageName = activity.packageName

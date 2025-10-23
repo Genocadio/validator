@@ -33,28 +33,34 @@ import com.gocavgo.validator.security.VehicleSecurityManager
 import com.gocavgo.validator.dataclass.TripResponse
 import com.gocavgo.validator.dataclass.TripStatus
 import com.gocavgo.validator.database.DatabaseManager
+import com.gocavgo.validator.service.MqttForegroundService
+import com.gocavgo.validator.service.MqttHealthCheckWorker
+import android.Manifest
+import android.os.Build
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.core.app.ActivityCompat
 import com.gocavgo.validator.service.MqttService
 import com.gocavgo.validator.util.Logging
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.withTimeout
-import kotlinx.coroutines.TimeoutCancellationException
-import kotlinx.coroutines.withContext
 import com.here.sdk.core.engine.AuthenticationMode
 import com.here.sdk.core.engine.SDKNativeEngine
 import com.here.sdk.core.engine.SDKOptions
 import com.here.sdk.core.errors.InstantiationErrorException
-import com.gocavgo.validator.BuildConfig
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 
 
 class MainActivity : ComponentActivity() {
     companion object {
         private const val TAG = "MainActivity"
+        private const val NOTIFICATION_PERMISSION_CODE = 1001
     }
 
     private var networkMonitor: NetworkMonitor? = null
@@ -290,6 +296,81 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * Initialize MQTT background services
+     */
+    private fun initializeMqttBackgroundServices() {
+        try {
+            Logging.d(TAG, "Initializing MQTT background services...")
+            
+            // Request notification permission for Android 13+
+            requestNotificationPermission()
+            
+            // Start MQTT foreground service
+            startMqttForegroundService()
+            
+            // Schedule WorkManager health checks
+            MqttHealthCheckWorker.schedule(this)
+            
+            Logging.d(TAG, "MQTT background services initialized successfully")
+        } catch (e: Exception) {
+            Logging.e(TAG, "Failed to initialize MQTT background services: ${e.message}", e)
+        }
+    }
+    
+    /**
+     * Request notification permission for Android 13+
+     */
+    private fun requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) 
+                != PackageManager.PERMISSION_GRANTED) {
+                ActivityCompat.requestPermissions(
+                    this,
+                    arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                    NOTIFICATION_PERMISSION_CODE
+                )
+            }
+        }
+    }
+    
+    /**
+     * Start MQTT foreground service
+     */
+    private fun startMqttForegroundService() {
+        try {
+            val serviceIntent = Intent(this, MqttForegroundService::class.java).apply {
+                action = MqttForegroundService.ACTION_START_SERVICE
+            }
+            
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(serviceIntent)
+            } else {
+                startService(serviceIntent)
+            }
+            
+            Logging.d(TAG, "MQTT foreground service started")
+        } catch (e: Exception) {
+            Logging.e(TAG, "Failed to start MQTT foreground service: ${e.message}", e)
+        }
+    }
+    
+    /**
+     * Stop MQTT foreground service
+     */
+    private fun stopMqttForegroundService() {
+        try {
+            val serviceIntent = Intent(this, MqttForegroundService::class.java).apply {
+                action = MqttForegroundService.ACTION_STOP_SERVICE
+            }
+            startService(serviceIntent)
+            
+            Logging.d(TAG, "MQTT foreground service stopped")
+        } catch (e: Exception) {
+            Logging.e(TAG, "Failed to stop MQTT foreground service: ${e.message}", e)
+        }
+    }
+    
     private fun initializeManagers() {
         vehicleSecurityManager = VehicleSecurityManager(this)
         remoteDataManager = RemoteDataManager.getInstance()
@@ -573,6 +654,9 @@ class MainActivity : ComponentActivity() {
         
         checkAndRequestNetworkPermissions()
         initializeManagers()
+        
+        // Initialize MQTT background services
+        initializeMqttBackgroundServices()
 
 
         
@@ -886,6 +970,10 @@ class MainActivity : ComponentActivity() {
         
         // Clean up map downloader
         mapDownloaderManager?.cleanup()
+        
+        // Stop MQTT background services
+        stopMqttForegroundService()
+        MqttHealthCheckWorker.cancel(this)
         
         // Dispose HERE SDK
         disposeHERESDK()
@@ -1222,8 +1310,11 @@ fun MapDownloadDialog(
                 
                 // Progress bar
                 LinearProgressIndicator(
-                    progress = progress / 100f,
-                    modifier = Modifier.fillMaxWidth()
+                progress = { progress / 100f },
+                modifier = Modifier.fillMaxWidth(),
+                color = ProgressIndicatorDefaults.linearColor,
+                trackColor = ProgressIndicatorDefaults.linearTrackColor,
+                strokeCap = ProgressIndicatorDefaults.LinearStrokeCap,
                 )
                 
                 // Progress text
