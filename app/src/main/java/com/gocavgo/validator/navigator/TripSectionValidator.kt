@@ -258,9 +258,19 @@ class TripSectionValidator(private val context: Context) {
                     val waypointName = waypointNames[pendingWaypointIndex]
                     val currentTime = System.currentTimeMillis()
                     
+                    // Calculate correct waypoint order for trip data
+                    val actualWaypointOrder = if (isDeviceLocationMode) {
+                        // In device location mode, index 0 = device location (not a trip waypoint)
+                        // index 1 = first trip waypoint (order=1), index 2 = second (order=2), etc.
+                        pendingWaypointIndex // Already correct since device location at index 0 doesn't count
+                    } else {
+                        // In simulated mode, index 0 = origin, index 1 = first waypoint (order=1)
+                        pendingWaypointIndex // Origin at index 0, waypoint order matches (index-0)
+                    }
+                    
                     // Record passed waypoint data for section reduction
                     val passedInfo = PassedWaypointInfo(
-                        waypointIndex = pendingWaypointIndex + 1, // +1 to match waypoint order (1-based)
+                        waypointIndex = actualWaypointOrder, // Use correct waypoint order
                         waypointName = waypointName,
                         passedTimestamp = currentTime,
                         passedDistance = 0.0, // Section reduced, so distance is 0
@@ -271,7 +281,7 @@ class TripSectionValidator(private val context: Context) {
                     
                     // Log waypoint mark to file with follow-up logs
                     val detailedStatus = getComprehensiveStatusInfo()
-                    tripSessionLogger?.logWaypointMark(waypointName, pendingWaypointIndex + 1, detailedStatus)
+                    tripSessionLogger?.logWaypointMark(waypointName, actualWaypointOrder, detailedStatus)
                     
                     Log.d(TAG, "🎯 WAYPOINT COMPLETED (Intelligent mode): $waypointName")
                     Log.d(TAG, "  ⏰ Timestamp: ${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(currentTime)}")
@@ -438,8 +448,18 @@ class TripSectionValidator(private val context: Context) {
             val deviceLocationName = waypointNames[0] // Device location is at index 0
             passedWaypoints.add(0)
             
+            // Calculate correct waypoint order for trip data
+            val actualWaypointOrder = if (isDeviceLocationMode) {
+                // In device location mode, index 0 = device location (not a trip waypoint)
+                // Device location is not a trip waypoint, so it should have order 0
+                0 // Device location is not a trip waypoint
+            } else {
+                // In simulated mode, index 0 = origin, index 1 = first waypoint (order=1)
+                0 // Origin at index 0, waypoint order matches (index-0)
+            }
+            
             val passedInfo = PassedWaypointInfo(
-                waypointIndex = 1, // Device location is waypoint 1
+                waypointIndex = actualWaypointOrder, // Use correct waypoint order
                 waypointName = deviceLocationName,
                 passedTimestamp = currentTime,
                 passedDistance = 0.0,
@@ -449,6 +469,7 @@ class TripSectionValidator(private val context: Context) {
             
             Log.d(TAG, "🏁 DEVICE LOCATION MARKED AS PASSED: $deviceLocationName")
             Log.d(TAG, "  ⏰ Trip started at: ${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(currentTime)}")
+            Log.d(TAG, "  📊 Actual waypoint order: $actualWaypointOrder")
             
             // Log device location marking to file
             val deviceLocationMarkingInfo = "🏁 DEVICE LOCATION MARKED AS PASSED: $deviceLocationName\n  ⏰ Trip started at: ${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(currentTime)}"
@@ -458,8 +479,17 @@ class TripSectionValidator(private val context: Context) {
             val originName = waypointNames[0] // Origin is at index 0
             passedWaypoints.add(0)
             
+            // Calculate correct waypoint order for trip data
+            val actualWaypointOrder = if (isDeviceLocationMode) {
+                // In device location mode, index 0 = device location (not a trip waypoint)
+                0 // Device location is not a trip waypoint
+            } else {
+                // In simulated mode, index 0 = origin, index 1 = first waypoint (order=1)
+                0 // Origin at index 0, waypoint order matches (index-0)
+            }
+            
             val passedInfo = PassedWaypointInfo(
-                waypointIndex = 1, // Origin is waypoint 1
+                waypointIndex = actualWaypointOrder, // Use correct waypoint order
                 waypointName = originName,
                 passedTimestamp = currentTime,
                 passedDistance = 0.0,
@@ -469,6 +499,7 @@ class TripSectionValidator(private val context: Context) {
             
             Log.d(TAG, "🏁 ORIGIN MARKED AS PASSED: $originName")
             Log.d(TAG, "  ⏰ Trip started at: ${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(currentTime)}")
+            Log.d(TAG, "  📊 Actual waypoint order: $actualWaypointOrder")
             
             // Log origin marking to file
             val originMarkingInfo = "🏁 ORIGIN MARKED AS PASSED: $originName\n  ⏰ Trip started at: ${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(currentTime)}"
@@ -605,9 +636,19 @@ class TripSectionValidator(private val context: Context) {
         val waypointName = waypointNames[waypointIndex]
         val currentTime = System.currentTimeMillis()
         
+        // Calculate correct waypoint order for trip data
+        val actualWaypointOrder = if (isDeviceLocationMode) {
+            // In device location mode, index 0 = device location (not a trip waypoint)
+            // index 1 = first trip waypoint (order=1), index 2 = second (order=2), etc.
+            waypointIndex // Already correct since device location at index 0 doesn't count
+        } else {
+            // In simulated mode, index 0 = origin, index 1 = first waypoint (order=1)
+            waypointIndex // Origin at index 0, waypoint order matches (index-0)
+        }
+        
         // Record passed waypoint data
         val passedInfo = PassedWaypointInfo(
-            waypointIndex = waypointIndex + 1, // +1 to match waypoint order (1-based)
+            waypointIndex = actualWaypointOrder, // Use correct waypoint order
             waypointName = waypointName,
             passedTimestamp = currentTime,
             passedDistance = sectionProgress.remainingDistanceInMeters.toDouble(),
@@ -620,20 +661,21 @@ class TripSectionValidator(private val context: Context) {
         
         // Log waypoint mark to file with follow-up logs
         val detailedStatus = getComprehensiveStatusInfo()
-        tripSessionLogger?.logWaypointMark(waypointName, waypointIndex + 1, detailedStatus)
+        tripSessionLogger?.logWaypointMark(waypointName, actualWaypointOrder, detailedStatus)
         
         Log.d(TAG, "🎯 WAYPOINT PASSED: $waypointName")
         Log.d(TAG, "  📍 Distance: ${sectionProgress.remainingDistanceInMeters}m")
         Log.d(TAG, "  ⏰ Timestamp: ${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(currentTime)}")
         Log.d(TAG, "  📊 Section: $sectionIndex")
         Log.d(TAG, "  📊 Target waypoint index: $waypointIndex")
+        Log.d(TAG, "  📊 Actual waypoint order: $actualWaypointOrder")
         Log.d(TAG, "  📊 Set lastWaypointMarkedByDistance to: $lastWaypointMarkedByDistance")
         
         // Notify external callback about waypoint being passed
-        notifyWaypointPassed(waypointIndex + 1) // Convert to 1-based order
+        notifyWaypointPassed(actualWaypointOrder)
         
         // Handle MQTT waypoint reached notification
-        handleWaypointReached(waypointIndex + 1)
+        handleWaypointReached(actualWaypointOrder)
         
         // Send progress update after waypoint is marked as passed
         publishTripProgressUpdate()
@@ -656,9 +698,19 @@ class TripSectionValidator(private val context: Context) {
             val waypointName = waypointNames[completedWaypointIndex]
             val currentTime = System.currentTimeMillis()
             
+            // Calculate correct waypoint order for trip data
+            val actualWaypointOrder = if (isDeviceLocationMode) {
+                // In device location mode, index 0 = device location (not a trip waypoint)
+                // index 1 = first trip waypoint (order=1), index 2 = second (order=2), etc.
+                completedWaypointIndex // Already correct since device location at index 0 doesn't count
+            } else {
+                // In simulated mode, index 0 = origin, index 1 = first waypoint (order=1)
+                completedWaypointIndex // Origin at index 0, waypoint order matches (index-0)
+            }
+            
             // Record passed waypoint data for section reduction
             val passedInfo = PassedWaypointInfo(
-                waypointIndex = completedWaypointIndex + 1, // +1 to match waypoint order (1-based)
+                waypointIndex = actualWaypointOrder, // Use correct waypoint order
                 waypointName = waypointName,
                 passedTimestamp = currentTime,
                 passedDistance = 0.0, // Section reduced, so distance is 0
@@ -668,7 +720,7 @@ class TripSectionValidator(private val context: Context) {
             
             // Log waypoint mark to file with follow-up logs
             val detailedStatus = getComprehensiveStatusInfo()
-            tripSessionLogger?.logWaypointMark(waypointName, completedWaypointIndex + 1, detailedStatus)
+            tripSessionLogger?.logWaypointMark(waypointName, actualWaypointOrder, detailedStatus)
             
             Log.d(TAG, "🎯 WAYPOINT COMPLETED (Section reduction): $waypointName")
             Log.d(TAG, "  ⏰ Timestamp: ${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(currentTime)}")
@@ -706,9 +758,19 @@ class TripSectionValidator(private val context: Context) {
                 val waypointName = waypointNames[i]
                 val currentTime = System.currentTimeMillis()
                 
+                // Calculate correct waypoint order for trip data
+                val actualWaypointOrder = if (isDeviceLocationMode) {
+                    // In device location mode, index 0 = device location (not a trip waypoint)
+                    // index 1 = first trip waypoint (order=1), index 2 = second (order=2), etc.
+                    i // Already correct since device location at index 0 doesn't count
+                } else {
+                    // In simulated mode, index 0 = origin, index 1 = first waypoint (order=1)
+                    i // Origin at index 0, waypoint order matches (index-0)
+                }
+                
                 // Record passed waypoint data for trip completion
                 val passedInfo = PassedWaypointInfo(
-                    waypointIndex = i + 1, // +1 to match waypoint order (1-based)
+                    waypointIndex = actualWaypointOrder, // Use correct waypoint order
                     waypointName = waypointName,
                     passedTimestamp = currentTime,
                     passedDistance = 0.0, // Trip completed, so distance is 0
@@ -719,6 +781,7 @@ class TripSectionValidator(private val context: Context) {
                 Log.d(TAG, "🎯 WAYPOINT COMPLETED (Trip completion): $waypointName")
                 Log.d(TAG, "  ⏰ Timestamp: ${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(currentTime)}")
                 Log.d(TAG, "  📊 Waypoint index: $i")
+                Log.d(TAG, "  📊 Actual waypoint order: $actualWaypointOrder")
             }
         }
         
