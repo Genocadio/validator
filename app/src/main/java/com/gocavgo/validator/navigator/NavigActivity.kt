@@ -25,7 +25,6 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -91,6 +90,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.withContext
 
 class NavigActivity: ComponentActivity() {
 
@@ -107,18 +107,6 @@ class NavigActivity: ComponentActivity() {
     private var app: App? = null
     private var messageViewUpdater: MessageViewUpdater? = null
     
-    // Modern permission handling using Activity Result API
-    private val requestPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) { permissions ->
-        val allGranted = permissions.values.all { it }
-        if (allGranted) {
-            Log.d(TAG, "All permissions granted")
-            loadMapScene()
-        } else {
-            Log.e(TAG, "Permissions denied by user.")
-        }
-    }
 
     // Trip data
     private var tripResponse: TripResponse? = null
@@ -164,9 +152,6 @@ class NavigActivity: ComponentActivity() {
             return
         }
 
-        // Initialize HERE SDK first, before any UI setup
-        initializeHERESDK()
-
         // Log application and device details.
         environmentLogger.logEnvironment("Kotlin")
         permissionsRequestor = PermissionsRequestor(this)
@@ -181,46 +166,37 @@ class NavigActivity: ComponentActivity() {
         // Initialize network monitoring
         initializeNetworkMonitoring()
 
-        // Fetch trip data from database
-        coroutineScope.launch {
-            Log.d(TAG, "=== Starting trip data fetch ===")
-            Log.d(TAG, "Fetching trip with ID: $tripId")
+        // Setup UI first to prevent ANR
+        setupUI(savedInstanceState)
 
-            tripResponse = databaseManager.getTripById(tripId)
-            if (tripResponse == null) {
-                finish()
-                return@launch
-            }
-
-            if (app == null) {
-                messageViewUpdater?.updateText("Trip data loaded. Waiting for map...")
-            } else {
-                app?.updateTripData(tripResponse, isSimulated)
-                Log.d(TAG, "app?.updateTripData called")
-            }
-        }
-
-        setContent {
-            ValidatorTheme {
-                Scaffold(
-                    modifier = Modifier.fillMaxSize()
-                ) { paddingValues ->
-                    Box(modifier = Modifier.padding(paddingValues)) {
-                        HereMapView(savedInstanceState)
-                        ButtonRows(messageViewUpdater!!, isRouteCalculated)
-                        if (showWaypointOverlay) {
-                            WaypointProgressOverlay(waypointProgressData)
-                        }
-                        DialogScreen()
-                        
-                        // Network status indicator overlay
-                        NetworkStatusIndicator(
-                            isConnected = isConnected,
-                            connectionType = connectionType,
-                            isMetered = isMetered
-                        )
+        // Perform heavy initialization in background thread
+        coroutineScope.launch(Dispatchers.IO) {
+            try {
+                // Fetch trip from database
+                tripResponse = databaseManager.getTripById(tripId)
+                if (tripResponse == null) {
+                    Log.e(TAG, "Trip with ID $tripId not found in database. Cannot start navigation.")
+                    withContext(Dispatchers.Main) {
+                        finish()
                     }
+                    return@launch
                 }
+
+                // Switch to main thread for HERE SDK initialization
+                withContext(Dispatchers.Main) {
+                    // Initialize HERE SDK in background to prevent ANR
+                    coroutineScope.launch(Dispatchers.IO) {
+                        initializeHERESDK()
+                    }
+                    
+                    // Update message to show trip data is loaded
+                    messageViewUpdater?.updateText("Trip data loaded. Waiting for map...")
+                    
+                    // Try to update trip data if app is already ready
+                    updateTripDataWhenReady()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error during initialization: ${e.message}", e)
             }
         }
     }
@@ -259,13 +235,8 @@ class NavigActivity: ComponentActivity() {
             MapView(context).apply {
                 mapView = this
                 mapView?.onCreate(savedInstanceState)
-                val privacyHelper = HEREPositioningTermsAndPrivacyHelper(context)
-                privacyHelper.showAppTermsAndPrivacyPolicyDialogIfNeeded(object :
-                    HEREPositioningTermsAndPrivacyHelper.OnAgreedListener {
-                    override fun onAgreed() {
-                        handleAndroidPermissions()
-                    }
-                })
+                // Load map scene directly without waiting for permissions
+                loadMapScene()
             }
         })
     }
@@ -406,23 +377,52 @@ class NavigActivity: ComponentActivity() {
         }
     }
 
-    private fun initializeHERESDK(lowMEm: Boolean = false) {
-        // Set your credentials for the HERE SDK.
-        val accessKeyID = BuildConfig.HERE_ACCESS_KEY_ID
-        val accessKeySecret = BuildConfig.HERE_ACCESS_KEY_SECRET
-        val authenticationMode = AuthenticationMode.withKeySecret(accessKeyID, accessKeySecret)
-        val options = SDKOptions(authenticationMode)
-        if(lowMEm) {
-            options.lowMemoryMode = true
-            Log.d(TAG, "Initialised in Low memory mode")
+    private fun setupUI(savedInstanceState: Bundle?) {
+        setContent {
+            ValidatorTheme {
+                Scaffold(
+                    modifier = Modifier.fillMaxSize()
+                ) { paddingValues ->
+                    Box(modifier = Modifier.padding(paddingValues)) {
+                        HereMapView(savedInstanceState)
+                        ButtonRows(messageViewUpdater!!, isRouteCalculated)
+                        if (showWaypointOverlay) {
+                            WaypointProgressOverlay(waypointProgressData)
+                        }
+                        DialogScreen()
+                        
+                        // Network status indicator overlay
+                        NetworkStatusIndicator(
+                            isConnected = isConnected,
+                            connectionType = connectionType,
+                            isMetered = isMetered
+                        )
+                    }
+                }
+            }
         }
+    }
+
+    private fun initializeHERESDK(lowMEm: Boolean = false) {
         try {
+            // Check if SDK is already initialized to avoid duplicate initialization
             if (SDKNativeEngine.getSharedInstance() != null) {
                 Log.d(TAG, "HERE SDK already initialized, skipping")
                 return
             }
-            val context: Context = this
-            SDKNativeEngine.makeSharedInstance(context, options)
+            
+            val accessKeyID = BuildConfig.HERE_ACCESS_KEY_ID
+            val accessKeySecret = BuildConfig.HERE_ACCESS_KEY_SECRET
+            val authenticationMode = AuthenticationMode.withKeySecret(accessKeyID, accessKeySecret)
+            val options = SDKOptions(authenticationMode)
+            if(lowMEm) {
+                options.lowMemoryMode = true
+                Log.d(TAG, "Initialised in Low memory mode")
+            }
+            
+            // Initialize SDK with timeout protection
+            SDKNativeEngine.makeSharedInstance(this, options)
+            Log.d(TAG, "HERE SDK initialized successfully")
             
             // Apply pending offline mode if any
             pendingOfflineMode?.let { offlineMode ->
@@ -435,7 +435,11 @@ class NavigActivity: ComponentActivity() {
                 }
             }
         } catch (e: InstantiationErrorException) {
-            throw RuntimeException("Initialization of HERE SDK failed: " + e.error.name)
+            Log.e(TAG, "Initialization of HERE SDK failed: ${e.error.name}", e)
+            // Don't throw RuntimeException to prevent ANR, just log and continue
+            // The app can still function without HERE SDK in some cases
+        } catch (e: Exception) {
+            Log.e(TAG, "Unexpected error during HERE SDK initialization: ${e.message}", e)
         }
     }
 
@@ -464,58 +468,48 @@ class NavigActivity: ComponentActivity() {
         Log.d(TAG, "Network monitoring started")
     }
 
-    private fun handleAndroidPermissions() {
-        permissionsRequestor = PermissionsRequestor(this)
-        val missingPermissions = permissionsRequestor!!.getPermissionsToRequest()
-        
-        if (missingPermissions.isEmpty()) {
-            Log.d(TAG, "All permissions already granted")
-            loadMapScene()
-        } else {
-            Log.d(TAG, "Requesting permissions: ${missingPermissions.joinToString()}")
-            requestPermissionLauncher.launch(missingPermissions)
-        }
-    }
 
 
     private fun loadMapScene() {
-        mapView!!.mapScene.loadScene(
-            MapScheme.NORMAL_DAY
-        ) { mapError: MapError? ->
-            if (mapError == null) {
-                // Start the app that contains the logic to calculate routes & start TBT guidance.
-                app = App(applicationContext, mapView!!, messageViewUpdater!!, tripResponse)
-                Log.d(TAG, "App instance created: $app")
+        try {
+            mapView?.mapScene?.loadScene(
+                MapScheme.NORMAL_DAY
+            ) { mapError: MapError? ->
+                if (mapError == null) {
+                    Log.d(TAG, "Map scene loaded successfully")
+                    
+                    // Start the app that contains the logic to calculate routes & start TBT guidance.
+                    app = App(applicationContext, mapView!!, messageViewUpdater!!, tripResponse)
+                    Log.d(TAG, "App instance created: $app")
 
-                // Set up route calculation callback
-                app?.setOnRouteCalculatedCallback {
-                    updateRouteCalculationStatus(true)
+                    // Set up route calculation callback
+                    app?.setOnRouteCalculatedCallback {
+                        updateRouteCalculationStatus(true)
+                    }
+
+                    // Enable traffic flows and 3D landmarks, by default.
+                    val mapFeatures: MutableMap<String, String> = HashMap()
+                    mapFeatures[MapFeatures.TRAFFIC_FLOW] = MapFeatureModes.TRAFFIC_FLOW_WITH_FREE_FLOW
+                    mapFeatures[MapFeatures.LOW_SPEED_ZONES] = MapFeatureModes.LOW_SPEED_ZONES_ALL
+                    mapFeatures[MapFeatures.LANDMARKS] = MapFeatureModes.LANDMARKS_TEXTURED
+                    mapView!!.mapScene.enableFeatures(mapFeatures)
+
+                    // Now that App is created, update it with trip data if available
+                    updateTripDataWhenReady()
+                } else {
+                    Log.e(TAG, "Loading map failed: ${mapError.name}")
+                    messageViewUpdater?.updateText("Map loading failed: ${mapError.name}")
                 }
-
-                // Enable traffic flows and 3D landmarks, by default.
-                val mapFeatures: MutableMap<String, String> = HashMap()
-                mapFeatures[MapFeatures.TRAFFIC_FLOW] = MapFeatureModes.TRAFFIC_FLOW_WITH_FREE_FLOW
-                mapFeatures[MapFeatures.LOW_SPEED_ZONES] = MapFeatureModes.LOW_SPEED_ZONES_ALL
-                mapFeatures[MapFeatures.LANDMARKS] = MapFeatureModes.LANDMARKS_TEXTURED
-                mapView!!.mapScene.enableFeatures(mapFeatures)
-
-                // Now that App is created, update it with trip data if available
-                if (tripResponse != null) {
-                    Log.d(TAG, "Updating App with trip data after map scene loaded")
-                    app?.updateTripData(tripResponse, isSimulated)
-                }
-            } else {
-                Log.d(
-                    TAG,
-                    "Loading map failed: " + mapError.name
-                )
             }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error loading map scene: ${e.message}", e)
+            messageViewUpdater?.updateText("Error loading map: ${e.message}")
         }
     }
 
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
-        if (level >= TRIM_MEMORY_RUNNING_CRITICAL) {
+        if (level >= ComponentActivity.TRIM_MEMORY_RUNNING_CRITICAL) {
             handleLowMemory()
         }
     }
@@ -708,6 +702,16 @@ class NavigActivity: ComponentActivity() {
     fun updateRouteCalculationStatus(calculated: Boolean) {
         isRouteCalculated = calculated
         Log.d(TAG, "Route calculation status updated: $calculated")
+    }
+    
+    /**
+     * Updates trip data when it becomes available
+     */
+    fun updateTripDataWhenReady() {
+        if (tripResponse != null && app != null) {
+            Log.d(TAG, "Updating App with trip data after both are ready")
+            app?.updateTripData(tripResponse, isSimulated)
+        }
     }
     
     /**
