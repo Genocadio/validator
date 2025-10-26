@@ -232,6 +232,17 @@ class NavigActivity: ComponentActivity() {
     @Composable
     private fun HereMapView(savedInstanceState: Bundle?) {
         AndroidView(factory = { context ->
+            // Ensure HERE SDK is initialized before creating MapView
+            if (SDKNativeEngine.getSharedInstance() == null) {
+                Log.e(TAG, "HERE SDK not initialized, initializing now...")
+                try {
+                    initializeHERESDK()
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to initialize HERE SDK: ${e.message}", e)
+                    throw RuntimeException("HERE SDK initialization failed", e)
+                }
+            }
+            
             MapView(context).apply {
                 mapView = this
                 mapView?.onCreate(savedInstanceState)

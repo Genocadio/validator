@@ -63,11 +63,6 @@ class TripSectionValidator(private val context: Context) {
     private var passedWaypointData: MutableList<PassedWaypointInfo> = mutableListOf()
     private var currentSectionProgress: List<SectionProgress> = emptyList()
     private var lastProcessedSectionCount: Int = -1
-    private var lastWaypointMarkedByDistance: Int = -1
-    
-    // Intelligent waypoint marking for close waypoints
-    private var isWaitingForSectionReduction: Boolean = false
-    private var pendingWaypointIndex: Int = -1
     
     // Device location awareness
     private var isDeviceLocationMode = false
@@ -92,7 +87,6 @@ class TripSectionValidator(private val context: Context) {
     
     companion object {
         private const val TAG = "TripSectionValidator"
-        private const val WAYPOINT_REACHED_THRESHOLD_METERS = 10.0
         private const val LOCATION_PROXIMITY_THRESHOLD_METERS = 50.0 // Consider locations "same" if within 50m
         private const val WAYPOINT_APPROACHING_TIME_SECONDS = 300L // 5 minutes
         private const val PROGRESS_UPDATE_INTERVAL_SECONDS = 5L // 5 seconds
@@ -175,12 +169,7 @@ class TripSectionValidator(private val context: Context) {
             passedWaypoints.clear() // Reset passed waypoints
             passedWaypointData.clear() // Reset passed waypoint data
             lastProcessedSectionCount = -1 // Reset section count tracking
-            lastWaypointMarkedByDistance = -1 // Reset distance marking tracking
             isFirstProgressUpdate = true // Reset first progress update flag
-            
-            // Reset intelligent waypoint marking state
-            isWaitingForSectionReduction = false
-            pendingWaypointIndex = -1
             
             // Initialize file logging for this trip session
             initializeTripSessionLogging(tripResponse)
@@ -228,119 +217,6 @@ class TripSectionValidator(private val context: Context) {
         
         // Store current section progress for UI access
         currentSectionProgress = sectionProgressList
-        
-        // Check for distance-based waypoint passing (10m threshold)
-        checkDistanceBasedWaypointPassing(sectionProgressList)
-        
-        // Check for waypoint completion (section reduction) - INTELLIGENT APPROACH
-        val currentSectionCount = sectionProgressList.size
-        val expectedSectionCount = waypointNames.size - 1
-        
-        // GUARD: Only process section reduction if the count actually changed
-        if (currentSectionCount < expectedSectionCount && currentSectionCount != lastProcessedSectionCount) {
-            val sectionDifference = expectedSectionCount - currentSectionCount
-            
-            Log.d(TAG, "Section reduction check:")
-            Log.d(TAG, "  Expected sections: $expectedSectionCount")
-            Log.d(TAG, "  Current sections: $currentSectionCount")
-            Log.d(TAG, "  Section difference: $sectionDifference")
-            Log.d(TAG, "  Last waypoint marked by distance: $lastWaypointMarkedByDistance")
-            Log.d(TAG, "  Passed waypoints: $passedWaypoints")
-            Log.d(TAG, "  Intelligent mode active: $isWaitingForSectionReduction")
-            Log.d(TAG, "  Pending waypoint: $pendingWaypointIndex")
-            
-            // INTELLIGENT MODE: Handle section reduction for close waypoints
-            if (isWaitingForSectionReduction && sectionDifference == 1) {
-                Log.d(TAG, "🧠 INTELLIGENT MODE: Section reduction detected, marking pending waypoint")
-                
-                // Mark the pending waypoint
-                if (pendingWaypointIndex < waypointNames.size && !passedWaypoints.contains(pendingWaypointIndex)) {
-                    val waypointName = waypointNames[pendingWaypointIndex]
-                    val currentTime = System.currentTimeMillis()
-                    
-                    // Calculate correct waypoint order for trip data
-                    val actualWaypointOrder = if (isDeviceLocationMode) {
-                        // In device location mode, index 0 = device location (not a trip waypoint)
-                        // index 1 = first trip waypoint (order=1), index 2 = second (order=2), etc.
-                        pendingWaypointIndex // Already correct since device location at index 0 doesn't count
-                    } else {
-                        // In simulated mode, index 0 = origin, index 1 = first waypoint (order=1)
-                        pendingWaypointIndex // Origin at index 0, waypoint order matches (index-0)
-                    }
-                    
-                    // Record passed waypoint data for section reduction
-                    val passedInfo = PassedWaypointInfo(
-                        waypointIndex = actualWaypointOrder, // Use correct waypoint order
-                        waypointName = waypointName,
-                        passedTimestamp = currentTime,
-                        passedDistance = 0.0, // Section reduced, so distance is 0
-                        sectionIndex = pendingWaypointIndex - 1 // Previous section index
-                    )
-                    passedWaypoints.add(pendingWaypointIndex)
-                    passedWaypointData.add(passedInfo)
-                    
-                    // Log waypoint mark to file with follow-up logs
-                    val detailedStatus = getComprehensiveStatusInfo()
-                    tripSessionLogger?.logWaypointMark(waypointName, actualWaypointOrder, detailedStatus)
-                    
-                    Log.d(TAG, "🎯 WAYPOINT COMPLETED (Intelligent mode): $waypointName")
-                    Log.d(TAG, "  ⏰ Timestamp: ${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(currentTime)}")
-                    Log.d(TAG, "  📊 Waypoint index: $pendingWaypointIndex")
-                    Log.d(TAG, "  📊 Section reduction: $expectedSectionCount -> $currentSectionCount")
-                    
-                    // Check if there are more close waypoints to handle
-                    val nextPendingIndex = pendingWaypointIndex + 1
-                    if (nextPendingIndex < waypointNames.size) {
-                        // Check if next waypoint is also close
-                        val hasMoreCloseWaypoints = checkForMultipleCloseWaypoints(sectionProgressList)
-                        if (hasMoreCloseWaypoints) {
-                            pendingWaypointIndex = nextPendingIndex
-                            Log.d(TAG, "  🧠 Continuing intelligent mode for next waypoint: $nextPendingIndex")
-                        } else {
-                            // No more close waypoints, exit intelligent mode
-                            isWaitingForSectionReduction = false
-                            pendingWaypointIndex = -1
-                            Log.d(TAG, "  🧠 Intelligent mode completed - no more close waypoints")
-                        }
-                    } else {
-                        // No more waypoints, exit intelligent mode
-                        isWaitingForSectionReduction = false
-                        pendingWaypointIndex = -1
-                        Log.d(TAG, "  🧠 Intelligent mode completed - all waypoints processed")
-                    }
-                }
-            } else if (sectionDifference <= 1) {
-                // Normal trip progress - only allow if not in intelligent mode
-                if (!isWaitingForSectionReduction) {
-                    Log.d(TAG, "🚫 SECTION MARKING DISABLED: Normal trip progress detected")
-                    Log.d(TAG, "  Section difference ($sectionDifference) is within normal range (≤1)")
-                    Log.d(TAG, "  Only distance-based marking is allowed during trip progress")
-                } else {
-                    Log.d(TAG, "🧠 INTELLIGENT MODE: Waiting for section reduction (current: $sectionDifference)")
-                }
-            } else {
-                // Significant section reduction - use fallback
-                Log.d(TAG, "⚠️ SIGNIFICANT SECTION REDUCTION DETECTED: $sectionDifference sections reduced")
-                Log.d(TAG, "  This indicates a major route change or trip completion")
-                Log.d(TAG, "  Proceeding with section-based waypoint marking as fallback")
-                
-                // Calculate which waypoint was completed by the section reduction
-                val completedWaypointIndex = expectedSectionCount - currentSectionCount
-                
-                if (completedWaypointIndex == lastWaypointMarkedByDistance) {
-                    Log.d(TAG, "Waypoint $completedWaypointIndex already marked by distance-based detection, skipping section reduction")
-                } else {
-                    Log.d(TAG, "Using section reduction as fallback for waypoint $completedWaypointIndex")
-                    handleWaypointCompletion(currentSectionCount, expectedSectionCount)
-                }
-            }
-            lastProcessedSectionCount = currentSectionCount
-        }
-        
-        // Check for trip completion (no more sections)
-        if (currentSectionCount == 0 && expectedSectionCount > 0) {
-            handleTripCompletion()
-        }
         
         // Map current sections to waypoint information
         mapSectionsToWaypoints(sectionProgressList)
@@ -552,134 +428,8 @@ class TripSectionValidator(private val context: Context) {
         Log.d(TAG, "=============================")
     }
     
-    /**
-     * Checks for distance-based waypoint passing (10m threshold)
-     * Uses intelligent marking for close waypoints to prevent rapid succession
-     */
-    private fun checkDistanceBasedWaypointPassing(sectionProgressList: List<SectionProgress>) {
-        if (sectionProgressList.isEmpty()) {
-            Log.d(TAG, "No sections available for distance-based waypoint checking")
-            return
-        }
-        
-        val firstSectionProgress = sectionProgressList[0]
-        val targetWaypointIndex = passedWaypoints.size // First unpassed waypoint
-        
-        // Skip processing if this waypoint is already passed
-        if (passedWaypoints.contains(targetWaypointIndex)) {
-            Log.d(TAG, "Skipping distance check for already-passed waypoint at index $targetWaypointIndex")
-            return
-        }
-        
-        // Check if we're within 10m of the next waypoint
-        if (firstSectionProgress.remainingDistanceInMeters < WAYPOINT_REACHED_THRESHOLD_METERS) {
-            if (targetWaypointIndex < waypointNames.size) {
-                // Check if we're in intelligent mode (waiting for section reduction)
-                if (isWaitingForSectionReduction) {
-                    Log.d(TAG, "🧠 INTELLIGENT MODE: Waiting for section reduction before marking next waypoint")
-                    Log.d(TAG, "  Pending waypoint: ${waypointNames[targetWaypointIndex]}")
-                    Log.d(TAG, "  Current distance: ${firstSectionProgress.remainingDistanceInMeters}m")
-                    return
-                }
-                
-                // Check if multiple waypoints are close together (intelligent mode trigger)
-                val hasMultipleCloseWaypoints = checkForMultipleCloseWaypoints(sectionProgressList)
-                
-                if (hasMultipleCloseWaypoints) {
-                    Log.d(TAG, "🧠 INTELLIGENT MODE ACTIVATED: Multiple waypoints detected within 10m")
-                    Log.d(TAG, "  Marking first waypoint and waiting for section reduction for next ones")
-                    
-                    // Mark the first waypoint immediately
-                    markWaypointAsPassed(targetWaypointIndex, firstSectionProgress, 0)
-                    
-                    // Activate intelligent mode for subsequent waypoints
-                    isWaitingForSectionReduction = true
-                    pendingWaypointIndex = targetWaypointIndex + 1
-                    
-                    Log.d(TAG, "  🎯 First waypoint marked, intelligent mode activated")
-                    Log.d(TAG, "  📊 Next waypoint will wait for section reduction: ${pendingWaypointIndex}")
-                } else {
-                    // Normal mode - mark waypoint immediately
-                    Log.d(TAG, "📍 NORMAL MODE: Single waypoint within 10m, marking immediately")
-                    markWaypointAsPassed(targetWaypointIndex, firstSectionProgress, 0)
-                }
-            }
-        }
-    }
     
-    /**
-     * Checks if multiple waypoints are within 10m (triggers intelligent mode)
-     */
-    private fun checkForMultipleCloseWaypoints(sectionProgressList: List<SectionProgress>): Boolean {
-        var closeWaypointCount = 0
-        
-        // Check first few sections for close waypoints
-        val maxSectionsToCheck = minOf(3, sectionProgressList.size) // Check up to 3 sections
-        
-        for (i in 0 until maxSectionsToCheck) {
-            val sectionProgress = sectionProgressList[i]
-            if (sectionProgress.remainingDistanceInMeters < WAYPOINT_REACHED_THRESHOLD_METERS) {
-                closeWaypointCount++
-            }
-        }
-        
-        val hasMultipleClose = closeWaypointCount > 1
-        Log.d(TAG, "🔍 Multiple close waypoints check: $closeWaypointCount waypoints within 10m (threshold: >1)")
-        return hasMultipleClose
-    }
     
-    /**
-     * Marks a waypoint as passed with detailed logging
-     */
-    private fun markWaypointAsPassed(waypointIndex: Int, sectionProgress: SectionProgress, sectionIndex: Int) {
-        passedWaypoints.add(waypointIndex)
-        val waypointName = waypointNames[waypointIndex]
-        val currentTime = System.currentTimeMillis()
-        
-        // Calculate correct waypoint order for trip data
-        val actualWaypointOrder = if (isDeviceLocationMode) {
-            // In device location mode, index 0 = device location (not a trip waypoint)
-            // index 1 = first trip waypoint (order=1), index 2 = second (order=2), etc.
-            waypointIndex // Already correct since device location at index 0 doesn't count
-        } else {
-            // In simulated mode, index 0 = origin, index 1 = first waypoint (order=1)
-            waypointIndex // Origin at index 0, waypoint order matches (index-0)
-        }
-        
-        // Record passed waypoint data
-        val passedInfo = PassedWaypointInfo(
-            waypointIndex = actualWaypointOrder, // Use correct waypoint order
-            waypointName = waypointName,
-            passedTimestamp = currentTime,
-            passedDistance = sectionProgress.remainingDistanceInMeters.toDouble(),
-            sectionIndex = sectionIndex
-        )
-        passedWaypointData.add(passedInfo)
-        
-        // Track the last waypoint marked by distance
-        lastWaypointMarkedByDistance = waypointIndex
-        
-        // Log waypoint mark to file with follow-up logs
-        val detailedStatus = getComprehensiveStatusInfo()
-        tripSessionLogger?.logWaypointMark(waypointName, actualWaypointOrder, detailedStatus)
-        
-        Log.d(TAG, "🎯 WAYPOINT PASSED: $waypointName")
-        Log.d(TAG, "  📍 Distance: ${sectionProgress.remainingDistanceInMeters}m")
-        Log.d(TAG, "  ⏰ Timestamp: ${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(currentTime)}")
-        Log.d(TAG, "  📊 Section: $sectionIndex")
-        Log.d(TAG, "  📊 Target waypoint index: $waypointIndex")
-        Log.d(TAG, "  📊 Actual waypoint order: $actualWaypointOrder")
-        Log.d(TAG, "  📊 Set lastWaypointMarkedByDistance to: $lastWaypointMarkedByDistance")
-        
-        // Notify external callback about waypoint being passed
-        notifyWaypointPassed(actualWaypointOrder)
-        
-        // Handle MQTT waypoint reached notification
-        handleWaypointReached(actualWaypointOrder)
-        
-        // Send progress update after waypoint is marked as passed
-        publishTripProgressUpdate()
-    }
     
     /**
      * Handles waypoint completion when sections are reduced
@@ -793,6 +543,94 @@ class TripSectionValidator(private val context: Context) {
     }
     
     /**
+     * Called by milestone listener when a waypoint is reached
+     */
+    fun markWaypointAsPassedByMilestone(waypointOrder: Int, wayCordinates: GeoCoordinates) {
+        if (!isVerified) {
+            Log.w(TAG, "Trip not verified, ignoring milestone event")
+            return
+        }
+        
+        // Convert TripWaypoint.order to waypointNames index
+        // waypointOrder 1 = waypointNames[1], waypointOrder 2 = waypointNames[2], etc.
+        val waypointIndex = waypointOrder
+        
+        if (passedWaypoints.contains(waypointIndex)) {
+            Log.d(TAG, "Waypoint $waypointOrder already marked as passed")
+            return
+        }
+        
+        val waypointName = waypointNames.getOrNull(waypointIndex) ?: "Unknown"
+        val currentTime = System.currentTimeMillis()
+        
+        Log.d(TAG, "🎯 WAYPOINT PASSED VIA MILESTONE: $waypointName")
+        Log.d(TAG, "  📊 Waypoint order (TripWaypoint.order): $waypointOrder")
+        Log.d(TAG, "  📊 Waypoint index (waypointNames index): $waypointIndex")
+        Log.d(TAG, "  📊 Passed waypoints before: $passedWaypoints")
+        Log.d(TAG, "  ⏰ Timestamp: ${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(currentTime)}")
+        
+        passedWaypoints.add(waypointIndex)
+        
+        // Store with waypointIndex (not waypointOrder) for consistent lookups
+        val passedInfo = PassedWaypointInfo(
+            waypointIndex = waypointIndex,
+            waypointName = waypointName,
+            passedTimestamp = currentTime,
+            passedDistance = 0.0,
+            sectionIndex = waypointIndex - 1
+        )
+        passedWaypointData.add(passedInfo)
+        
+        // Log to file
+        val detailedStatus = getComprehensiveStatusInfo()
+        tripSessionLogger?.logWaypointMark(waypointName, waypointOrder, detailedStatus)
+        
+        // Notify callback
+        notifyWaypointPassed(waypointOrder)
+        
+        // Handle MQTT
+        handleWaypointReached(waypointOrder, wayCordinates)
+        publishTripProgressUpdate()
+    }
+
+    /**
+     * Called by destination reached listener
+     */
+    fun handleDestinationReached() {
+        Log.d(TAG, "🏁 DESTINATION REACHED!")
+        
+        // Mark any remaining waypoints as passed
+        for (i in passedWaypoints.size until waypointNames.size) {
+            if (!passedWaypoints.contains(i)) {
+                passedWaypoints.add(i)
+                val waypointName = waypointNames[i]
+                val currentTime = System.currentTimeMillis()
+                
+                val passedInfo = PassedWaypointInfo(
+                    waypointIndex = i,
+                    waypointName = waypointName,
+                    passedTimestamp = currentTime,
+                    passedDistance = 0.0,
+                    sectionIndex = -1
+                )
+                passedWaypointData.add(passedInfo)
+                
+                Log.d(TAG, "🎯 WAYPOINT COMPLETED (Destination): $waypointName")
+            }
+        }
+        
+        // Log trip completion
+        val detailedStatus = getComprehensiveStatusInfo()
+        tripSessionLogger?.logTripCompletion(detailedStatus)
+        
+        // Publish destination reached notification and final progress update
+        publishDestinationReachedNotification()
+        publishFinalTripProgressUpdate()
+        
+        Log.d(TAG, "🎉 TRIP COMPLETED! All waypoints reached.")
+    }
+    
+    /**
      * Maps current section progress to waypoint information and logs details
      */
     private fun mapSectionsToWaypoints(sectionProgressList: List<SectionProgress>) {
@@ -824,11 +662,6 @@ class TripSectionValidator(private val context: Context) {
             Log.d(TAG, "  Remaining distance: ${sectionProgress.remainingDistanceInMeters}m")
             Log.d(TAG, "  Remaining duration: ${sectionProgress.remainingDuration.toSeconds()}s")
             Log.d(TAG, "  Traffic delay: ${sectionProgress.trafficDelay.seconds}s")
-            
-            // Check if approaching waypoint
-            if (sectionProgress.remainingDistanceInMeters < WAYPOINT_REACHED_THRESHOLD_METERS) {
-                Log.d(TAG, "  🚨 APPROACHING WAYPOINT: $toWaypoint")
-            }
         }
         
         // Log overall progress
@@ -953,14 +786,9 @@ class TripSectionValidator(private val context: Context) {
         passedWaypointData.clear()
         currentSectionProgress = emptyList()
         lastProcessedSectionCount = -1
-        lastWaypointMarkedByDistance = -1
         isDeviceLocationMode = false
         deviceLocationOffset = 0
         isFirstProgressUpdate = true
-        
-        // Reset intelligent waypoint marking state
-        isWaitingForSectionReduction = false
-        pendingWaypointIndex = -1
         
         // Reset MQTT-related state
         isInitialized = false
@@ -1014,7 +842,7 @@ class TripSectionValidator(private val context: Context) {
         
         waypointNames.forEachIndexed { index, waypointName ->
             val isPassed = passedWaypoints.contains(index)
-            val passedInfo = passedWaypointData.find { it.waypointIndex == index + 1 }
+            val passedInfo = passedWaypointData.find { it.waypointIndex == index }
             val isNext = !isPassed && index == passedWaypoints.size
             
             // Calculate remaining time and distance ONLY for the next waypoint
@@ -1237,7 +1065,7 @@ class TripSectionValidator(private val context: Context) {
         }
     }
     
-    private fun handleWaypointReached(waypointOrder: Int) {
+    private fun handleWaypointReached(waypointOrder: Int, wayCordinates: GeoCoordinates) {
         try {
             tripResponse?.let { trip ->
                 val waypoint = trip.waypoints.find { it.order == waypointOrder }
@@ -1245,19 +1073,20 @@ class TripSectionValidator(private val context: Context) {
                     Logging.d(TAG, "=== HANDLING WAYPOINT REACHED ===")
                     Logging.d(TAG, "Trip ID: ${trip.id}")
                     Logging.d(TAG, "Waypoint: ${waypoint.location.google_place_name}")
+                    Logging.d(TAG, "lat ${waypoint.location.latitude} lon ${waypoint.location.longitude}")
+                    Logging.d(TAG, "passed lat ${wayCordinates.latitude} lon ${wayCordinates.longitude}")
                     Logging.d(TAG, "Order: ${waypoint.order}")
                     
                     // Mark waypoint as passed in database
                     markWaypointAsPassedInDatabase(waypoint.id)
                     
-                    // Check if this was the last waypoint (destination reached)
+                    // Check remaining intermediate waypoints (not including destination)
                     val remainingWaypoints = trip.waypoints.filter { !it.is_passed }
-                    if (remainingWaypoints.size <= 1) { // Only current waypoint remains
-                        Logging.d(TAG, "🏁 FINAL DESTINATION REACHED!")
-                        publishDestinationReachedNotification()
-                        publishFinalTripProgressUpdate()
+                    if (remainingWaypoints.isEmpty()) {
+                        Logging.d(TAG, "🎯 Last intermediate waypoint reached - continuing to destination")
+                        Logging.d(TAG, "Destination: ${trip.route.destination.custom_name}")
                     } else {
-                        Logging.d(TAG, "Waypoint reached, ${remainingWaypoints.size - 1} waypoints remaining")
+                        Logging.d(TAG, "Waypoint reached, ${remainingWaypoints.size} intermediate waypoints remaining")
                     }
                     
                     // Publish waypoint reached notification via MQTT

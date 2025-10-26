@@ -25,6 +25,7 @@ import com.gocavgo.validator.database.AppDatabase
 import com.gocavgo.validator.database.BookingEntity
 import com.gocavgo.validator.database.PaymentEntity
 import com.gocavgo.validator.database.TicketEntity
+import com.gocavgo.validator.database.TripEntity
 import com.gocavgo.validator.network.NetworkMonitor
 import android.content.Intent
 
@@ -107,6 +108,9 @@ class MqttService private constructor(
     // Booking bundle callback for direct UI notification
     private var bookingBundleCallback: ((String, String, String, String, Int, Boolean) -> Unit)? = null
     
+    // Trip event callback for direct UI notification
+    private var tripEventCallback: ((com.gocavgo.validator.dataclass.TripEventMessage) -> Unit)? = null
+    
     // Notification manager for background notifications
     private var notificationManager: MqttNotificationManager? = null
 
@@ -136,6 +140,7 @@ class MqttService private constructor(
     private val isServiceActive = AtomicBoolean(false)
     private val lastHeartbeatTime = AtomicLong(0)
     private val connectionLostTime = AtomicLong(0)
+    private val isWaitingForNetwork = AtomicBoolean(false)
 
     // MQTT Topics for this car
     private val carTopics = listOf(
@@ -247,12 +252,19 @@ class MqttService private constructor(
                 
                 if (connected && !wasConnected) {
                     // Network came back online
-                    Log.d(TAG, "Network restored, attempting reconnection...")
-                    scheduleReconnection()
+                    Log.d(TAG, "Network restored, checking if service should restart...")
+                    if (isWaitingForNetwork.get()) {
+                        Log.d(TAG, "Service was waiting for network, restarting...")
+                        restartAfterNetworkRestored()
+                    } else {
+                        Log.d(TAG, "Service not waiting for network, attempting reconnection...")
+                        scheduleReconnection()
+                    }
                 } else if (!connected && wasConnected) {
                     // Network lost
-                    Log.d(TAG, "Network lost, will reconnect when available")
+                    Log.d(TAG, "Network lost, shutting down service...")
                     connectionLostTime.set(System.currentTimeMillis())
+                    shutdownDueToNetworkLoss()
                 }
             }
             
@@ -413,7 +425,7 @@ class MqttService private constructor(
     }
 
     /**
-     * Disconnect from MQTT broker
+     * Disconnect from MQTT broker (user-initiated)
      */
     fun disconnect() {
         try {
@@ -443,6 +455,7 @@ class MqttService private constructor(
                     isServiceActive.set(false)
                     isConnecting.set(false)
                     isDisconnecting.set(false)
+                    isWaitingForNetwork.set(false)
                     mqttClient = null
                 }
             } else {
@@ -450,6 +463,7 @@ class MqttService private constructor(
                 isServiceActive.set(false)
                 isConnecting.set(false)
                 isDisconnecting.set(false)
+                isWaitingForNetwork.set(false)
                 mqttClient = null
             }
             
@@ -459,7 +473,86 @@ class MqttService private constructor(
             isServiceActive.set(false)
             isConnecting.set(false)
             isDisconnecting.set(false)
+            isWaitingForNetwork.set(false)
             mqttClient = null
+        }
+    }
+    
+    /**
+     * Shutdown service due to network loss (preserves credentials for restart)
+     */
+    private fun shutdownDueToNetworkLoss() {
+        try {
+            Log.d(TAG, "Shutting down MQTT service due to network loss...")
+            isDisconnecting.set(true)
+            
+            // Stop all background jobs
+            stopHeartbeat()
+            stopReconnection()
+            
+            if (isConnected()) {
+                try {
+                    // Publish offline status before disconnecting
+                    publishOfflineStatus()
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to publish offline status: ${e.message}")
+                }
+
+                mqttClient?.disconnect()?.whenComplete { _, throwable ->
+                    if (throwable != null) {
+                        Log.e(TAG, "Error during network-triggered disconnect", throwable)
+                    } else {
+                        Log.i(TAG, "Disconnected from MQTT broker due to network loss")
+                    }
+                    // Clear connection state but preserve credentials and mark as waiting
+                    isServiceActive.set(false)
+                    isConnecting.set(false)
+                    isDisconnecting.set(false)
+                    isWaitingForNetwork.set(true)
+                    mqttClient = null
+                }
+            } else {
+                // Not connected, just mark as waiting for network
+                isServiceActive.set(false)
+                isConnecting.set(false)
+                isDisconnecting.set(false)
+                isWaitingForNetwork.set(true)
+                mqttClient = null
+            }
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "Error during network-triggered shutdown", e)
+            // Ensure state is cleared even on error
+            isServiceActive.set(false)
+            isConnecting.set(false)
+            isDisconnecting.set(false)
+            isWaitingForNetwork.set(true)
+            mqttClient = null
+        }
+    }
+    
+    /**
+     * Restart service after network is restored
+     */
+    private fun restartAfterNetworkRestored() {
+        try {
+            Log.d(TAG, "Restarting MQTT service after network restoration...")
+            
+            if (!isWaitingForNetwork.get()) {
+                Log.d(TAG, "Service not waiting for network, skipping restart")
+                return
+            }
+            
+            // Reset waiting state
+            isWaitingForNetwork.set(false)
+            
+            // Restart with preserved credentials
+            connect(username, password)
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "Error restarting service after network restoration: ${e.message}", e)
+            // If restart fails, mark as waiting again
+            isWaitingForNetwork.set(true)
         }
     }
     
@@ -763,11 +856,21 @@ class MqttService private constructor(
         val isActive = isServiceActive.get()
         val isConnected = isConnected()
         val isNetworkAvailable = isNetworkAvailable.get()
+        val isWaiting = isWaitingForNetwork.get()
         val lastHeartbeat = lastHeartbeatTime.get()
         val currentTime = System.currentTimeMillis()
         val heartbeatTimeout = HEARTBEAT_INTERVAL_MS * 5 // More lenient timeout (5x heartbeat interval)
         
         val isHeartbeatValid = lastHeartbeat == 0L || (currentTime - lastHeartbeat) < heartbeatTimeout
+        
+        // If waiting for network, consider healthy if we have network and are not connected
+        if (isWaiting) {
+            val healthy = isNetworkAvailable && !isConnected
+            if (!healthy) {
+                Log.d(TAG, "Health check failed (waiting for network): active=$isActive, connected=$isConnected, network=$isNetworkAvailable, waiting=$isWaiting")
+            }
+            return healthy
+        }
         
         // If we're connected and have network, consider it healthy even if not "active"
         // This handles the case where disconnect() is called but connection is still active
@@ -780,7 +883,7 @@ class MqttService private constructor(
         }
         
         if (!healthy) {
-            Log.d(TAG, "Health check failed: active=$isActive, connected=$isConnected, network=$isNetworkAvailable, heartbeatValid=$isHeartbeatValid")
+            Log.d(TAG, "Health check failed: active=$isActive, connected=$isConnected, network=$isNetworkAvailable, heartbeatValid=$isHeartbeatValid, waiting=$isWaiting")
         }
         
         return healthy
@@ -795,6 +898,7 @@ class MqttService private constructor(
             "isConnected" to isConnected(),
             "isNetworkAvailable" to isNetworkAvailable.get(),
             "isAppInForeground" to isAppInForeground.get(),
+            "isWaitingForNetwork" to isWaitingForNetwork.get(),
             "reconnectAttempts" to reconnectAttempts.get(),
             "lastConnectionTime" to lastConnectionTime.get(),
             "lastHeartbeatTime" to lastHeartbeatTime.get(),
@@ -1597,13 +1701,44 @@ class MqttService private constructor(
             val tripResponse = convertBackendTripToAndroid(tripEvent.data)
             Log.d(TAG, "Converted trip response: $tripResponse")
 
-            // Show notification if app is not in foreground
-            if (!isAppInForeground.get()) {
-                notificationManager?.showTripUpdateNotification(tripEvent)
-            }
+            // Save trip to database directly in background (like booking bundles)
+            ioScope.launch {
+                try {
+                    val db = AppDatabase.getDatabase(context)
+                    val tripDao = db.tripDao()
+                    
+                    val tripEntity = TripEntity.fromTripResponse(tripResponse)
+                    
+                    // Use updateTrip to handle existing trips properly
+                    tripDao.updateTrip(tripEntity)
+                    
+                    Log.d(TAG, "Trip saved to database successfully: ID=${tripResponse.id}, status=${tripResponse.status}")
+                    Log.d(TAG, "Route: ${tripResponse.route.origin.google_place_name} → ${tripResponse.route.destination.google_place_name}")
+                    
+                    // Show notification if app is not in foreground
+                    if (!isAppInForeground.get()) {
+                        notificationManager?.showTripUpdateNotification(tripEvent)
+                    }
 
-            // Handle trip event logic here
-            // You can add callbacks or listeners for trip events
+                    // Call trip event callback for UI updates (if MainActivity is active)
+                    try {
+                        tripEventCallback?.invoke(tripEvent)
+                        Log.d(TAG, "Trip event callback invoked successfully")
+                    } catch (callbackError: Exception) {
+                        Log.w(TAG, "Error invoking trip event callback: ${callbackError.message}")
+                    }
+                    
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to save trip to database: ${e.message}", e)
+                    
+                    // Still try to notify UI even if database save failed
+                    try {
+                        tripEventCallback?.invoke(tripEvent)
+                    } catch (callbackError: Exception) {
+                        Log.w(TAG, "Error invoking trip event callback after DB error: ${callbackError.message}")
+                    }
+                }
+            }
 
         } catch (e: Exception) {
             Log.e(TAG, "Error parsing trip event message", e)
@@ -1808,6 +1943,13 @@ class MqttService private constructor(
     }
     
     /**
+     * Set trip event callback for direct UI notification
+     */
+    fun setTripEventCallback(callback: ((com.gocavgo.validator.dataclass.TripEventMessage) -> Unit)?) {
+        tripEventCallback = callback
+    }
+    
+    /**
      * Set notification manager for background notifications
      */
     fun setNotificationManager(manager: MqttNotificationManager?) {
@@ -1818,6 +1960,16 @@ class MqttService private constructor(
      * Check if connected
      */
     fun isConnected(): Boolean = mqttClient?.state == MqttClientState.CONNECTED
+
+    /**
+     * Check if waiting for network
+     */
+    fun isWaitingForNetwork(): Boolean = isWaitingForNetwork.get()
+
+    /**
+     * Check if service is active
+     */
+    fun isServiceActive(): Boolean = isServiceActive.get()
 
     /**
      * Get client state

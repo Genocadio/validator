@@ -142,6 +142,12 @@ class NetworkMonitorWorker(
             val mqttService = MqttService.getInstance()
             mqttService?.onNetworkStateChanged(connected, type, metered)
             
+            // Check if service is waiting for network and network is now available
+            if (connected && mqttService?.isWaitingForNetwork() == true) {
+                Log.d(TAG, "Network available and MQTT service is waiting, triggering restart")
+                // The MQTT service will handle the restart through its network monitoring
+            }
+            
             // Also notify MQTT foreground service if running
             val foregroundService = MqttForegroundService.getInstance()
             if (foregroundService?.isServiceRunning() == true) {

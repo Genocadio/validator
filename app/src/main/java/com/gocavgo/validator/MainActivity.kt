@@ -146,11 +146,41 @@ class MainActivity : ComponentActivity() {
                 mapDownloaderManager?.onNetworkAvailable()
             }
 
+            // Ensure MQTT service state matches network state
+            ensureMqttServiceStateMatchesNetwork(connected)
+
             // Log detailed network info when state changes
             logDetailedNetworkInfo()
         }
 
         networkMonitor?.startMonitoring()
+    }
+
+    private fun ensureMqttServiceStateMatchesNetwork(connected: Boolean) {
+        mqttService?.let { mqtt ->
+            val isWaiting = mqtt.isWaitingForNetwork()
+            val isActive = mqtt.isServiceActive()
+            val isConnected = mqtt.isConnected()
+            
+            Logging.d(TAG, "=== MQTT SERVICE STATE CHECK ===")
+            Logging.d(TAG, "Network connected: $connected")
+            Logging.d(TAG, "MQTT waiting for network: $isWaiting")
+            Logging.d(TAG, "MQTT active: $isActive")
+            Logging.d(TAG, "MQTT connected: $isConnected")
+            Logging.d(TAG, "===============================")
+            
+            // Check for mismatches and log them
+            if (!connected && isActive && !isWaiting) {
+                Logging.w(TAG, "MISMATCH: Network disconnected but MQTT service is active and not waiting")
+            } else if (connected && isWaiting) {
+                Logging.w(TAG, "MISMATCH: Network connected but MQTT service is waiting for network")
+            } else if (connected && !isActive && !isWaiting) {
+                Logging.w(TAG, "MISMATCH: Network connected but MQTT service is not active")
+            }
+            
+            // The MQTT service's network monitoring should handle state transitions automatically
+            // This is just for logging and verification
+        }
     }
 
     private fun initializeMqtt() {
@@ -183,7 +213,11 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-
+        // Set trip event callback for direct UI updates
+        mqttService?.setTripEventCallback { tripEvent ->
+            Logging.d(TAG, "Trip event callback received: ${tripEvent.event}")
+            handleTripEventFromMqtt(tripEvent)
+        }
 
         // Add message listeners for specific topics
         setupMqttMessageListeners()
@@ -222,13 +256,6 @@ class MainActivity : ComponentActivity() {
     private fun setupMqttMessageListeners() {
         val vehicleId = vehicleSecurityManager.getVehicleId()
 
-        // Listen for trip assignments
-        mqttService?.addMessageListener("car/$vehicleId/trip") { topic, payload ->
-            Logging.d(TAG, "Trip assignment received: $payload")
-            // Handle new trip assignment
-            handleTripAssignment(payload)
-        }
-
         // Listen for booking updates
         mqttService?.addMessageListener("trip/+/booking") { topic, payload ->
             Logging.d(TAG, "Booking update received on $topic: $payload")
@@ -243,17 +270,155 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun handleTripAssignment(payload: String) {
-        // Parse the trip assignment and refresh trips
+    private fun handleTripEventFromMqtt(tripEvent: com.gocavgo.validator.dataclass.TripEventMessage) {
+        // Handle trip event directly from MQTT callback
         lifecycleScope.launch {
             try {
-                Logging.d(TAG, "Processing trip assignment: $payload")
-                // Force refresh trips from remote to get the new assignment
-                forceRefreshFromRemote()
+                Logging.d(TAG, "Processing MQTT trip event: ${tripEvent.event}")
+                Logging.d(TAG, "Trip ID: ${tripEvent.data.id}")
+                
+                // Convert backend trip data to Android format
+                val tripResponse = convertBackendTripToAndroid(tripEvent.data)
+                Logging.d(TAG, "Converted trip response: ${tripResponse.id}")
+                
+                // Check if trip is already in database (MQTT service may have saved it)
+                val vehicleId = vehicleSecurityManager.getVehicleId()
+                val existingTrip = databaseManager.getTripById(tripResponse.id)
+                
+                if (existingTrip != null) {
+                    Logging.d(TAG, "Trip already exists in database, updating UI")
+                    // Trip was already saved by MQTT service, just update UI
+                    latestTrip = existingTrip
+                    tripError = null
+                    isLoadingTrips = false
+                    
+                    Logging.d(TAG, "UI updated with existing trip: ${existingTrip.id}")
+                    Logging.d(TAG, "Trip status: ${existingTrip.status}")
+                    Logging.d(TAG, "Route: ${existingTrip.route.origin.google_place_name} → ${existingTrip.route.destination.google_place_name}")
+                } else {
+                    Logging.d(TAG, "Trip not found in database, saving now")
+                    // Trip not saved yet, save it
+                    val result = databaseManager.saveTripFromMqtt(tripResponse, vehicleId.toInt())
+                    
+                    if (result.isSuccess()) {
+                        Logging.d(TAG, "Trip saved to database successfully")
+                        
+                        // Update UI immediately
+                        latestTrip = tripResponse
+                        tripError = null
+                        isLoadingTrips = false
+                        
+                        Logging.d(TAG, "UI updated with new trip: ${tripResponse.id}")
+                        Logging.d(TAG, "Trip status: ${tripResponse.status}")
+                        Logging.d(TAG, "Route: ${tripResponse.route.origin.google_place_name} → ${tripResponse.route.destination.google_place_name}")
+                    } else {
+                        val errorMessage = result.getErrorOrNull() ?: "Unknown error"
+                        Logging.e(TAG, "Failed to save trip to database: $errorMessage")
+                        tripError = "Failed to save trip: $errorMessage"
+                    }
+                }
+                
             } catch (e: Exception) {
-                Logging.e(TAG, "Error handling trip assignment", e)
+                Logging.e(TAG, "Error handling MQTT trip event", e)
+                tripError = "Error processing trip event: ${e.message}"
             }
         }
+    }
+
+    
+    /**
+     * Convert backend trip data to Android trip response format
+     */
+    private fun convertBackendTripToAndroid(backendTrip: com.gocavgo.validator.dataclass.TripData): TripResponse {
+        return TripResponse(
+            id = backendTrip.id,
+            route_id = backendTrip.route_id,
+            vehicle_id = backendTrip.vehicle_id,
+            vehicle = com.gocavgo.validator.dataclass.VehicleInfo(
+                id = backendTrip.vehicle.id,
+                company_id = backendTrip.vehicle.company_id,
+                company_name = backendTrip.vehicle.company_name,
+                capacity = backendTrip.vehicle.capacity,
+                license_plate = backendTrip.vehicle.license_plate,
+                driver = backendTrip.vehicle.driver?.let { driver ->
+                    com.gocavgo.validator.dataclass.DriverInfo(
+                        name = driver.name,
+                        phone = driver.phone
+                    )
+                }
+            ),
+            status = backendTrip.status,
+            departure_time = backendTrip.departure_time,
+            connection_mode = backendTrip.connection_mode,
+            notes = backendTrip.notes,
+            seats = backendTrip.seats,
+            remaining_time_to_destination = backendTrip.remaining_time_to_destination,
+            remaining_distance_to_destination = backendTrip.remaining_distance_to_destination,
+            is_reversed = backendTrip.is_reversed,
+            has_custom_waypoints = backendTrip.has_custom_waypoints,
+            created_at = backendTrip.created_at,
+            updated_at = backendTrip.updated_at,
+            completion_timestamp = backendTrip.completion_time,
+            route = com.gocavgo.validator.dataclass.TripRoute(
+                id = backendTrip.route.id,
+                origin = com.gocavgo.validator.dataclass.SavePlaceResponse(
+                    id = backendTrip.route.origin.id,
+                    latitude = backendTrip.route.origin.latitude,
+                    longitude = backendTrip.route.origin.longitude,
+                    code = backendTrip.route.origin.code,
+                    google_place_name = backendTrip.route.origin.google_place_name,
+                    custom_name = backendTrip.route.origin.custom_name,
+                    province = "", // Backend doesn't have this field
+                    district = "", // Backend doesn't have this field
+                    place_id = backendTrip.route.origin.place_id,
+                    created_at = backendTrip.route.origin.created_at ?: "",
+                    updated_at = backendTrip.route.origin.updated_at ?: ""
+                ),
+                destination = com.gocavgo.validator.dataclass.SavePlaceResponse(
+                    id = backendTrip.route.destination.id,
+                    latitude = backendTrip.route.destination.latitude,
+                    longitude = backendTrip.route.destination.longitude,
+                    code = backendTrip.route.destination.code,
+                    google_place_name = backendTrip.route.destination.google_place_name,
+                    custom_name = backendTrip.route.destination.custom_name,
+                    province = "", // Backend doesn't have this field
+                    district = "", // Backend doesn't have this field
+                    place_id = backendTrip.route.destination.place_id,
+                    created_at = backendTrip.route.destination.created_at ?: "",
+                    updated_at = backendTrip.route.destination.updated_at ?: ""
+                )
+            ),
+            waypoints = backendTrip.waypoints.map { waypoint ->
+                com.gocavgo.validator.dataclass.TripWaypoint(
+                    id = waypoint.id,
+                    trip_id = waypoint.trip_id,
+                    location_id = waypoint.location_id,
+                    order = waypoint.order,
+                    price = waypoint.price,
+                    is_passed = waypoint.is_passed,
+                    is_next = waypoint.is_next,
+                    is_custom = waypoint.is_custom,
+                    remaining_time = waypoint.remaining_time,
+                    remaining_distance = waypoint.remaining_distance,
+                    waypoint_length_meters = waypoint.waypoint_length_meters,
+                    waypoint_time_seconds = waypoint.waypoint_time_seconds,
+                    passed_timestamp = waypoint.passed_timestamp,
+                    location = com.gocavgo.validator.dataclass.SavePlaceResponse(
+                        id = waypoint.location.id,
+                        latitude = waypoint.location.latitude,
+                        longitude = waypoint.location.longitude,
+                        code = waypoint.location.code,
+                        google_place_name = waypoint.location.google_place_name,
+                        custom_name = waypoint.location.custom_name,
+                        province = "", // Backend doesn't have this field
+                        district = "", // Backend doesn't have this field
+                        place_id = waypoint.location.place_id,
+                        created_at = waypoint.location.created_at ?: "",
+                        updated_at = waypoint.location.updated_at ?: ""
+                    )
+                )
+            }
+        )
     }
 
     @SuppressLint("MissingPermission")
@@ -905,7 +1070,7 @@ class MainActivity : ComponentActivity() {
         // Cancel existing job if any
         periodicTripFetchJob?.cancel()
         
-        Logging.d(TAG, "Starting periodic trip fetching every 3 minutes")
+        Logging.d(TAG, "Starting periodic trip fetching every 10 minutes (reduced frequency due to MQTT handling)")
         
         periodicTripFetchJob = periodicScope.launch {
             while (isActivityActive) {
@@ -921,8 +1086,8 @@ class MainActivity : ComponentActivity() {
                     Logging.e(TAG, "Error in periodic trip fetch: ${e.message}", e)
                 }
                 
-                // Wait 3 minutes (180,000 milliseconds)
-                delay(180_000)
+                // Wait 10 minutes (600,000 milliseconds) - reduced frequency since MQTT handles real-time updates
+                delay(600_000)
             }
         }
     }

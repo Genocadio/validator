@@ -4,6 +4,7 @@ import android.content.Context
 import com.gocavgo.validator.dataclass.TripResponse
 import com.gocavgo.validator.repository.TripRepository
 import com.gocavgo.validator.service.BookingService
+import com.gocavgo.validator.util.Result
 import kotlinx.coroutines.flow.Flow
 
 class DatabaseManager(context: Context) {
@@ -13,6 +14,17 @@ class DatabaseManager(context: Context) {
     
     // Trip operations
     suspend fun saveTrip(trip: TripResponse) = tripRepository.saveTrip(trip)
+    
+    suspend fun saveTripFromMqtt(trip: TripResponse, vehicleId: Int): com.gocavgo.validator.util.Result<Int> {
+        return try {
+            val result = tripRepository.saveTrip(trip)
+            android.util.Log.d("DatabaseManager", "Trip saved from MQTT: ${trip.id}")
+            com.gocavgo.validator.util.Result.success(1)
+        } catch (e: Exception) {
+            android.util.Log.e("DatabaseManager", "Failed to save trip from MQTT: ${e.message}", e)
+            com.gocavgo.validator.util.Result.error(e.message ?: "Unknown error")
+        }
+    }
     
     suspend fun getTripById(tripId: Int): TripResponse? = tripRepository.getTripById(tripId)
     

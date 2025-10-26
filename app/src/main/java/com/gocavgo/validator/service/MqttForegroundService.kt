@@ -195,7 +195,11 @@ class MqttForegroundService : Service() {
      */
     private fun createForegroundNotification(): Notification {
         val mqttStatus = mqttService?.let { 
-            if (it.isConnected()) "Connected" else "Disconnected" 
+            when {
+                it.isWaitingForNetwork() -> "Waiting for network"
+                it.isConnected() -> "Connected"
+                else -> "Disconnected"
+            }
         } ?: "Unknown"
         
         val statusText = "MQTT: $mqttStatus"

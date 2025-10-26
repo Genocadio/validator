@@ -37,6 +37,10 @@ import com.here.sdk.navigation.RouteProgress
 import com.here.sdk.navigation.RouteProgressListener
 import com.here.sdk.navigation.TextNotificationType
 import com.here.sdk.navigation.VisualNavigator
+import com.here.sdk.navigation.Milestone
+import com.here.sdk.navigation.MilestoneStatus
+import com.here.sdk.navigation.MilestoneStatusListener
+import com.here.sdk.navigation.DestinationReachedListener
 import com.here.sdk.routing.CalculateTrafficOnRouteCallback
 import com.here.sdk.routing.Maneuver
 import com.here.sdk.routing.ManeuverAction
@@ -223,6 +227,30 @@ class NavigationHandler(
                     eventText.maneuverNotificationDetails!!.maneuver
                 }
             }
+
+        // Notifies when a waypoint on the route is reached or missed.
+        visualNavigator.milestoneStatusListener =
+            MilestoneStatusListener { milestone: Milestone, milestoneStatus: MilestoneStatus ->
+                if (milestone.waypointIndex != null && milestoneStatus == MilestoneStatus.REACHED) {
+                    // milestoneIndex 0 = first trip waypoint (order=1), milestoneIndex 1 = second trip waypoint (order=2)
+                    val waypointOrder = milestone.waypointIndex!!
+                    val waypoiCord = milestone.originalCoordinates!!
+                    Log.d(TAG, "Waypoint reached via milestone: milestoneIndex=${milestone.waypointIndex}, waypointOrder=$waypointOrder")
+                    tripSectionValidator.markWaypointAsPassedByMilestone(waypointOrder, waypoiCord)
+                } else if (milestone.waypointIndex != null && milestoneStatus == MilestoneStatus.MISSED) {
+                    Log.w(TAG, "Waypoint missed: index=${milestone.waypointIndex}")
+                } else if (milestone.waypointIndex == null && milestoneStatus == MilestoneStatus.REACHED) {
+                    Log.d(TAG, "System waypoint reached at: ${milestone.mapMatchedCoordinates}")
+                } else if (milestone.waypointIndex == null && milestoneStatus == MilestoneStatus.MISSED) {
+                    Log.w(TAG, "System waypoint missed at: ${milestone.mapMatchedCoordinates}")
+                }
+            }
+
+        // Notifies when the destination of the route is reached.
+        visualNavigator.destinationReachedListener = DestinationReachedListener {
+            Log.d(TAG, "Destination reached!")
+            tripSectionValidator.handleDestinationReached()
+        }
     }
 
     fun setupHeadlessListeners(
@@ -330,6 +358,30 @@ class NavigationHandler(
                 Log.e(TAG, "Error in route deviation listener: ${e.message}", e)
             }
         }
+
+        // Notifies when a waypoint on the route is reached or missed (headless).
+        navigator.milestoneStatusListener =
+            MilestoneStatusListener { milestone: Milestone, milestoneStatus: MilestoneStatus ->
+                if (milestone.waypointIndex != null && milestoneStatus == MilestoneStatus.REACHED) {
+                    // milestoneIndex 0 = first trip waypoint (order=1), milestoneIndex 1 = second trip waypoint (order=2)
+                    val waypointOrder = milestone.waypointIndex!!
+                    val waypoiCord = milestone.originalCoordinates!!
+                    Log.d(TAG, "Headless waypoint reached via milestone: milestoneIndex=${milestone.waypointIndex}, waypointOrder=$waypointOrder")
+                    tripSectionValidator.markWaypointAsPassedByMilestone(waypointOrder, waypoiCord)
+                } else if (milestone.waypointIndex != null && milestoneStatus == MilestoneStatus.MISSED) {
+                    Log.w(TAG, "Headless waypoint missed: index=${milestone.waypointIndex}")
+                } else if (milestone.waypointIndex == null && milestoneStatus == MilestoneStatus.REACHED) {
+                    Log.d(TAG, "Headless system waypoint reached at: ${milestone.mapMatchedCoordinates}")
+                } else if (milestone.waypointIndex == null && milestoneStatus == MilestoneStatus.MISSED) {
+                    Log.w(TAG, "Headless system waypoint missed at: ${milestone.mapMatchedCoordinates}")
+                }
+            }
+
+        // Notifies when the destination of the route is reached (headless).
+        navigator.destinationReachedListener = DestinationReachedListener {
+            Log.d(TAG, "Headless destination reached!")
+            tripSectionValidator.handleDestinationReached()
+        }
     }
 
     private fun getETA(routeProgress: RouteProgress): String {
@@ -346,32 +398,14 @@ class NavigationHandler(
             val firstSectionProgress = sectionProgressList[0]
             val remainingTimeToNextWaypoint = firstSectionProgress.remainingDuration.toSeconds()
             val remainingDistanceToNextWaypoint = firstSectionProgress.remainingDistanceInMeters.toDouble()
-            
-            Log.d(TAG, "=== UPDATING WAYPOINT WITH FIRST SECTION DATA ===")
-            Log.d(TAG, "First section remaining time: ${remainingTimeToNextWaypoint}s")
-            Log.d(TAG, "First section remaining distance: ${remainingDistanceToNextWaypoint}m")
+
             
             // Update the corresponding waypoint with first section data
             updateWaypointWithFirstSectionData(remainingTimeToNextWaypoint, remainingDistanceToNextWaypoint)
             
             // Get calculated waypoint data from TripSectionValidator
             val calculatedWaypointData = tripSectionValidator.getCurrentWaypointProgress()
-            
-            // Log waypoint progress for debugging
-            Log.d(TAG, "=== WAYPOINT PROGRESS FROM TRIPSECTIONVALIDATOR ===")
-            calculatedWaypointData.forEach { progress ->
-                Log.d(TAG, "Waypoint ${progress.waypointIndex} (${progress.waypointName}):")
-                Log.d(TAG, "  - Is passed: ${progress.isPassed}")
-                Log.d(TAG, "  - Is next: ${progress.isNext}")
-                Log.d(TAG, "  - Remaining time: ${progress.remainingTimeInSeconds?.let { "${it}s" } ?: "null"}")
-                Log.d(TAG, "  - Remaining distance: ${progress.remainingDistanceInMeters?.let { "${it}m" } ?: "null"}m")
-            }
-            Log.d(TAG, "===============================================")
-            
-            // TripSectionValidator now handles MQTT updates internally
-            Log.d(TAG, "TripSectionValidator handles MQTT updates internally - no external RouteProgressTracker needed")
-            
-            Log.d(TAG, "===============================================")
+
         }
 
         for (i in sectionProgressList.indices) {
