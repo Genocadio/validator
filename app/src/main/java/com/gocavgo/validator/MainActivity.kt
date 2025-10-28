@@ -5,6 +5,7 @@ import android.content.Context
 import android.os.Bundle
 import android.content.Intent
 import android.content.pm.PackageManager
+import com.gocavgo.validator.AutoModeActivity
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -41,6 +42,7 @@ import android.os.Build
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.core.app.ActivityCompat
 import com.gocavgo.validator.service.MqttService
+import com.gocavgo.validator.sync.SyncCoordinator
 import com.gocavgo.validator.util.Logging
 import com.gocavgo.validator.ui.components.NetworkStatusIndicator
 import com.here.sdk.core.engine.AuthenticationMode
@@ -233,23 +235,53 @@ class MainActivity : ComponentActivity() {
         mqttService?.let { mqtt ->
             if (mqtt.isConnected()) {
                 val vehicleId = vehicleSecurityManager.getVehicleId()
-                val statusMessage = """
-                {
-                    "vehicle_id": "$vehicleId",
-                    "status": "$status",
-                    "timestamp": ${System.currentTimeMillis()},
-                    "location": null
-                }
-            """.trimIndent()
-
-                mqtt.publish("car/$vehicleId/status", statusMessage)
-                    .whenComplete { result, throwable ->
-                        if (throwable != null) {
-                            Logging.e(TAG, "Failed to publish vehicle status", throwable)
-                        } else {
-                            Logging.d(TAG, "Vehicle status published: $status")
+                
+                // Fetch current location from database
+                lifecycleScope.launch {
+                    var currentLat: Double? = null
+                    var currentLng: Double? = null
+                    var currentSpeed: Double? = null
+                    
+                    try {
+                        val vehicleLocation = withContext(Dispatchers.IO) {
+                            val db = com.gocavgo.validator.database.AppDatabase.getDatabase(this@MainActivity)
+                            val vehicleLocationDao = db.vehicleLocationDao()
+                            vehicleLocationDao.getVehicleLocation(vehicleId.toInt())
                         }
+                        
+                        if (vehicleLocation != null) {
+                            currentLat = vehicleLocation.latitude
+                            currentLng = vehicleLocation.longitude
+                            currentSpeed = vehicleLocation.speed
+                            Logging.d(TAG, "Including location in $status status: lat=$currentLat, lng=$currentLng, speed=$currentSpeed")
+                        } else {
+                            Logging.d(TAG, "No location data available for $status status message (sending nulls)")
+                        }
+                    } catch (e: Exception) {
+                        Logging.e(TAG, "Failed to fetch location for $status status: ${e.message}", e)
                     }
+                    
+                    // Build status message with location data
+                    val statusMessage = """
+                    {
+                        "vehicle_id": "$vehicleId",
+                        "status": "$status",
+                        "timestamp": ${System.currentTimeMillis()},
+                        "current_latitude": ${currentLat ?: "null"},
+                        "current_longitude": ${currentLng ?: "null"},
+                        "current_speed": ${currentSpeed ?: "null"}
+                    }
+                """.trimIndent()
+
+                    mqtt.publish("car/$vehicleId/status", statusMessage)
+                        .whenComplete { result, throwable ->
+                            if (throwable != null) {
+                                Logging.e(TAG, "Failed to publish vehicle status", throwable)
+                            } else {
+                                Logging.d(TAG, "Vehicle status published: $status with location data")
+                            }
+                        }
+                }
             }
         }
     }
@@ -288,6 +320,16 @@ class MainActivity : ComponentActivity() {
                 if (existingTrip != null) {
                     Logging.d(TAG, "Trip already exists in database, updating UI")
                     // Trip was already saved by MQTT service, just update UI
+                    
+                    // Record MQTT update for sync coordination
+                    SyncCoordinator.recordMqttUpdate(this@MainActivity)
+                    Logging.d(TAG, "Recorded MQTT update for sync coordination (existing trip)")
+                    
+                    // Reset periodic fetch timer to avoid redundant backend calls
+                    Logging.d(TAG, "Resetting periodic fetch timer after MQTT update")
+                    stopPeriodicTripFetching()
+                    startPeriodicTripFetching()
+                    
                     latestTrip = existingTrip
                     tripError = null
                     isLoadingTrips = false
@@ -302,6 +344,15 @@ class MainActivity : ComponentActivity() {
                     
                     if (result.isSuccess()) {
                         Logging.d(TAG, "Trip saved to database successfully")
+                        
+                        // Record MQTT update for sync coordination
+                        SyncCoordinator.recordMqttUpdate(this@MainActivity)
+                        Logging.d(TAG, "Recorded MQTT update for sync coordination")
+                        
+                        // Reset periodic fetch timer to avoid redundant backend calls
+                        Logging.d(TAG, "Resetting periodic fetch timer after MQTT update")
+                        stopPeriodicTripFetching()
+                        startPeriodicTripFetching()
                         
                         // Update UI immediately
                         latestTrip = tripResponse
@@ -703,8 +754,16 @@ class MainActivity : ComponentActivity() {
                     
                     // Only fetch from remote if we don't have any trips or if all trips are completed
                     val tripCount = databaseManager.getTripCountByVehicle(vehicleId.toInt())
-                    if (tripCount == 0 || (dbTrip != null && TripStatus.isCompleted(dbTrip.status))) {
-                        Logging.d(TAG, "No active trips found, fetching from remote API...")
+                    val shouldFetchFromBackend = tripCount == 0 || (dbTrip != null && TripStatus.isCompleted(dbTrip.status))
+                    
+                    // Check if we should skip backend fetch due to fresh MQTT data
+                    // shouldFetchFromBackend returns true if we SHOULD fetch (data is stale)
+                    val shouldSkipBackendFetch = !SyncCoordinator.shouldFetchFromBackend(this@MainActivity)
+                    
+                    if (shouldFetchFromBackend && shouldSkipBackendFetch) {
+                        Logging.d(TAG, "Skipping backend fetch - data is fresh from MQTT (within 2 minutes)")
+                    } else if (shouldFetchFromBackend) {
+                        Logging.d(TAG, "Fetching from remote API (data is stale or no MQTT updates)...")
                         val result = databaseManager.syncTripsFromRemote(vehicleId.toInt(), page = 1, limit = 1)
                         
                         when {
@@ -1104,9 +1163,20 @@ class MainActivity : ComponentActivity() {
             return
         }
         
+        // Check if data is fresh from MQTT before performing periodic fetch
+        val shouldFetchFromBackend = SyncCoordinator.shouldFetchFromBackend(this@MainActivity)
+        
+        if (!shouldFetchFromBackend) {
+            Logging.d(TAG, "=== PERIODIC TRIP FETCH SKIPPED ===")
+            Logging.d(TAG, "Data is fresh from MQTT (within 2 minutes), skipping backend fetch")
+            Logging.d(TAG, "Sync status: ${SyncCoordinator.getSyncStatus(this@MainActivity)}")
+            return
+        }
+        
         val vehicleId = vehicleSecurityManager.getVehicleId()
         Logging.d(TAG, "=== PERIODIC TRIP FETCH ===")
         Logging.d(TAG, "Fetching trips for vehicle ID: $vehicleId")
+        Logging.d(TAG, "Sync status: ${SyncCoordinator.getSyncStatus(this@MainActivity)}")
         
         try {
             // Get current trip count before sync
@@ -1227,6 +1297,7 @@ fun NavigationScreen(
     onIsSimulatedChanged: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
@@ -1458,6 +1529,26 @@ fun NavigationScreen(
         }
 
 
+        item {
+            Button(
+                onClick = {
+                    val intent = Intent(context, AutoModeActivity::class.java)
+                    context.startActivity(intent)
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.tertiary
+                )
+            ) {
+                Text(
+                    "Auto Mode",
+                    style = MaterialTheme.typography.bodyLarge
+                )
+            }
+        }
+        
         item {
             Button(
                 onClick = onVehicleAuth,

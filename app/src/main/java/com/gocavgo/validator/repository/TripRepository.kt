@@ -13,6 +13,7 @@ import android.util.Log
 class TripRepository(context: Context) {
     
     private val tripDao = AppDatabase.getDatabase(context).tripDao()
+    private val vehicleLocationDao = AppDatabase.getDatabase(context).vehicleLocationDao()
     private val remoteDataManager = RemoteDataManager.getInstance()
     
     // Get trips from database
@@ -292,9 +293,31 @@ class TripRepository(context: Context) {
     }
     
     // Update vehicle current location
-    suspend fun updateVehicleCurrentLocation(vehicleId: Int, latitude: Double, longitude: Double, speed: Double) {
+    suspend fun updateVehicleCurrentLocation(
+        vehicleId: Int, 
+        latitude: Double, 
+        longitude: Double, 
+        speed: Double,
+        accuracy: Double,
+        bearing: Double?
+    ) {
         try {
-            // Get the active trip for this vehicle
+            val timestamp = System.currentTimeMillis()
+            
+            // Store in VehicleLocationEntity (latest location per vehicle)
+            val vehicleLocation = com.gocavgo.validator.database.VehicleLocationEntity(
+                vehicleId = vehicleId,
+                latitude = latitude,
+                longitude = longitude,
+                speed = speed,
+                accuracy = accuracy,
+                bearing = bearing,
+                timestamp = timestamp
+            )
+            vehicleLocationDao.upsertVehicleLocation(vehicleLocation)
+            Log.d("TripRepository", "Vehicle location stored in VehicleLocationEntity: $latitude, $longitude, speed: $speed, accuracy: $accuracy, bearing: $bearing")
+            
+            // Update the vehicle location in the active trip (for MQTT)
             val activeTrip = getActiveTripByVehicle(vehicleId)
             if (activeTrip != null) {
                 // Update the vehicle location in the active trip
@@ -302,15 +325,15 @@ class TripRepository(context: Context) {
                     current_latitude = latitude,
                     current_longitude = longitude,
                     current_speed = speed,
-                    last_location_update = System.currentTimeMillis()
+                    last_location_update = timestamp
                 )
                 
                 val updatedTrip = activeTrip.copy(vehicle = updatedVehicle)
                 saveTrip(updatedTrip)
                 
-                Log.d("TripRepository", "Vehicle location updated: $latitude, $longitude, speed: $speed")
+                Log.d("TripRepository", "Vehicle location updated in trip: $latitude, $longitude, speed: $speed")
             } else {
-                Log.w("TripRepository", "No active trip found for vehicle $vehicleId")
+                Log.w("TripRepository", "No active trip found for vehicle $vehicleId, but location stored in VehicleLocationEntity")
             }
         } catch (e: Exception) {
             Log.e("TripRepository", "Failed to update vehicle location: ${e.message}", e)

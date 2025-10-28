@@ -8,7 +8,10 @@ import kotlinx.serialization.Serializable
 data class CarStatusMessage(
     val status: String,
     val car_id: String,
-    val timestamp: Long
+    val timestamp: Long,
+    val current_latitude: Double? = null,
+    val current_longitude: Double? = null,
+    val current_speed: Double? = null
 )
 
 @Serializable

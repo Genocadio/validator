@@ -16,6 +16,10 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     
+    <!-- Auto Mode Navigation Launch permissions -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    
     <!-- NFC permissions -->
     <uses-permission android:name="android.permission.NFC" />
     <uses-feature
@@ -57,12 +61,15 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-        <!-- Navigator Activity -->
+        
+        <!-- AutoMode Activity -->
         <activity
-            android:name=".Navigator"
-            android:exported="false"
+            android:name=".AutoModeActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
+            android:theme="@style/Theme.Validator"
             android:launchMode="singleTop"
-            android:theme="@style/Theme.AppCompat.Light.NoActionBar" />
+            android:exported="false" />
+
             
         <!-- MQTT Foreground Service -->
         <service
@@ -71,9 +78,22 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
             
+        <!-- AutoMode Foreground Service -->
+        <service
+            android:name=".service.AutoModeForegroundService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+            
         <!-- Notification Dismiss Receiver -->
         <receiver
             android:name=".service.NotificationDismissReceiver"
+            android:enabled="true"
+            android:exported="false" />
+            
+        <!-- Navigation Launch Receiver -->
+        <receiver
+            android:name=".receiver.NavigationLaunchReceiver"
             android:enabled="true"
             android:exported="false" />
     </application>

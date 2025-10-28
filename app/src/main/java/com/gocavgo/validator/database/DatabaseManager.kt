@@ -157,8 +157,14 @@ class DatabaseManager(context: Context) {
     }
     
     // Vehicle location tracking
-    suspend fun updateVehicleCurrentLocation(vehicleId: Int, latitude: Double, longitude: Double, speed: Double) =
-        tripRepository.updateVehicleCurrentLocation(vehicleId, latitude, longitude, speed)
+    suspend fun updateVehicleCurrentLocation(
+        vehicleId: Int, 
+        latitude: Double, 
+        longitude: Double, 
+        speed: Double,
+        accuracy: Double,
+        bearing: Double?
+    ) = tripRepository.updateVehicleCurrentLocation(vehicleId, latitude, longitude, speed, accuracy, bearing)
     
     // Trip cleanup operations
     suspend fun cleanupUnavailableTrips(vehicleId: Int, availableTripIds: List<Int>) =

@@ -85,6 +85,13 @@ class TripSectionValidator(private val context: Context) {
     private var lastWaypointApproachNotification = mutableSetOf<Int>()
     private var tripStarted = false
     
+    // Latest location data from navigableLocationListener
+    private var latestLat: Double? = null
+    private var latestLng: Double? = null
+    private var latestSpeed: Double? = null
+    private var latestAccuracy: Double? = null
+    private var latestBearing: Double? = null
+    
     companion object {
         private const val TAG = "TripSectionValidator"
         private const val LOCATION_PROXIMITY_THRESHOLD_METERS = 50.0 // Consider locations "same" if within 50m
@@ -111,6 +118,17 @@ class TripSectionValidator(private val context: Context) {
         routeProgressMqttService.initialize(mqttService)
         Logging.d(TAG, "MQTT service initialized for TripSectionValidator")
         Logging.d(TAG, "MQTT service connected: ${mqttService.isConnected()}")
+    }
+    
+    /**
+     * Update latest location data from navigableLocationListener
+     */
+    fun updateLocationData(lat: Double, lng: Double, speed: Double, accuracy: Double, bearing: Double?) {
+        latestLat = lat
+        latestLng = lng
+        latestSpeed = speed
+        latestAccuracy = accuracy
+        latestBearing = bearing
     }
 
     /**
@@ -1334,6 +1352,28 @@ class TripSectionValidator(private val context: Context) {
                 }
                 
                 Logging.d(TAG, "✅ All progress written to database - database is now the source of truth")
+                
+                // Update vehicle location in database with latest location data
+                if (latestLat != null && latestLng != null && latestSpeed != null && latestAccuracy != null) {
+                    coroutineScope.launch {
+                        try {
+                            databaseManager.updateVehicleCurrentLocation(
+                                vehicleId = trip.vehicle_id,
+                                latitude = latestLat!!,
+                                longitude = latestLng!!,
+                                speed = latestSpeed!!,
+                                accuracy = latestAccuracy!!,
+                                bearing = latestBearing
+                            )
+                            Logging.d(TAG, "✅ Vehicle location updated in database")
+                        } catch (e: Exception) {
+                            Logging.e(TAG, "Failed to update vehicle location: ${e.message}", e)
+                        }
+                    }
+                } else {
+                    Logging.d(TAG, "⚠️ No location data available to update")
+                }
+                
                 Logging.d(TAG, "=============================================")
             }
         } catch (e: Exception) {
@@ -1519,14 +1559,26 @@ class TripSectionValidator(private val context: Context) {
                                 Logging.d(TAG, "Next waypoint: ${unpassedWaypoints.minByOrNull { it.order }?.location?.google_place_name ?: "None"}")
                                 Logging.d(TAG, "=====================================")
                                 
-                                // CRITICAL: Use ONLY database trip data - no calculated data
-                                routeProgressMqttService.sendTripProgressUpdate(
-                                    tripResponse = freshTrip, // Use fresh database data directly
-                                    remainingTimeToDestination = tripLevelTime,
-                                    remainingDistanceToDestination = tripLevelDistance,
-                                    currentSpeed = null, // No real-time speed data available in this context
-                                    currentLocation = null // No real-time location data available in this context
-                                )?.whenComplete { result, throwable ->
+                // Extract vehicle location data from database
+                val currentSpeed = freshTrip.vehicle.current_speed
+                val currentLocation = if (freshTrip.vehicle.current_latitude != null && 
+                                          freshTrip.vehicle.current_longitude != null) {
+                    MqttService.Location(
+                        latitude = freshTrip.vehicle.current_latitude!!,
+                        longitude = freshTrip.vehicle.current_longitude!!
+                    )
+                } else {
+                    null
+                }
+                
+                // CRITICAL: Use ONLY database trip data - no calculated data
+                routeProgressMqttService.sendTripProgressUpdate(
+                    tripResponse = freshTrip, // Use fresh database data directly
+                    remainingTimeToDestination = tripLevelTime,
+                    remainingDistanceToDestination = tripLevelDistance,
+                    currentSpeed = currentSpeed,
+                    currentLocation = currentLocation
+                )?.whenComplete { result, throwable ->
                                     if (throwable != null) {
                                         Logging.e(TAG, "Failed to publish trip progress update: ${throwable.message}", throwable)
                                     } else {

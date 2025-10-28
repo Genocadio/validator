@@ -249,10 +249,12 @@ class TripProgressTracker(
                     try {
                         location?.let { loc ->
                             databaseManager.updateVehicleCurrentLocation(
-                                trip.vehicle_id,
-                                loc.coordinates.latitude,
-                                loc.coordinates.longitude,
-                                speedInMetersPerSecond ?: 0.0
+                                vehicleId = trip.vehicle_id,
+                                latitude = loc.coordinates.latitude,
+                                longitude = loc.coordinates.longitude,
+                                speed = speedInMetersPerSecond ?: 0.0,
+                                accuracy = speedAccuracy ?: 0.0,
+                                bearing = null // Location object doesn't provide bearing
                             )
                         }
                     } catch (e: Exception) {

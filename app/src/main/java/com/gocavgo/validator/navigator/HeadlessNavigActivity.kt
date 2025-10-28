@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.media.RingtoneManager
 import android.nfc.Tag
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -53,6 +54,10 @@ import com.here.sdk.navigation.RouteDeviation
 import com.here.sdk.navigation.RouteDeviationListener
 import com.here.sdk.navigation.LocationSimulator
 import com.here.sdk.navigation.LocationSimulatorOptions
+import com.here.sdk.navigation.Milestone
+import com.here.sdk.navigation.MilestoneStatus
+import com.here.sdk.navigation.MilestoneStatusListener
+import com.here.sdk.navigation.DestinationReachedListener
 import com.here.sdk.routing.CarOptions
 import com.here.sdk.routing.OfflineRoutingEngine
 import com.here.sdk.routing.Route
@@ -111,6 +116,15 @@ class HeadlessNavigActivity : ComponentActivity() {
     
     // HERE SDK offline mode state
     private var pendingOfflineMode: Boolean? = null
+    
+    // Trip data refresh for passenger counts
+    private val tripRefreshHandler = Handler(Looper.getMainLooper())
+    private val tripRefreshRunnable = object : Runnable {
+        override fun run() {
+            refreshTripDataFromDatabase()
+            tripRefreshHandler.postDelayed(this, 10000) // Refresh every 10 seconds
+        }
+    }
     
     // UI state management
     private var currentInput by mutableStateOf("")
@@ -260,6 +274,9 @@ class HeadlessNavigActivity : ComponentActivity() {
                     // Register MQTT booking bundle receiver
                     registerBookingBundleReceiver()
                     registerMqttBookingBundleCallback()
+                    
+                    // Start periodic trip data refresh
+                    tripRefreshHandler.postDelayed(tripRefreshRunnable, 10000)
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error during initialization: ${e.message}", e)
@@ -316,6 +333,12 @@ class HeadlessNavigActivity : ComponentActivity() {
 
             // Initialize trip section validator
             tripSectionValidator = TripSectionValidator(this)
+            
+            // Initialize MQTT service in trip section validator
+            mqttService?.let { 
+                tripSectionValidator.initializeMqttService(it)
+                Log.d(TAG, "MQTT service initialized in trip section validator")
+            }
 
             // Initialize routing engines
             initializeRoutingEngines()
@@ -634,6 +657,16 @@ class HeadlessNavigActivity : ComponentActivity() {
                 val accuracy = currentNavigableLocation.originalLocation.speedAccuracyInMetersPerSecond ?: 0.0
                 currentSpeedInMetersPerSecond = speed
                 Log.d(TAG, "Driving speed (m/s): $speed plus/minus an accuracy of: $accuracy")
+                
+                // Extract location data from map-matched location
+                val lat = lastMapMatchedLocation.coordinates.latitude
+                val lng = lastMapMatchedLocation.coordinates.longitude
+                val bearing = lastMapMatchedLocation.bearingInDegrees
+                
+                // Store location data for use by TripSectionValidator
+                // The actual database update will be called from TripSectionValidator.writeProgressToDatabase()
+                // to ensure it happens at the same frequency as waypoint progress updates
+                tripSectionValidator.updateLocationData(lat, lng, speed, accuracy, bearing)
             } catch (e: Exception) {
                 Log.e(TAG, "Error in navigable location listener: ${e.message}", e)
             }
@@ -646,6 +679,29 @@ class HeadlessNavigActivity : ComponentActivity() {
             } catch (e: Exception) {
                 Log.e(TAG, "Error in route deviation listener: ${e.message}", e)
             }
+        }
+
+        // Notifies when a waypoint on the route is reached or missed
+        nav.milestoneStatusListener =
+            MilestoneStatusListener { milestone, milestoneStatus ->
+                if (milestone.waypointIndex != null && milestoneStatus == MilestoneStatus.REACHED) {
+                    val waypointOrder = milestone.waypointIndex!!
+                    val waypointCoordinates = milestone.originalCoordinates!!
+                    Log.d(TAG, "Headless waypoint reached via milestone: milestoneIndex=${milestone.waypointIndex}, waypointOrder=$waypointOrder")
+                    tripSectionValidator.markWaypointAsPassedByMilestone(waypointOrder, waypointCoordinates)
+                } else if (milestone.waypointIndex != null && milestoneStatus == MilestoneStatus.MISSED) {
+                    Log.w(TAG, "Headless waypoint missed: index=${milestone.waypointIndex}")
+                } else if (milestone.waypointIndex == null && milestoneStatus == MilestoneStatus.REACHED) {
+                    Log.d(TAG, "Headless system waypoint reached at: ${milestone.mapMatchedCoordinates}")
+                } else if (milestone.waypointIndex == null && milestoneStatus == MilestoneStatus.MISSED) {
+                    Log.w(TAG, "Headless system waypoint missed at: ${milestone.mapMatchedCoordinates}")
+                }
+            }
+
+        // Notifies when the destination of the route is reached
+        nav.destinationReachedListener = DestinationReachedListener {
+            Log.d(TAG, "Headless destination reached!")
+            tripSectionValidator.handleDestinationReached()
         }
     }
 
@@ -1079,6 +1135,25 @@ class HeadlessNavigActivity : ComponentActivity() {
         }
     }
 
+    private fun refreshTripDataFromDatabase() {
+        tripResponse?.let { currentTrip ->
+            lifecycleScope.launch(Dispatchers.IO) {
+                try {
+                    val freshTrip = databaseManager.getTripById(currentTrip.id)
+                    withContext(Dispatchers.Main) {
+                        if (freshTrip != null) {
+                            tripResponse = freshTrip
+                            updatePassengerCounts()
+                            Log.d(TAG, "Trip data refreshed from database")
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error refreshing trip data: ${e.message}", e)
+                }
+            }
+        }
+    }
+    
     private fun updatePassengerCounts() {
         tripResponse?.let { trip ->
             lifecycleScope.launch(Dispatchers.IO) {
@@ -1105,7 +1180,9 @@ class HeadlessNavigActivity : ComponentActivity() {
                         nextWaypointName = if (trip.status == "SCHEDULED") {
                             trip.route.origin.custom_name ?: trip.route.origin.google_place_name
                         } else {
+                            // Try to find waypoint marked as next, fallback to first unpassed waypoint
                             val nextWaypoint = trip.waypoints.firstOrNull { it.is_next }
+                                ?: trip.waypoints.filter { !it.is_passed }.minByOrNull { it.order }
                             nextWaypoint?.location?.custom_name ?: nextWaypoint?.location?.google_place_name ?: "No upcoming waypoint"
                         }
                     }
@@ -1321,7 +1398,6 @@ class HeadlessNavigActivity : ComponentActivity() {
 
     // MQTT Notification Methods
 
-    @SuppressLint("UnspecifiedRegisterReceiverFlag")
     private fun registerBookingBundleReceiver() {
         try {
             if (bookingBundleReceiver != null) return
@@ -1344,6 +1420,8 @@ class HeadlessNavigActivity : ComponentActivity() {
                             try {
                                 showMqttBookingNotification(passengerName, pickup, dropoff, numTickets, isPaid)
                                 playBundleNotificationSound()
+                                // Refresh trip data and passenger counts after booking
+                                refreshTripDataFromDatabase()
                             } catch (e: Exception) {
                                 Log.e(TAG, "Error handling booking bundle broadcast: ${e.message}", e)
                             }
@@ -1352,7 +1430,12 @@ class HeadlessNavigActivity : ComponentActivity() {
                 }
             }
             val filter = IntentFilter(MqttService.ACTION_BOOKING_BUNDLE_SAVED)
-            registerReceiver(bookingBundleReceiver, filter)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(bookingBundleReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                @Suppress("UnspecifiedRegisterReceiverFlag")
+                registerReceiver(bookingBundleReceiver, filter)
+            }
             Log.d(TAG, "Registered booking bundle receiver")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to register booking bundle receiver: ${e.message}", e)
@@ -1368,6 +1451,8 @@ class HeadlessNavigActivity : ComponentActivity() {
                     try {
                         showMqttBookingNotification(passengerName, pickup, dropoff, numTickets, isPaid)
                         playBundleNotificationSound()
+                        // Refresh trip data and passenger counts after booking
+                        refreshTripDataFromDatabase()
                     } catch (e: Exception) {
                         Log.e(TAG, "Error handling MQTT booking bundle callback: ${e.message}", e)
                     }
@@ -1512,6 +1597,9 @@ class HeadlessNavigActivity : ComponentActivity() {
         navigator?.route = null
         navigator?.routeProgressListener = null
         navigator?.navigableLocationListener = null
+        navigator?.routeDeviationListener = null
+        navigator?.milestoneStatusListener = null
+        navigator?.destinationReachedListener = null
         
         // Reset trip section validator
         if (::tripSectionValidator.isInitialized) {
@@ -1557,6 +1645,9 @@ class HeadlessNavigActivity : ComponentActivity() {
             Log.w(TAG, "Error unregistering MQTT booking bundle callback: ${e.message}")
         }
 
+        // Stop periodic trip data refresh
+        tripRefreshHandler.removeCallbacks(tripRefreshRunnable)
+        
         handler.removeCallbacksAndMessages(null)
         
         // Dispose HERE SDK

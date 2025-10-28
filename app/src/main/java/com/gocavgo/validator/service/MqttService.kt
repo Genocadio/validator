@@ -27,6 +27,7 @@ import com.gocavgo.validator.database.PaymentEntity
 import com.gocavgo.validator.database.TicketEntity
 import com.gocavgo.validator.database.TripEntity
 import com.gocavgo.validator.network.NetworkMonitor
+import com.gocavgo.validator.sync.SyncCoordinator
 import android.content.Intent
 
 import java.util.concurrent.ConcurrentHashMap
@@ -178,7 +179,11 @@ class MqttService private constructor(
         val vehicle_id: String,
         val timestamp: Long,
         val status: String,
-        val foreground: Boolean
+        val foreground: Boolean,
+        val current_latitude: Double? = null,
+        val current_longitude: Double? = null,
+        val current_speed: Double? = null,
+        val bearing: Double? = null
     )
 
     // Serializable data class for waypoint reached notifications
@@ -722,11 +727,44 @@ class MqttService private constructor(
      */
     private fun sendHeartbeat() {
         try {
+            // Get latest location from database
+            val vehicleId = carId.toIntOrNull()
+            var currentLat: Double? = null
+            var currentLng: Double? = null
+            var currentSpeed: Double? = null
+            var bearing: Double? = null
+            
+            if (vehicleId != null) {
+                try {
+                    val db = AppDatabase.getDatabase(context)
+                    val vehicleLocationDao = db.vehicleLocationDao()
+                    val vehicleLocation = kotlinx.coroutines.runBlocking {
+                        vehicleLocationDao.getVehicleLocation(vehicleId)
+                    }
+                    
+                    if (vehicleLocation != null) {
+                        currentLat = vehicleLocation.latitude
+                        currentLng = vehicleLocation.longitude
+                        currentSpeed = vehicleLocation.speed
+                        bearing = vehicleLocation.bearing
+                        Log.d(TAG, "Including location in heartbeat: lat=$currentLat, lng=$currentLng, speed=$currentSpeed, bearing=$bearing")
+                    } else {
+                        Log.d(TAG, "No location data available for heartbeat message (sending nulls)")
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to fetch location for heartbeat: ${e.message}", e)
+                }
+            }
+            
             val heartbeat = HeartbeatMessage(
                 vehicle_id = carId,
                 timestamp = System.currentTimeMillis(),
                 status = "heartbeat",
-                foreground = isAppInForeground.get()
+                foreground = isAppInForeground.get(),
+                current_latitude = currentLat,
+                current_longitude = currentLng,
+                current_speed = currentSpeed,
+                bearing = bearing
             )
             
             val payload = json.encodeToString(heartbeat)
@@ -735,7 +773,7 @@ class MqttService private constructor(
                     if (throwable != null) {
                         Log.w(TAG, "Heartbeat send failed: ${throwable.message}")
                     } else {
-                        Log.d(TAG, "Heartbeat sent successfully")
+                        Log.d(TAG, "Heartbeat sent successfully with location data")
                     }
                 }
         } catch (e: Exception) {
@@ -1037,10 +1075,40 @@ class MqttService private constructor(
      * Publish car online status
      */
     private fun publishOnlineStatus() {
+        // Get latest location from database
+        val vehicleId = carId.toIntOrNull()
+        var currentLat: Double? = null
+        var currentLng: Double? = null
+        var currentSpeed: Double? = null
+        
+        if (vehicleId != null) {
+            try {
+                val db = AppDatabase.getDatabase(context)
+                val vehicleLocationDao = db.vehicleLocationDao()
+                val vehicleLocation = kotlinx.coroutines.runBlocking {
+                    vehicleLocationDao.getVehicleLocation(vehicleId)
+                }
+                
+                if (vehicleLocation != null) {
+                    currentLat = vehicleLocation.latitude
+                    currentLng = vehicleLocation.longitude
+                    currentSpeed = vehicleLocation.speed
+                    Log.d(TAG, "Including location in status: lat=$currentLat, lng=$currentLng, speed=$currentSpeed")
+                } else {
+                    Log.d(TAG, "No location data available for status message (sending nulls)")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to fetch location for status: ${e.message}", e)
+            }
+        }
+        
         val status = CarStatusMessage(
             status = "ONLINE",
             car_id = carId,
-            timestamp = System.currentTimeMillis()
+            timestamp = System.currentTimeMillis(),
+            current_latitude = currentLat,
+            current_longitude = currentLng,
+            current_speed = currentSpeed
         )
         val payload = json.encodeToString(status)
         publish("car/$carId/status", payload, QOS, true) // Retained message
@@ -1714,6 +1782,9 @@ class MqttService private constructor(
                     
                     Log.d(TAG, "Trip saved to database successfully: ID=${tripResponse.id}, status=${tripResponse.status}")
                     Log.d(TAG, "Route: ${tripResponse.route.origin.google_place_name} → ${tripResponse.route.destination.google_place_name}")
+                    
+                    // Record MQTT update timestamp for sync coordination
+                    SyncCoordinator.recordMqttUpdate(context)
                     
                     // Show notification if app is not in foreground
                     if (!isAppInForeground.get()) {

@@ -66,7 +66,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.gocavgo.validator.BuildConfig
-import com.gocavgo.validator.Navigator
 import com.gocavgo.validator.ui.theme.ValidatorTheme
 import com.gocavgo.validator.ui.components.NetworkStatusIndicator
 import com.gocavgo.validator.dataclass.TripResponse

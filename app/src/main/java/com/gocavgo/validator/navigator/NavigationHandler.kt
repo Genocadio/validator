@@ -204,6 +204,16 @@ class NavigationHandler(
                     TAG,
                     "Driving speed (m/s): " + speed + "plus/minus an accuracy of: " + accuracy
                 )
+                
+                // Extract location data from map-matched location
+                val lat = lastMapMatchedLocation!!.coordinates.latitude
+                val lng = lastMapMatchedLocation!!.coordinates.longitude
+                val bearing = lastMapMatchedLocation!!.bearingInDegrees
+                
+                // Store location data for use by TripSectionValidator
+                // The actual database update will be called from TripSectionValidator.writeProgressToDatabase()
+                // to ensure it happens at the same frequency as waypoint progress updates
+                tripSectionValidator.updateLocationData(lat, lng, speed ?: 0.0, accuracy ?: 0.0, bearing)
             }
 
         // Notifies on route deviation events
