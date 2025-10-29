@@ -328,22 +328,47 @@ class App(
                     Log.d("App", "Added origin waypoint (fallback)")
                 }
             } else {
-                // Simulated mode: always use trip origin
-                val origin = Waypoint(
-                    GeoCoordinates(
-                        trip.route.origin.latitude,
-                        trip.route.origin.longitude
+                // Simulated mode: use saved location for IN_PROGRESS or trip origin
+                val useSavedLocation = trip.status.equals("IN_PROGRESS", ignoreCase = true) && 
+                                       trip.vehicle.current_latitude != null && 
+                                       trip.vehicle.current_longitude != null
+                
+                val origin = if (useSavedLocation) {
+                    Log.d("App", "Using saved vehicle location for IN_PROGRESS trip (simulated mode)")
+                    Waypoint(
+                        GeoCoordinates(
+                            trip.vehicle.current_latitude!!,
+                            trip.vehicle.current_longitude!!
+                        )
                     )
-                ).apply {
+                } else {
+                    Waypoint(
+                        GeoCoordinates(
+                            trip.route.origin.latitude,
+                            trip.route.origin.longitude
+                        )
+                    )
+                }
+                
+                origin.apply {
                     type = WaypointType.STOPOVER
                 }
                 waypoints.add(origin)
-                Log.d("App", "Added origin waypoint")
+                Log.d("App", if (useSavedLocation) "Added saved location waypoint" else "Added origin waypoint")
             }
 
-            // Add intermediate waypoints sorted by order
+            // Filter out passed waypoints - only include unpassed waypoints
             val sortedWaypoints = trip.waypoints.sortedBy { it.order }
-            sortedWaypoints.forEach { tripWaypoint ->
+            val unpassedWaypoints = sortedWaypoints.filter { !it.is_passed }
+            val skippedCount = sortedWaypoints.size - unpassedWaypoints.size
+            
+            Log.d("App", "=== WAYPOINT FILTERING ===")
+            Log.d("App", "Total waypoints: ${sortedWaypoints.size}")
+            Log.d("App", "Passed waypoints: $skippedCount")
+            Log.d("App", "Unpassed waypoints: ${unpassedWaypoints.size}")
+            
+            // Add only unpassed intermediate waypoints
+            unpassedWaypoints.forEach { tripWaypoint ->
                 val waypoint = Waypoint(
                     GeoCoordinates(
                         tripWaypoint.location.latitude,
@@ -367,11 +392,13 @@ class App(
             }
             waypoints.add(destination)
             Log.d("App", "Added destination waypoint")
+            
+            Log.d("App", "Total waypoints created: ${waypoints.size} (skipped $skippedCount passed waypoints)")
+            Log.d("App", "=========================")
         } ?: run {
             Log.e("App", "Trip response is null, cannot create waypoints")
         }
 
-        Log.d("App", "Total waypoints created: ${waypoints.size}")
         Log.d("App", "Waypoint structure:")
         waypoints.forEachIndexed { index, waypoint ->
             Log.d("App", "  Waypoint $index: ${waypoint.coordinates.latitude}, ${waypoint.coordinates.longitude}")
@@ -516,12 +543,26 @@ class App(
                 null
             }
             
-            val verificationPassed = tripSectionValidator.verifyRouteSections(tripResponse!!, route, isSimulated, deviceLocation)
+            // Calculate skipped waypoint count
+            val skippedCount = tripResponse?.waypoints?.count { it.is_passed } ?: 0
+            
+            Log.d("App", "=== ROUTE VERIFICATION WITH SKIPPED WAYPOINTS ===")
+            Log.d("App", "Skipped waypoints: $skippedCount")
+            Log.d("App", "Total waypoints: ${tripResponse?.waypoints?.size ?: 0}")
+            
+            val verificationPassed = tripSectionValidator.verifyRouteSections(
+                tripResponse!!, 
+                route, 
+                isSimulated, 
+                deviceLocation,
+                skippedWaypointCount = skippedCount
+            )
             if (verificationPassed) {
                 Log.d("App", "Route Verified well")
             } else {
                 Log.e("App", "❌ Route verification failed - continuing with navigation anyway")
             }
+            Log.d("App", "================================================")
         } else {
             Log.d("App", "No trip data available for route verification")
         }

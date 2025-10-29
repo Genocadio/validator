@@ -138,51 +138,66 @@ class TripSectionValidator(private val context: Context) {
      * @param route The calculated route with sections
      * @param isSimulated Whether the route was calculated with simulated location (true) or device location (false)
      * @param deviceLocation The current device location (optional, used to check if it matches trip origin)
+     * @param skippedWaypointCount Number of waypoints that were skipped (already passed)
      * @return true if verification passes, false otherwise
      */
-    fun verifyRouteSections(tripResponse: TripResponse, route: Route, isSimulated: Boolean = true, deviceLocation: GeoCoordinates? = null): Boolean {
+    fun verifyRouteSections(
+        tripResponse: TripResponse, 
+        route: Route, 
+        isSimulated: Boolean = true, 
+        deviceLocation: GeoCoordinates? = null,
+        skippedWaypointCount: Int = 0
+    ): Boolean {
         Log.d(TAG, "=== STARTING ROUTE SECTION VERIFICATION ===")
         
         this.tripResponse = tripResponse
         this.route = route
         this.isDeviceLocationMode = !isSimulated
         
-        // Calculate expected sections based on simulation mode
-        val tripLocations = 1 + tripResponse.waypoints.size + 1 // origin + waypoints + destination
+        // Calculate expected sections accounting for skipped waypoints
+        val totalWaypoints = tripResponse.waypoints.size
+        val activeWaypoints = totalWaypoints - skippedWaypointCount
+        val tripLocations = 1 + activeWaypoints + 1 // origin + active waypoints + destination
         val expectedSections: Int
         val actualSections = route.sections.size
         
+        Log.d(TAG, "=== WAYPOINT ACCOUNTING ===")
+        Log.d(TAG, "Total waypoints: $totalWaypoints")
+        Log.d(TAG, "Skipped waypoints: $skippedWaypointCount")
+        Log.d(TAG, "Active waypoints: $activeWaypoints")
+        Log.d(TAG, "===========================")
+        
         if (isDeviceLocationMode) {
             // Device location completely replaces trip origin
-            // Route structure: Device Location -> Waypoints -> Destination (no trip origin)
+            // Route structure: Device Location -> Active Waypoints -> Destination (no trip origin)
             // Same as simulated mode: n-1 sections for n locations
             expectedSections = tripLocations - 1
             deviceLocationOffset = 0 // No extra waypoints (device location replaces origin)
             Log.d(TAG, "🔍 DEVICE LOCATION MODE: Route starts from device location (replaces trip origin)")
-            Log.d(TAG, "  Route structure: Device Location -> Waypoints -> Destination")
+            Log.d(TAG, "  Route structure: Device Location -> Active Waypoints -> Destination")
         } else {
             // In simulated mode, route starts from trip origin
             expectedSections = tripLocations - 1 // n-1 sections for n locations
             deviceLocationOffset = 0 // No extra waypoints
             Log.d(TAG, "🎮 SIMULATED MODE: Route starts from trip origin")
-            Log.d(TAG, "  Route structure: Trip Origin -> Waypoints -> Destination")
+            Log.d(TAG, "  Route structure: Trip Origin -> Active Waypoints -> Destination")
         }
         
         Log.d(TAG, "Trip ID: ${tripResponse.id}")
-        Log.d(TAG, "Trip locations: $tripLocations (origin + ${tripResponse.waypoints.size} waypoints + destination)")
+        Log.d(TAG, "Trip locations: $tripLocations (origin + $activeWaypoints active waypoints + destination)")
         Log.d(TAG, "Device location offset: $deviceLocationOffset")
         Log.d(TAG, "Expected sections: $expectedSections")
         Log.d(TAG, "Actual sections: $actualSections")
         
-        // Build waypoint names list for mapping
-        waypointNames = buildWaypointNamesList(tripResponse, isDeviceLocationMode)
-        Log.d(TAG, "Waypoint names: $waypointNames")
+        // Build waypoint names list for mapping (only unpassed waypoints)
+        waypointNames = buildWaypointNamesList(tripResponse, isDeviceLocationMode, skippedWaypointCount)
+        Log.d(TAG, "Waypoint names (excluding skipped): $waypointNames")
         
         // Verify section count
         val verificationPassed = actualSections == expectedSections
         
         if (verificationPassed) {
-            Log.d(TAG, "✅ VERIFICATION PASSED: Route sections match trip structure")
+            Log.d(TAG, "✅ VERIFICATION PASSED: Route sections match trip structure (accounting for $skippedWaypointCount skipped waypoints)")
             isVerified = true
             passedWaypoints.clear() // Reset passed waypoints
             passedWaypointData.clear() // Reset passed waypoint data
@@ -202,6 +217,7 @@ class TripSectionValidator(private val context: Context) {
             logSectionDetails(route.sections)
         } else {
             Log.e(TAG, "❌ VERIFICATION FAILED: Expected $expectedSections sections, got $actualSections")
+            Log.e(TAG, "   (Total waypoints: $totalWaypoints, Skipped: $skippedWaypointCount, Active: $activeWaypoints)")
             isVerified = false
         }
         
@@ -403,8 +419,15 @@ class TripSectionValidator(private val context: Context) {
     
     /**
      * Builds a list of waypoint names in order (device location, origin, waypoints, destination)
+     * @param tripResponse The trip data
+     * @param includeDeviceLocation Whether to include device location instead of origin
+     * @param skippedWaypointCount Number of waypoints to skip (already passed)
      */
-    private fun buildWaypointNamesList(tripResponse: TripResponse, includeDeviceLocation: Boolean = false): List<String> {
+    private fun buildWaypointNamesList(
+        tripResponse: TripResponse, 
+        includeDeviceLocation: Boolean = false,
+        skippedWaypointCount: Int = 0
+    ): List<String> {
         val names = mutableListOf<String>()
         
         // Add starting location based on mode
@@ -416,14 +439,25 @@ class TripSectionValidator(private val context: Context) {
             names.add("Origin: ${tripResponse.route.origin.custom_name}")
         }
         
-        // Add intermediate waypoints sorted by order
+        // Add only unpassed intermediate waypoints sorted by order
         val sortedWaypoints = tripResponse.waypoints.sortedBy { it.order }
-        sortedWaypoints.forEach { waypoint ->
+        val unpassedWaypoints = sortedWaypoints.filter { !it.is_passed }
+        
+        Log.d(TAG, "=== BUILDING WAYPOINT NAMES LIST ===")
+        Log.d(TAG, "Total waypoints: ${sortedWaypoints.size}")
+        Log.d(TAG, "Skipped count parameter: $skippedWaypointCount")
+        Log.d(TAG, "Unpassed waypoints: ${unpassedWaypoints.size}")
+        
+        unpassedWaypoints.forEach { waypoint ->
             names.add("Waypoint ${waypoint.order}: ${waypoint.location.custom_name}")
+            Log.d(TAG, "Added waypoint: ${waypoint.order} - ${waypoint.location.custom_name}")
         }
         
         // Add destination
         names.add("Destination: ${tripResponse.route.destination.custom_name}")
+        
+        Log.d(TAG, "Total names in list: ${names.size}")
+        Log.d(TAG, "====================================")
         
         return names
     }

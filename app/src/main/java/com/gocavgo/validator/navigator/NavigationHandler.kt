@@ -116,6 +116,22 @@ class NavigationHandler(
         // Notifies on the progress along the route including maneuver instructions.
         visualNavigator.routeProgressListener =
             RouteProgressListener { routeProgress: RouteProgress ->
+                // Get current location from lastMapMatchedLocation if available
+                // This ensures we have location data before processing section progress
+                lastMapMatchedLocation?.let { mapMatched ->
+                    val lat = mapMatched.coordinates.latitude
+                    val lng = mapMatched.coordinates.longitude
+                    val bearing = mapMatched.bearingInDegrees
+                    
+                    // Update location data in validator BEFORE processing section progress
+                    tripSectionValidator.updateLocationData(
+                        lat, lng, 
+                        currentSpeedInMetersPerSecond, 
+                        0.0, // accuracy not available here, will be updated by navigableLocationListener
+                        bearing
+                    )
+                }
+                
                 // Contains the progress for the next maneuver ahead and the next-next maneuvers, if any.
                 val nextManeuverList = routeProgress.maneuverProgress
 
@@ -270,6 +286,22 @@ class NavigationHandler(
         // Notifies on the progress along the route including maneuver instructions.
         navigator.routeProgressListener =
             RouteProgressListener { routeProgress: RouteProgress ->
+                // Get current location from lastMapMatchedLocation if available
+                // This ensures we have location data before processing section progress
+                lastMapMatchedLocation?.let { mapMatched ->
+                    val lat = mapMatched.coordinates.latitude
+                    val lng = mapMatched.coordinates.longitude
+                    val bearing = mapMatched.bearingInDegrees
+                    
+                    // Update location data in validator BEFORE processing section progress
+                    tripSectionValidator.updateLocationData(
+                        lat, lng, 
+                        currentSpeedInMetersPerSecond, 
+                        0.0, 
+                        bearing
+                    )
+                }
+                
                 // Contains the progress for the next maneuver ahead and the next-next maneuvers, if any.
                 val nextManeuverList = routeProgress.maneuverProgress
 

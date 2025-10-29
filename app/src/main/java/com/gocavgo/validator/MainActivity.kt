@@ -5,7 +5,6 @@ import android.content.Context
 import android.os.Bundle
 import android.content.Intent
 import android.content.pm.PackageManager
-import com.gocavgo.validator.AutoModeActivity
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -308,6 +307,23 @@ class MainActivity : ComponentActivity() {
             try {
                 Logging.d(TAG, "Processing MQTT trip event: ${tripEvent.event}")
                 Logging.d(TAG, "Trip ID: ${tripEvent.data.id}")
+                
+                // Handle trip cancellation
+                if (tripEvent.event == "TRIP_CANCELLED") {
+                    Logging.d(TAG, "Trip cancelled: ${tripEvent.data.id}")
+                    
+                    // Delete from database
+                    databaseManager.deleteTripById(tripEvent.data.id)
+                    
+                    // Clear UI if this was the latest trip
+                    if (latestTrip?.id == tripEvent.data.id) {
+                        latestTrip = null
+                        tripError = "Trip was cancelled"
+                    }
+                    
+                    Logging.d(TAG, "Trip cancellation processed")
+                    return@launch
+                }
                 
                 // Convert backend trip data to Android format
                 val tripResponse = convertBackendTripToAndroid(tripEvent.data)
@@ -615,6 +631,33 @@ class MainActivity : ComponentActivity() {
             if (isActivityActive) {
                 startPeriodicTripFetching()
             }
+            
+            // Auto-start disabled - user must manually start Auto Mode via button
+            // Uncomment below to enable auto-start on app launch:
+            // startAutoModeHeadlessActivityIfNeeded()
+        }
+    }
+    
+    /**
+     * Start AutoModeHeadlessActivity automatically if vehicle is registered
+     * This enables autonomous trip monitoring and navigation via MQTT
+     */
+    private fun startAutoModeHeadlessActivityIfNeeded() {
+        try {
+            // Check if AutoModeHeadlessActivity is already running
+            if (com.gocavgo.validator.navigator.AutoModeHeadlessActivity.isActive()) {
+                Logging.d(TAG, "AutoModeHeadlessActivity already active, skipping start")
+                return
+            }
+            
+            Logging.d(TAG, "Starting AutoModeHeadlessActivity for autonomous trip monitoring")
+            
+            val activityIntent = Intent(this, com.gocavgo.validator.navigator.AutoModeHeadlessActivity::class.java)
+            startActivity(activityIntent)
+            
+            Logging.d(TAG, "AutoModeHeadlessActivity started successfully")
+        } catch (e: Exception) {
+            Logging.e(TAG, "Failed to start AutoModeHeadlessActivity: ${e.message}", e)
         }
     }
     
@@ -1000,9 +1043,28 @@ class MainActivity : ComponentActivity() {
         val intent = Intent(this, com.gocavgo.validator.security.VehicleAuthActivity::class.java)
         startActivity(intent)
     }
+    
+    private fun redirectToActiveNavigation() {
+        try {
+            val intent = Intent(this, com.gocavgo.validator.navigator.HeadlessNavigActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+            }
+            startActivity(intent)
+            Logging.d(TAG, "Redirected to active navigation screen")
+        } catch (e: Exception) {
+            Logging.e(TAG, "Failed to redirect to navigation: ${e.message}", e)
+        }
+    }
 
     override fun onResume() {
         super.onResume()
+        
+        // Check if navigation is active and redirect to it
+        if (com.gocavgo.validator.navigator.HeadlessNavigActivity.isActive()) {
+            Logging.d(TAG, "Navigation is active, redirecting to navigation screen")
+            redirectToActiveNavigation()
+            return // Don't continue with normal resume
+        }
         
         // Mark activity as active
         isActivityActive = true
@@ -1240,11 +1302,20 @@ class MainActivity : ComponentActivity() {
         // Clean up map downloader
         mapDownloaderManager?.cleanup()
         
-        // Stop MQTT background services
+        // Stop MQTT background services BEFORE disposing HERE SDK
+        // This ensures LocationEngine is stopped before SDK disposal
         stopMqttForegroundService()
+        
+        // Give the service time to stop LocationEngine cleanly
+        try {
+            Thread.sleep(500) // 500ms grace period
+        } catch (e: InterruptedException) {
+            Logging.w(TAG, "Interrupted while waiting for service cleanup")
+        }
+        
         MqttHealthCheckWorker.cancel(this)
         
-        // Dispose HERE SDK
+        // Dispose HERE SDK only after service cleanup
         disposeHERESDK()
     }
     
@@ -1532,7 +1603,7 @@ fun NavigationScreen(
         item {
             Button(
                 onClick = {
-                    val intent = Intent(context, AutoModeActivity::class.java)
+                    val intent = Intent(context, com.gocavgo.validator.navigator.AutoModeHeadlessActivity::class.java)
                     context.startActivity(intent)
                 },
                 modifier = Modifier

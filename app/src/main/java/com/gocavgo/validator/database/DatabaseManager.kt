@@ -40,6 +40,17 @@ class DatabaseManager(context: Context) {
     
     suspend fun deleteTripsByVehicle(vehicleId: Int) = tripRepository.deleteTripsByVehicle(vehicleId)
     
+    suspend fun deleteTripById(tripId: Int): Boolean {
+        return try {
+            tripRepository.deleteTripById(tripId)
+            android.util.Log.d("DatabaseManager", "Deleted trip $tripId from database")
+            true
+        } catch (e: Exception) {
+            android.util.Log.e("DatabaseManager", "Failed to delete trip $tripId: ${e.message}", e)
+            false
+        }
+    }
+    
     suspend fun getTripCountByVehicle(vehicleId: Int): Int = 
         tripRepository.getTripCountByVehicle(vehicleId)
     

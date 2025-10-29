@@ -19,6 +19,7 @@
     <!-- Auto Mode Navigation Launch permissions -->
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     
     <!-- NFC permissions -->
     <uses-permission android:name="android.permission.NFC" />
@@ -49,7 +50,19 @@
         <activity android:name=".navigator.HeadlessNavigActivity"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
             android:theme="@style/Theme.Validator"
-            android:launchMode="singleTop" />
+            android:launchMode="singleTask"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true" />
+            
+        <!-- AutoMode Headless Activity - Self-contained auto mode with MQTT and navigation -->
+        <activity android:name=".navigator.AutoModeHeadlessActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
+            android:theme="@style/Theme.Validator"
+            android:launchMode="singleTask"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:exported="false" />
+            
         <!-- Main Activity -->
         <activity
             android:name=".MainActivity"
@@ -62,13 +75,15 @@
             </intent-filter>
         </activity>
         
-        <!-- AutoMode Activity -->
+        <!-- AutoMode Activity - DEPRECATED: Use AutoModeHeadlessActivity instead -->
+        <!--
         <activity
             android:name=".AutoModeActivity"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
             android:theme="@style/Theme.Validator"
             android:launchMode="singleTop"
             android:exported="false" />
+        -->
 
             
         <!-- MQTT Foreground Service -->
@@ -78,12 +93,21 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
             
-        <!-- AutoMode Foreground Service -->
+        <!-- AutoMode Headless Foreground Service - Keeps AutoModeHeadlessActivity alive -->
+        <service
+            android:name=".service.AutoModeHeadlessForegroundService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+            
+        <!-- AutoMode Foreground Service - DEPRECATED: Functionality moved to AutoModeHeadlessActivity -->
+        <!--
         <service
             android:name=".service.AutoModeForegroundService"
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+        -->
             
         <!-- Notification Dismiss Receiver -->
         <receiver
@@ -91,11 +115,48 @@
             android:enabled="true"
             android:exported="false" />
             
-        <!-- Navigation Launch Receiver -->
+        <!-- Navigation Launch Receiver - DEPRECATED: No longer needed with headless architecture -->
+        <!--
         <receiver
             android:name=".receiver.NavigationLaunchReceiver"
             android:enabled="true"
             android:exported="false" />
+        -->
+            
+        <!-- Boot Receiver - Starts AutoModeHeadlessActivity after reboot -->
+        <receiver
+            android:name=".receiver.BootReceiver"
+            android:enabled="true"
+            android:exported="false"
+            android:directBootAware="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+        
+        <!-- Trip Confirmation Receiver - Handles late trip confirmation notification actions -->
+        <receiver
+            android:name=".receiver.TripConfirmationReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.gocavgo.validator.ACTION_START_NAVIGATION" />
+                <action android:name="com.gocavgo.validator.ACTION_CANCEL_TRIP" />
+            </intent-filter>
+        </receiver>
+        
+        <!-- Alarm Permission Receiver - DEPRECATED: No AlarmManager used in headless architecture -->
+        <!--
+        <receiver
+            android:name=".receiver.AlarmPermissionReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED" />
+            </intent-filter>
+        </receiver>
+        -->
     </application>
 
 </manifest>

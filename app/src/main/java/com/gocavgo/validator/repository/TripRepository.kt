@@ -95,6 +95,11 @@ class TripRepository(context: Context) {
         tripDao.deleteTripsByVehicle(vehicleId)
     }
     
+    // Delete trip by ID
+    suspend fun deleteTripById(tripId: Int) {
+        tripDao.deleteTripById(tripId)
+    }
+    
     // Get trip count for a vehicle
     suspend fun getTripCountByVehicle(vehicleId: Int): Int {
         return tripDao.getTripCountByVehicle(vehicleId)

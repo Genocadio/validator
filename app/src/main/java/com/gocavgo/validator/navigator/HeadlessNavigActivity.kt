@@ -74,6 +74,11 @@ class HeadlessNavigActivity : ComponentActivity() {
         private const val TAG = "HeadlessNavigActivity"
         const val EXTRA_TRIP_ID = "trip_id"
         const val EXTRA_IS_SIMULATED = "is_simulated"
+        
+        @Volatile
+        private var isNavigationActive = java.util.concurrent.atomic.AtomicBoolean(false)
+        
+        fun isActive(): Boolean = isNavigationActive.get()
     }
 
     private lateinit var databaseManager: DatabaseManager
@@ -151,6 +156,12 @@ class HeadlessNavigActivity : ComponentActivity() {
     private var passengerList by mutableStateOf<List<com.gocavgo.validator.service.BookingService.PassengerInfo>>(emptyList())
     private var selectedPassengerBookingId by mutableStateOf<String?>(null)
     
+    // Destination selection dialog state
+    private var showDestinationSelectionDialog by mutableStateOf(false)
+    private var availableDestinations by mutableStateOf<List<AvailableDestination>>(emptyList())
+    private var currentLocationForDialog by mutableStateOf("")
+    private var nfcPendingId by mutableStateOf<String?>(null)
+    
     enum class PassengerListType {
         PICKUP, DROPOFF
     }
@@ -173,9 +184,27 @@ class HeadlessNavigActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        // Enable showing on lock screen for Android O and above
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            setShowWhenLocked(true)
+            setTurnScreenOn(true)
+        } else {
+            // For older versions, use window flags
+            @Suppress("DEPRECATION")
+            window.addFlags(
+                android.view.WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                android.view.WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
+                android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+            )
+        }
+        
         enableEdgeToEdge()
 
         Log.d(TAG, "=== HEADLESS NAVIGATION ACTIVITY STARTED ===")
+        
+        // Mark navigation as active
+        isNavigationActive.set(true)
 
         // Initialize database manager
         databaseManager = DatabaseManager.getInstance(this)
@@ -229,6 +258,11 @@ class HeadlessNavigActivity : ComponentActivity() {
                     onValidationSuccessDismiss = { showValidationSuccess = false },
                     onValidationFailureDismiss = { showValidationFailure = false },
                     onMqttNotificationDismiss = { showMqttNotification = false },
+                    showDestinationSelectionDialog = showDestinationSelectionDialog,
+                    availableDestinations = availableDestinations,
+                    currentLocationForDialog = currentLocationForDialog,
+                    onDestinationSelected = ::onDestinationSelected,
+                    onDestinationSelectionDismiss = { showDestinationSelectionDialog = false },
                     isConnected = isConnected,
                     connectionType = connectionType,
                     isMetered = isMetered,
@@ -541,20 +575,46 @@ class HeadlessNavigActivity : ComponentActivity() {
 
         // Add origin if not using device location
         if (origin == null) {
-            val originWaypoint = Waypoint(
-                GeoCoordinates(
-                    trip.route.origin.latitude,
-                    trip.route.origin.longitude
+            // For IN_PROGRESS trips in simulated mode, use saved current location if available
+            val useSavedLocation = trip.status.equals("IN_PROGRESS", ignoreCase = true) && 
+                                   trip.vehicle.current_latitude != null && 
+                                   trip.vehicle.current_longitude != null
+            
+            val originWaypoint = if (useSavedLocation) {
+                Log.d(TAG, "Using saved vehicle location for IN_PROGRESS trip (simulated mode)")
+                Waypoint(
+                    GeoCoordinates(
+                        trip.vehicle.current_latitude!!,
+                        trip.vehicle.current_longitude!!
+                    )
                 )
-            ).apply {
+            } else {
+                Waypoint(
+                    GeoCoordinates(
+                        trip.route.origin.latitude,
+                        trip.route.origin.longitude
+                    )
+                )
+            }
+            
+            originWaypoint.apply {
                 type = WaypointType.STOPOVER
             }
             waypoints.add(originWaypoint)
         }
 
-        // Add intermediate waypoints sorted by order
+        // Filter out passed waypoints - only include unpassed waypoints
         val sortedWaypoints = trip.waypoints.sortedBy { it.order }
-        sortedWaypoints.forEach { tripWaypoint ->
+        val unpassedWaypoints = sortedWaypoints.filter { !it.is_passed }
+        val skippedCount = sortedWaypoints.size - unpassedWaypoints.size
+        
+        Log.d(TAG, "=== WAYPOINT FILTERING ===")
+        Log.d(TAG, "Total waypoints: ${sortedWaypoints.size}")
+        Log.d(TAG, "Passed waypoints: $skippedCount")
+        Log.d(TAG, "Unpassed waypoints: ${unpassedWaypoints.size}")
+        
+        // Add only unpassed intermediate waypoints
+        unpassedWaypoints.forEach { tripWaypoint ->
             val waypoint = Waypoint(
                 GeoCoordinates(
                     tripWaypoint.location.latitude,
@@ -564,6 +624,7 @@ class HeadlessNavigActivity : ComponentActivity() {
                 type = WaypointType.STOPOVER
             }
             waypoints.add(waypoint)
+            Log.d(TAG, "Added waypoint: ${tripWaypoint.location.custom_name ?: tripWaypoint.location.google_place_name} (order: ${tripWaypoint.order})")
         }
 
         // Add destination
@@ -577,7 +638,8 @@ class HeadlessNavigActivity : ComponentActivity() {
         }
         waypoints.add(destination)
 
-        Log.d(TAG, "Created ${waypoints.size} waypoints from trip data")
+        Log.d(TAG, "Created ${waypoints.size} waypoints from trip data (skipped $skippedCount passed waypoints)")
+        Log.d(TAG, "=========================")
         return waypoints
     }
 
@@ -591,13 +653,22 @@ class HeadlessNavigActivity : ComponentActivity() {
             
             // Verify route sections with trip section validator
             tripResponse?.let { trip ->
+                // Calculate skipped waypoint count
+                val skippedCount = trip.waypoints.count { it.is_passed }
+                
+                Log.d(TAG, "=== ROUTE VERIFICATION WITH SKIPPED WAYPOINTS ===")
+                Log.d(TAG, "Skipped waypoints: $skippedCount")
+                Log.d(TAG, "Total waypoints: ${trip.waypoints.size}")
+                
                 val isVerified = tripSectionValidator.verifyRouteSections(
                     tripResponse = trip,
                     route = route,
                     isSimulated = isSimulated,
-                    deviceLocation = currentUserLocation?.coordinates
+                    deviceLocation = currentUserLocation?.coordinates,
+                    skippedWaypointCount = skippedCount
                 )
                 Log.d(TAG, "Route verification result: $isVerified")
+                Log.d(TAG, "================================================")
             }
             
             // Set up location source
@@ -875,26 +946,40 @@ class HeadlessNavigActivity : ComponentActivity() {
         Log.d(TAG, "=== SHOWING DESTINATION SELECTION DIALOG ===")
         Log.d(TAG, "NFC ID: $nfcId")
 
-        val availableDestinations = getAvailableWaypoints()
+        val destinations = getAvailableWaypoints()
         val currentLocation = getCurrentLocationName()
 
-        Log.d(TAG, "Available destinations count: ${availableDestinations.size}")
-        availableDestinations.forEach { dest ->
+        Log.d(TAG, "Available destinations count: ${destinations.size}")
+        destinations.forEach { dest ->
             val displayName = getLocationDisplayName(dest.location)
             Log.d(TAG, "  - $displayName (final: ${dest.isFinalDestination})")
         }
 
-        if (availableDestinations.isEmpty()) {
+        if (destinations.isEmpty()) {
             Log.w(TAG, "No available destinations found!")
             showBookingError("All waypoints have been passed. Trip is complete.")
             return
         }
 
-        // For now, automatically select the first available destination
-        // In a full implementation, you would show a dialog
-        val selectedDestination = availableDestinations.first()
-        Log.d(TAG, "Auto-selecting first destination: ${getLocationDisplayName(selectedDestination.location)}")
-        processBooking(nfcId, selectedDestination)
+        // Show the destination selection dialog to user
+        nfcPendingId = nfcId
+        availableDestinations = destinations
+        currentLocationForDialog = currentLocation
+        showDestinationSelectionDialog = true
+        Log.d(TAG, "Destination selection dialog displayed with ${destinations.size} options")
+    }
+    
+    private fun onDestinationSelected(destination: AvailableDestination) {
+        Log.d(TAG, "Destination selected: ${getLocationDisplayName(destination.location)}")
+        
+        nfcPendingId?.let { nfcId ->
+            showDestinationSelectionDialog = false
+            processBooking(nfcId, destination)
+            nfcPendingId = null
+        } ?: run {
+            Log.e(TAG, "No pending NFC ID found!")
+            showBookingError("Invalid booking state")
+        }
     }
 
     private fun processBooking(nfcId: String, destination: AvailableDestination) {
@@ -1158,7 +1243,7 @@ class HeadlessNavigActivity : ComponentActivity() {
         tripResponse?.let { trip ->
             lifecycleScope.launch(Dispatchers.IO) {
                 try {
-                    val (pickups, dropoffs) = if (trip.status == "SCHEDULED") {
+                    val (pickups, dropoffs) = if (trip.status.equals("SCHEDULED", ignoreCase = true)) {
                         // Show origin pickups for scheduled trips
                         val originId = trip.route.origin.id
                         databaseManager.getPassengerCountsForLocation(trip.id, originId)
@@ -1168,7 +1253,14 @@ class HeadlessNavigActivity : ComponentActivity() {
                         if (nextWaypoint != null) {
                             databaseManager.getPassengerCountsForLocation(trip.id, nextWaypoint.location_id)
                         } else {
-                            Pair(0, 0)
+                            // Check if all waypoints are passed - show destination
+                            val allWaypointsPassed = trip.waypoints.all { it.is_passed }
+                            if (allWaypointsPassed) {
+                                // Show destination dropoff counts
+                                databaseManager.getPassengerCountsForLocation(trip.id, trip.route.destination.id)
+                            } else {
+                                Pair(0, 0)
+                            }
                         }
                     }
                     
@@ -1177,13 +1269,24 @@ class HeadlessNavigActivity : ComponentActivity() {
                         dropoffCount = dropoffs
                         
                         // Update waypoint name
-                        nextWaypointName = if (trip.status == "SCHEDULED") {
+                        nextWaypointName = if (trip.status.equals("SCHEDULED", ignoreCase = true)) {
                             trip.route.origin.custom_name ?: trip.route.origin.google_place_name
                         } else {
                             // Try to find waypoint marked as next, fallback to first unpassed waypoint
                             val nextWaypoint = trip.waypoints.firstOrNull { it.is_next }
                                 ?: trip.waypoints.filter { !it.is_passed }.minByOrNull { it.order }
-                            nextWaypoint?.location?.custom_name ?: nextWaypoint?.location?.google_place_name ?: "No upcoming waypoint"
+                            
+                            if (nextWaypoint != null) {
+                                nextWaypoint.location.custom_name ?: nextWaypoint.location.google_place_name
+                            } else {
+                                // All waypoints passed - show destination
+                                val allWaypointsPassed = trip.waypoints.all { it.is_passed }
+                                if (allWaypointsPassed) {
+                                    trip.route.destination.custom_name ?: trip.route.destination.google_place_name
+                                } else {
+                                    "No upcoming waypoint"
+                                }
+                            }
                         }
                     }
                 } catch (e: Exception) {
@@ -1590,6 +1693,9 @@ class HeadlessNavigActivity : ComponentActivity() {
         isDestroyed = true
         Log.d(TAG, "HeadlessNavigActivity destroyed")
         
+        // Mark navigation as inactive
+        isNavigationActive.set(false)
+        
         // Stop network monitoring
         networkMonitor?.stopMonitoring()
         
@@ -1658,10 +1764,21 @@ class HeadlessNavigActivity : ComponentActivity() {
     private fun showPickupPassengerList() {
         tripResponse?.let { trip ->
             lifecycleScope.launch(Dispatchers.IO) {
-                val locationId = if (trip.status == "SCHEDULED") {
+                val locationId = if (trip.status.equals("SCHEDULED", ignoreCase = true)) {
                     trip.route.origin.id
                 } else {
-                    trip.waypoints.firstOrNull { it.is_next }?.location_id ?: return@launch
+                    val nextWaypoint = trip.waypoints.firstOrNull { it.is_next }
+                    if (nextWaypoint != null) {
+                        nextWaypoint.location_id
+                    } else {
+                        // All waypoints passed - check destination
+                        val allWaypointsPassed = trip.waypoints.all { it.is_passed }
+                        if (allWaypointsPassed) {
+                            trip.route.destination.id
+                        } else {
+                            return@launch
+                        }
+                    }
                 }
                 
                 val passengers = databaseManager.getPassengersPickingUpAtLocation(trip.id, locationId)
@@ -1677,10 +1794,22 @@ class HeadlessNavigActivity : ComponentActivity() {
     private fun showDropoffPassengerList() {
         tripResponse?.let { trip ->
             // Only show dropoffs for in-progress trips
-            if (trip.status == "SCHEDULED") return
+            if (trip.status.equals("SCHEDULED", ignoreCase = true)) return
             
             lifecycleScope.launch(Dispatchers.IO) {
-                val locationId = trip.waypoints.firstOrNull { it.is_next }?.location_id ?: return@launch
+                val nextWaypoint = trip.waypoints.firstOrNull { it.is_next }
+                val locationId = if (nextWaypoint != null) {
+                    nextWaypoint.location_id
+                } else {
+                    // All waypoints passed - check destination
+                    val allWaypointsPassed = trip.waypoints.all { it.is_passed }
+                    if (allWaypointsPassed) {
+                        trip.route.destination.id
+                    } else {
+                        return@launch
+                    }
+                }
+                
                 val passengers = databaseManager.getPassengersDroppingOffAtLocation(trip.id, locationId)
                 withContext(Dispatchers.Main) {
                     passengerList = passengers
@@ -1758,6 +1887,11 @@ fun HeadlessNavigationScreen(
     onValidationSuccessDismiss: () -> Unit,
     onValidationFailureDismiss: () -> Unit,
     onMqttNotificationDismiss: () -> Unit,
+    showDestinationSelectionDialog: Boolean,
+    availableDestinations: List<AvailableDestination>,
+    currentLocationForDialog: String,
+    onDestinationSelected: (AvailableDestination) -> Unit,
+    onDestinationSelectionDismiss: () -> Unit,
     isConnected: Boolean,
     connectionType: String,
     isMetered: Boolean,
@@ -1900,5 +2034,15 @@ fun HeadlessNavigationScreen(
             onPassengerClick = onPassengerClick,
             onDismiss = onPassengerListDismiss
         )
+        
+        // Destination selection dialog (conditionally rendered)
+        if (showDestinationSelectionDialog) {
+            DestinationSelectionDialog(
+                destinations = availableDestinations,
+                currentLocation = currentLocationForDialog,
+                onDestinationSelected = onDestinationSelected,
+                onDismiss = onDestinationSelectionDismiss
+            )
+        }
     }
 }

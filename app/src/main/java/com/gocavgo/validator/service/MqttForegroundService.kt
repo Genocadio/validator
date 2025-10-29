@@ -189,17 +189,37 @@ class MqttForegroundService : Service() {
     }
     
     private fun stopBackgroundLocationTracking() {
-        if (!isLocationTrackingActive.get()) {
-            Log.d(TAG, "🌍 Background location tracking not active")
-            return
-        }
-        
         try {
-            locationEngine?.removeLocationListener(locationListener)
-            locationEngine?.removeLocationStatusListener(locationStatusListener)
-            locationEngine?.stop()
+            Log.d(TAG, "🌍 Stopping background location tracking...")
+            Log.d(TAG, "🌍 Location tracking active: ${isLocationTrackingActive.get()}")
+            Log.d(TAG, "🌍 Location engine: ${locationEngine != null}")
+            
+            // Remove listeners first
+            locationEngine?.let { engine ->
+                try {
+                    engine.removeLocationListener(locationListener)
+                    Log.d(TAG, "🌍 Removed location listener")
+                } catch (e: Exception) {
+                    Log.e(TAG, "🌍❌ Error removing location listener: ${e.message}", e)
+                }
+                
+                try {
+                    engine.removeLocationStatusListener(locationStatusListener)
+                    Log.d(TAG, "🌍 Removed location status listener")
+                } catch (e: Exception) {
+                    Log.e(TAG, "🌍❌ Error removing location status listener: ${e.message}", e)
+                }
+                
+                try {
+                    engine.stop()
+                    Log.d(TAG, "🌍 Location engine stopped")
+                } catch (e: Exception) {
+                    Log.e(TAG, "🌍❌ Error stopping location engine: ${e.message}", e)
+                }
+            }
+            
             isLocationTrackingActive.set(false)
-            Log.d(TAG, "🌍 Background location tracking stopped")
+            Log.d(TAG, "🌍 Background location tracking stopped successfully")
         } catch (e: Exception) {
             Log.e(TAG, "🌍❌ Failed to stop background location tracking: ${e.message}", e)
         }
@@ -263,11 +283,23 @@ class MqttForegroundService : Service() {
     override fun onBind(intent: Intent?): IBinder = binder
     
     override fun onDestroy() {
-        Log.d(TAG, "MqttForegroundService destroyed")
+        Log.d(TAG, "=== MqttForegroundService DESTROY STARTED ===")
         
-        // Stop background location tracking
-        stopBackgroundLocationTracking()
-        locationEngine = null
+        // Stop background location tracking FIRST
+        // This is critical to prevent service connection leaks
+        try {
+            Log.d(TAG, "Stopping background location tracking before service destruction...")
+            stopBackgroundLocationTracking()
+            
+            // Wait a bit for LocationEngine to fully stop
+            Thread.sleep(200)
+            
+            // Null out the reference
+            locationEngine = null
+            Log.d(TAG, "LocationEngine stopped and nulled")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error stopping LocationEngine during service destruction: ${e.message}", e)
+        }
         
         // Release wake lock
         releaseWakeLock()
@@ -281,6 +313,8 @@ class MqttForegroundService : Service() {
         
         INSTANCE = null
         isServiceRunning.set(false)
+        
+        Log.d(TAG, "=== MqttForegroundService DESTROY COMPLETE ===")
         super.onDestroy()
     }
     
