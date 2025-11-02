@@ -67,6 +67,11 @@ class AutoModeHeadlessForegroundService : Service() {
     
     override fun onDestroy() {
         super.onDestroy()
+        
+        // Stop foreground service and remove notification
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+        
         Logging.d(TAG, "AutoModeHeadlessForegroundService destroyed")
     }
     
@@ -119,7 +124,7 @@ class AutoModeHeadlessForegroundService : Service() {
     private fun createNotification(message: String): Notification {
         // Create intent to open AutoModeHeadlessActivity when notification is tapped
         val intent = Intent(this, AutoModeHeadlessActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
         
         val pendingIntent = PendingIntent.getActivity(
@@ -188,7 +193,7 @@ class AutoModeHeadlessForegroundService : Service() {
             
             // Create intent to open AutoModeHeadlessActivity when notification is tapped
             val activityIntent = Intent(this, AutoModeHeadlessActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
             }
             val activityPendingIntent = PendingIntent.getActivity(
                 this, 2, activityIntent,

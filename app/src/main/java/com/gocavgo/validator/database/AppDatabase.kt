@@ -7,8 +7,8 @@ import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
 
 @Database(
-    entities = [TripEntity::class, BookingEntity::class, PaymentEntity::class, TicketEntity::class, VehicleLocationEntity::class],
-    version = 8,
+    entities = [TripEntity::class, BookingEntity::class, PaymentEntity::class, TicketEntity::class, VehicleLocationEntity::class, VehicleSettingsEntity::class],
+    version = 9,
     exportSchema = false
 )
 @TypeConverters(TripConverters::class)
@@ -19,6 +19,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun paymentDao(): PaymentDao
     abstract fun ticketDao(): TicketDao
     abstract fun vehicleLocationDao(): VehicleLocationDao
+    abstract fun vehicleSettingsDao(): VehicleSettingsDao
     
     companion object {
         @Volatile

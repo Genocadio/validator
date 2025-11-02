@@ -304,6 +304,9 @@ class MqttForegroundService : Service() {
         // Release wake lock
         releaseWakeLock()
         
+        // Stop foreground service and remove notification
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        
         // Clear notification manager from MQTT service
         mqttService?.setNotificationManager(null)
         
@@ -355,8 +358,24 @@ class MqttForegroundService : Service() {
      */
     private fun stopForegroundService() {
         Log.d(TAG, "Stopping foreground service")
-        stopForeground(true)
+        
+        // Stop background location tracking FIRST
+        try {
+            stopBackgroundLocationTracking()
+            locationEngine = null
+            Log.d(TAG, "Background location tracking stopped")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error stopping location tracking: ${e.message}", e)
+        }
+        
+        // Release wake lock
+        releaseWakeLock()
+        
+        // Stop foreground service and remove notification
+        stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
+        
+        Log.d(TAG, "Foreground service stopped and removed")
     }
     
     /**

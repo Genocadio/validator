@@ -135,6 +135,17 @@
             </intent-filter>
         </receiver>
         
+        <!-- User Unlocked Receiver - Starts AutoModeHeadlessActivity after device unlock -->
+        <!-- This handles the case where BootReceiver fails because SharedPreferences are not available until unlock -->
+        <receiver
+            android:name=".receiver.UserUnlockedReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.USER_UNLOCKED" />
+            </intent-filter>
+        </receiver>
+        
         <!-- Trip Confirmation Receiver - Handles late trip confirmation notification actions -->
         <receiver
             android:name=".receiver.TripConfirmationReceiver"

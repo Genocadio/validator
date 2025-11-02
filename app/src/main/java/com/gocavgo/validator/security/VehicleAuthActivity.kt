@@ -11,13 +11,19 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.widget.addTextChangedListener
 import com.gocavgo.validator.dataclass.VehicleResponseDto
+import com.gocavgo.validator.security.VehicleSettingsManager
 import com.google.gson.Gson
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
 import android.view.View
 import com.google.android.material.tabs.TabLayout
+import kotlinx.coroutines.cancel
 import java.util.concurrent.TimeUnit
 
 class VehicleAuthActivity : AppCompatActivity() {
@@ -50,6 +56,10 @@ class VehicleAuthActivity : AppCompatActivity() {
 
     // Security Manager
     private lateinit var securityManager: VehicleSecurityManager
+    private lateinit var settingsManager: VehicleSettingsManager
+    
+    // Coroutine scope for settings fetching
+    private val settingsScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     // HTTP Client
     private val httpClient = OkHttpClient.Builder()
@@ -68,6 +78,7 @@ class VehicleAuthActivity : AppCompatActivity() {
         Logging.setActivityLoggingEnabled(TAG, false)
 
         securityManager = VehicleSecurityManager(this)
+        settingsManager = VehicleSettingsManager.getInstance(this)
 
         initializeViews()
         setupCapacityListener()
@@ -342,6 +353,9 @@ class VehicleAuthActivity : AppCompatActivity() {
                                     Toast.LENGTH_LONG
                                 ).show()
 
+                                // Fetch and apply settings after successful authentication
+                                fetchAndApplySettings(vehicleResponse.id.toInt())
+
                                 loadSavedVehicleData()
                             } catch (e: Exception) {
                                 Log.e(TAG, "Error parsing login response", e)
@@ -510,6 +524,9 @@ class VehicleAuthActivity : AppCompatActivity() {
                                     Toast.LENGTH_LONG
                                 ).show()
 
+                                // Fetch and apply settings after successful authentication
+                                fetchAndApplySettings(vehicleResponse.id.toInt())
+
                                 loadSavedVehicleData()
 
                             } catch (e: Exception) {
@@ -632,11 +649,42 @@ class VehicleAuthActivity : AppCompatActivity() {
         val pubKey: String
     )
 
+    /**
+     * Fetch settings from API and apply them after successful authentication
+     */
+    private fun fetchAndApplySettings(vehicleId: Int) {
+        settingsScope.launch {
+            try {
+                Log.d(TAG, "Fetching settings after authentication for vehicle $vehicleId")
+                val result = settingsManager.fetchSettingsFromApi(vehicleId)
+                
+                result.onSuccess { settings ->
+                    Log.d(TAG, "Settings fetched successfully after authentication")
+                    // Apply settings (check logout/deactivate)
+                    runOnUiThread {
+                        settingsManager.applySettings(this@VehicleAuthActivity, settings)
+                    }
+                }.onFailure { error ->
+                    Log.e(TAG, "Failed to fetch settings after authentication: ${error.message}")
+                    // Continue without settings - they'll be fetched on next app launch
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Exception fetching settings after authentication: ${e.message}", e)
+            }
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         
         // Set this activity as the active one for logging
         Logging.setActiveActivity(TAG)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        // Cancel settings scope
+        settingsScope.cancel()
     }
 
     companion object {

@@ -41,9 +41,17 @@ import android.os.Build
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.core.app.ActivityCompat
 import com.gocavgo.validator.service.MqttService
+import com.gocavgo.validator.service.SettingsTimeoutWorker
 import com.gocavgo.validator.sync.SyncCoordinator
 import com.gocavgo.validator.util.Logging
 import com.gocavgo.validator.ui.components.NetworkStatusIndicator
+import com.gocavgo.validator.security.VehicleSettingsManager
+import com.gocavgo.validator.dataclass.VehicleSettings
+import com.gocavgo.validator.security.ACTION_SETTINGS_CHANGED
+import com.gocavgo.validator.security.ACTION_SETTINGS_LOGOUT
+import com.gocavgo.validator.security.ACTION_SETTINGS_DEACTIVATE
+import android.content.BroadcastReceiver
+import android.content.IntentFilter
 import com.here.sdk.core.engine.AuthenticationMode
 import com.here.sdk.core.engine.SDKNativeEngine
 import com.here.sdk.core.engine.SDKOptions
@@ -83,7 +91,12 @@ class MainActivity : ComponentActivity() {
     
     // Navigation options
     private var showMap by mutableStateOf(true)
-    private var isSimulated by mutableStateOf(true)
+    // isSimulated removed - now uses settings.simulate
+    
+    // Settings management
+    private lateinit var settingsManager: VehicleSettingsManager
+    private var currentSettings by mutableStateOf<VehicleSettings?>(null)
+    private var isDeactivated by mutableStateOf(false)
     
     // Map downloader
     private var mapDownloaderManager: MapDownloaderManager? = null
@@ -106,6 +119,9 @@ class MainActivity : ComponentActivity() {
     private var periodicTripFetchJob: Job? = null
     private val periodicScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var isActivityActive = false
+    
+    // Settings change broadcast receiver
+    private var settingsChangeReceiver: BroadcastReceiver? = null
 
     private val networkPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -298,6 +314,83 @@ class MainActivity : ComponentActivity() {
         mqttService?.addMessageListener("car/$vehicleId/ping") { topic, payload ->
             Logging.d(TAG, "Ping received: $payload")
             // MQTT service automatically handles pong response
+        }
+
+        // Listen for settings updates
+        mqttService?.addMessageListener("car/$vehicleId/settings") { topic, payload ->
+            Logging.d(TAG, "Settings update received on $topic: $payload")
+            // Settings are handled by MQTT service, but refresh UI
+            lifecycleScope.launch {
+                fetchSettings()
+            }
+        }
+    }
+
+    /**
+     * Fetch settings from API and apply them
+     */
+    private fun fetchSettings() {
+        if (!vehicleSecurityManager.isVehicleRegistered()) {
+            Logging.w(TAG, "Vehicle not registered, cannot fetch settings")
+            return
+        }
+
+        val vehicleId = vehicleSecurityManager.getVehicleId()
+        Logging.d(TAG, "Fetching settings for vehicle ID: $vehicleId")
+
+        lifecycleScope.launch {
+            try {
+                val result = settingsManager.fetchSettingsFromApi(vehicleId.toInt())
+                
+                result.onSuccess { settings ->
+                    Logging.d(TAG, "Settings fetched successfully")
+                    currentSettings = settings
+                    
+                    // Update deactivated state
+                    isDeactivated = settings.deactivate
+                    
+                    // Apply settings (check logout/deactivate)
+                    settingsManager.applySettings(this@MainActivity, settings)
+                    
+                    // Check if all settings are false - redirect to AutoModeHeadlessActivity immediately
+                    if (settingsManager.areAllSettingsFalse(settings)) {
+                        Logging.d(TAG, "All settings are false - redirecting to AutoModeHeadlessActivity immediately")
+                        val intent = Intent(this@MainActivity, com.gocavgo.validator.navigator.AutoModeHeadlessActivity::class.java).apply {
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                        }
+                        startActivity(intent)
+                        finish()
+                        return@launch
+                    }
+                    
+                    // Check devmode - if false, redirect to AutoModeHeadlessActivity
+                    if (!settings.devmode) {
+                        Logging.d(TAG, "Devmode is false - redirecting to AutoModeHeadlessActivity")
+                        val intent = Intent(this@MainActivity, com.gocavgo.validator.navigator.AutoModeHeadlessActivity::class.java).apply {
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                        }
+                        startActivity(intent)
+                        finish()
+                        return@launch
+                    }
+                }.onFailure { error ->
+                    Logging.e(TAG, "Failed to fetch settings: ${error.message}")
+                    // Use saved settings if available
+                    val savedSettings = settingsManager.getSettings(vehicleId.toInt())
+                    savedSettings?.let {
+                        currentSettings = it
+                        isDeactivated = it.deactivate
+                    }
+                }
+            } catch (e: Exception) {
+                Logging.e(TAG, "Exception fetching settings: ${e.message}", e)
+                // Use saved settings if available
+                val savedSettings = settingsManager.getSettings(vehicleId.toInt())
+                savedSettings?.let {
+                    currentSettings = it
+                    isDeactivated = it.deactivate
+                }
+            }
         }
     }
 
@@ -555,6 +648,9 @@ class MainActivity : ComponentActivity() {
             // Schedule network monitoring worker
             NetworkMonitorWorker.schedule(this)
             
+            // Schedule settings timeout worker (checks for 4-day timeout)
+            SettingsTimeoutWorker.schedule(this)
+            
             Logging.d(TAG, "MQTT background services initialized successfully")
         } catch (e: Exception) {
             Logging.e(TAG, "Failed to initialize MQTT background services: ${e.message}", e)
@@ -615,7 +711,7 @@ class MainActivity : ComponentActivity() {
     }
     
     private fun initializeManagers() {
-        vehicleSecurityManager = VehicleSecurityManager(this)
+        // vehicleSecurityManager already initialized in onCreate
         remoteDataManager = RemoteDataManager.getInstance()
         databaseManager = DatabaseManager.getInstance(this)
         
@@ -938,6 +1034,50 @@ class MainActivity : ComponentActivity() {
         Logging.setActivityLoggingEnabled(TAG, false)
         permissionsRequestor = PermissionsRequestor(this)
 
+        // Check login status first - if not logged in, launch VehicleAuthActivity and finish
+        vehicleSecurityManager = VehicleSecurityManager(this)
+        if (!vehicleSecurityManager.isVehicleRegistered()) {
+            Logging.d(TAG, "Vehicle not registered, launching VehicleAuthActivity")
+            val intent = Intent(this, com.gocavgo.validator.security.VehicleAuthActivity::class.java)
+            startActivity(intent)
+            finish()
+            return
+        }
+
+        // Initialize settings manager
+        settingsManager = VehicleSettingsManager.getInstance(this)
+
+        // Check settings asynchronously from database - handle redirects when loaded
+        val vehicleId = vehicleSecurityManager.getVehicleId()
+        lifecycleScope.launch {
+            val savedSettings = settingsManager.getSettings(vehicleId.toInt())
+            
+            // Check if MainActivity should be accessible based on settings
+            if (savedSettings != null) {
+                // Check if all settings are false - redirect to AutoModeHeadlessActivity immediately
+                if (settingsManager.areAllSettingsFalse(savedSettings)) {
+                    Logging.d(TAG, "All settings are false - redirecting to AutoModeHeadlessActivity immediately")
+                    val intent = Intent(this@MainActivity, com.gocavgo.validator.navigator.AutoModeHeadlessActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                    }
+                    startActivity(intent)
+                    finish()
+                    return@launch
+                }
+                
+                // Check devmode - if false, restrict access (redirect to AutoModeHeadlessActivity)
+                if (!savedSettings.devmode) {
+                    Logging.d(TAG, "Devmode is false - redirecting to AutoModeHeadlessActivity")
+                    val intent = Intent(this@MainActivity, com.gocavgo.validator.navigator.AutoModeHeadlessActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                    }
+                    startActivity(intent)
+                    finish()
+                    return@launch
+                }
+            }
+        }
+
         // Initialize HERE SDK in background to prevent ANR
         initializeHERESDK()
         
@@ -947,7 +1087,11 @@ class MainActivity : ComponentActivity() {
         // Initialize MQTT background services
         initializeMqttBackgroundServices()
 
+        // Register settings change broadcast receiver
+        registerSettingsChangeReceiver()
 
+        // Fetch settings from API on create (will check again after fetch)
+        fetchSettings()
         
         setContent {
             ValidatorTheme {
@@ -962,9 +1106,8 @@ class MainActivity : ComponentActivity() {
                             tripError = tripError,
                             vehicleInfo = vehicleInfo,
                             showMap = showMap,
-                            isSimulated = isSimulated,
+                            isDeactivated = isDeactivated,
                             onShowMapChanged = { showMap = it },
-                            onIsSimulatedChanged = { isSimulated = it },
                             modifier = Modifier.padding(innerPadding)
                         )
                         
@@ -1027,6 +1170,9 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        // Get simulate value from settings
+        val simulate = currentSettings?.simulate ?: false
+        
         val intent = if (showMap) {
             Intent(this, com.gocavgo.validator.navigator.NavigActivity::class.java)
         } else {
@@ -1035,7 +1181,7 @@ class MainActivity : ComponentActivity() {
         
         intent.putExtra(com.gocavgo.validator.navigator.NavigActivity.EXTRA_TRIP_ID, latestTrip!!.id)
         intent.putExtra(com.gocavgo.validator.navigator.NavigActivity.EXTRA_SHOW_MAP, showMap)
-        intent.putExtra(com.gocavgo.validator.navigator.NavigActivity.EXTRA_IS_SIMULATED, isSimulated)
+        intent.putExtra(com.gocavgo.validator.navigator.NavigActivity.EXTRA_IS_SIMULATED, simulate)
         startActivity(intent)
     }
 
@@ -1078,6 +1224,9 @@ class MainActivity : ComponentActivity() {
         // Refresh vehicle info and trips when returning from VehicleAuth
         vehicleInfo = vehicleSecurityManager.getVehicleInfo()
         if (vehicleSecurityManager.isVehicleRegistered()) {
+            // Fetch settings on resume
+            fetchSettings()
+            
             // Check if we're returning from navigation and need to complete any in-progress trips
             checkAndCompleteTrips()
             fetchLatestVehicleTrip()
@@ -1315,8 +1464,92 @@ class MainActivity : ComponentActivity() {
         
         MqttHealthCheckWorker.cancel(this)
         
+        // Unregister settings change receiver
+        unregisterSettingsChangeReceiver()
+        
         // Dispose HERE SDK only after service cleanup
         disposeHERESDK()
+    }
+    
+    /**
+     * Register broadcast receiver for settings changes
+     */
+    private fun registerSettingsChangeReceiver() {
+        settingsChangeReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                if (context == null || intent == null) return
+                
+                when (intent.action) {
+                    ACTION_SETTINGS_LOGOUT -> {
+                        Logging.d(TAG, "Received logout broadcast - closing activity")
+                        // Logout is handled by VehicleSettingsManager, just finish activity
+                        finish()
+                    }
+                    ACTION_SETTINGS_DEACTIVATE -> {
+                        val isDeactivated = intent.getBooleanExtra("is_deactivated", false)
+                        Logging.d(TAG, "Received deactivate broadcast - isDeactivated: $isDeactivated")
+                        // Update UI state
+                        this@MainActivity.isDeactivated = isDeactivated
+                    }
+                    ACTION_SETTINGS_CHANGED -> {
+                        Logging.d(TAG, "Received settings changed broadcast - refreshing settings")
+                        // Refresh settings from database without re-applying (to prevent loop)
+                        lifecycleScope.launch {
+                            val vehicleId = vehicleSecurityManager.getVehicleId()
+                            val savedSettings = settingsManager.getSettings(vehicleId.toInt())
+                            savedSettings?.let {
+                                // Only update if different from current to prevent loops
+                                if (currentSettings == null ||
+                                    currentSettings?.logout != it.logout ||
+                                    currentSettings?.devmode != it.devmode ||
+                                    currentSettings?.deactivate != it.deactivate ||
+                                    currentSettings?.appmode != it.appmode ||
+                                    currentSettings?.simulate != it.simulate) {
+                                    currentSettings = it
+                                    isDeactivated = it.deactivate
+                                    Logging.d(TAG, "Settings updated from broadcast (no re-apply to prevent loop)")
+                                    
+                                    // Check if should redirect
+                                    if (settingsManager.areAllSettingsFalse(it) || !it.devmode) {
+                                        val redirectIntent = Intent(this@MainActivity, com.gocavgo.validator.navigator.AutoModeHeadlessActivity::class.java).apply {
+                                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                                        }
+                                        startActivity(redirectIntent)
+                                        finish()
+                                    }
+                                } else {
+                                    Logging.d(TAG, "Settings unchanged, skipping update")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        val filter = IntentFilter().apply {
+            addAction(ACTION_SETTINGS_LOGOUT)
+            addAction(ACTION_SETTINGS_DEACTIVATE)
+            addAction(ACTION_SETTINGS_CHANGED)
+        }
+        
+        registerReceiver(settingsChangeReceiver, filter)
+        Logging.d(TAG, "Settings change receiver registered")
+    }
+    
+    /**
+     * Unregister settings change receiver
+     */
+    private fun unregisterSettingsChangeReceiver() {
+        settingsChangeReceiver?.let {
+            try {
+                unregisterReceiver(it)
+                Logging.d(TAG, "Settings change receiver unregistered")
+            } catch (e: Exception) {
+                Logging.e(TAG, "Error unregistering settings change receiver: ${e.message}", e)
+            }
+            settingsChangeReceiver = null
+        }
     }
     
     private fun updateHERESDKOfflineMode(isConnected: Boolean) {
@@ -1363,9 +1596,8 @@ fun NavigationScreen(
     tripError: String?,
     vehicleInfo: VehicleSecurityManager.VehicleInfo?,
     showMap: Boolean,
-    isSimulated: Boolean,
+    isDeactivated: Boolean,
     onShowMapChanged: (Boolean) -> Unit,
-    onIsSimulatedChanged: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -1541,7 +1773,7 @@ fun NavigationScreen(
                         )
                     }
                     
-                    // Is Simulated Toggle
+                    // Simulate value from settings (read-only, no toggle)
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1550,13 +1782,14 @@ fun NavigationScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            "Simulated Mode",
+                            "Simulate Mode",
                             style = MaterialTheme.typography.bodyMedium,
                             modifier = Modifier.weight(1f)
                         )
-                        Switch(
-                            checked = isSimulated,
-                            onCheckedChange = onIsSimulatedChanged
+                        Text(
+                            "Set via API",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
@@ -1585,7 +1818,7 @@ fun NavigationScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 4.dp),
-                enabled = latestTrip != null && !isLoadingTrips && TripStatus.isActive(latestTrip.status)
+                enabled = !isDeactivated && latestTrip != null && !isLoadingTrips && TripStatus.isActive(latestTrip.status)
             ) {
                 Text(
                     when (latestTrip?.status) {
@@ -1609,6 +1842,7 @@ fun NavigationScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 4.dp),
+                enabled = !isDeactivated,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.tertiary
                 )
@@ -1626,6 +1860,7 @@ fun NavigationScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 4.dp),
+                enabled = !isDeactivated,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.secondary
                 )
@@ -1753,9 +1988,8 @@ fun NavigationScreenPreview() {
             tripError = null,
             vehicleInfo = null,
             showMap = true,
-            isSimulated = true,
+            isDeactivated = false,
             onShowMapChanged = { },
-            onIsSimulatedChanged = { },
         )
     }
 }

@@ -81,19 +81,39 @@ class MapDownloaderManager(
         val sdkNativeEngine = SDKNativeEngine.getSharedInstance()
         if (sdkNativeEngine == null) {
             Log.e(TAG, "SDKNativeEngine not initialized!")
-            throw RuntimeException("SDKNativeEngine not initialized.")
+            onError("SDK not initialized")
+            isMapDataReady = true // Proceed without offline maps
+            return
         }
 
         Log.d(TAG, "SDKNativeEngine found, initializing MapDownloader...")
 
         // Initialize MapDownloader
         MapDownloader.fromEngineAsync(sdkNativeEngine) { mapDownloader ->
+            // Verify SDK is still valid before proceeding
+            val currentSdk = SDKNativeEngine.getSharedInstance()
+            if (currentSdk == null) {
+                Log.w(TAG, "SDK disposed during MapDownloader initialization, aborting")
+                onStatusUpdate("SDK unavailable during initialization")
+                isMapDataReady = true // Proceed without offline maps
+                return@fromEngineAsync
+            }
+            
             this@MapDownloaderManager.mapDownloader = mapDownloader
             Log.d(TAG, "MapDownloader initialized successfully")
             
             // Initialize MapUpdater
-            MapUpdater.fromEngineAsync(sdkNativeEngine, object : MapUpdaterConstructionCallback {
+            MapUpdater.fromEngineAsync(currentSdk, object : MapUpdaterConstructionCallback {
                 override fun onMapUpdaterConstructe(mapUpdater: MapUpdater) {
+                    // Verify SDK is still valid before proceeding
+                    val finalSdk = SDKNativeEngine.getSharedInstance()
+                    if (finalSdk == null) {
+                        Log.w(TAG, "SDK disposed during MapUpdater initialization, aborting")
+                        onStatusUpdate("SDK unavailable during initialization")
+                        isMapDataReady = true // Proceed without offline maps
+                        return
+                    }
+                    
                     this@MapDownloaderManager.mapUpdater = mapUpdater
                     Log.d(TAG, "MapUpdater initialized successfully")
                     
@@ -109,6 +129,15 @@ class MapDownloaderManager(
      * Check if Rwanda map data is already installed
      */
     private fun checkExistingMapData() {
+        // Verify SDK is still valid before proceeding
+        val sdkNativeEngine = SDKNativeEngine.getSharedInstance()
+        if (sdkNativeEngine == null) {
+            Log.w(TAG, "SDK not available, skipping map data check")
+            onStatusUpdate("SDK not available, proceeding without offline maps")
+            isMapDataReady = true // Proceed without offline maps
+            return
+        }
+
         mapDownloader?.let { downloader ->
             try {
                 val installedRegions = downloader.installedRegions
@@ -147,9 +176,33 @@ class MapDownloaderManager(
 
                 Log.d(TAG, "==============================")
             } catch (e: MapLoaderException) {
-                Log.e(TAG, "Error checking installed regions: ${e.error}")
-                onError("Error checking installed regions: ${e.error}")
+                // Check if error is OPERATION_AFTER_DISPOSE
+                val errorString = e.error.toString()
+                if (errorString.contains("OPERATION_AFTER_DISPOSE", ignoreCase = true) ||
+                    errorString.contains("DISPOSE", ignoreCase = true)) {
+                    Log.w(TAG, "SDK disposed during map check, proceeding without offline maps: ${e.error}")
+                    isMapDataReady = true // Proceed without offline maps
+                    onStatusUpdate("Map check cancelled (SDK unavailable)")
+                } else {
+                    Log.e(TAG, "Error checking installed regions: ${e.error}")
+                    onError("Error checking installed regions: ${e.error}")
+                }
+            } catch (e: Exception) {
+                // Catch any other exceptions (including runtime exceptions)
+                Log.e(TAG, "Unexpected error checking installed regions: ${e.message}", e)
+                val errorMessage = e.message ?: "Unknown error"
+                if (errorMessage.contains("dispose", ignoreCase = true) || 
+                    errorMessage.contains("OPERATION_AFTER_DISPOSE", ignoreCase = true)) {
+                    Log.w(TAG, "SDK disposed, proceeding without offline maps")
+                    isMapDataReady = true // Proceed without offline maps
+                    onStatusUpdate("Map check cancelled (SDK unavailable)")
+                } else {
+                    onError("Error checking installed regions: $errorMessage")
+                }
             }
+        } ?: run {
+            Log.w(TAG, "MapDownloader not available, skipping map data check")
+            isMapDataReady = true // Proceed without offline maps
         }
     }
 
@@ -602,6 +655,14 @@ class MapDownloaderManager(
             return
         }
 
+        // Verify SDK is still valid before proceeding
+        val sdkNativeEngine = SDKNativeEngine.getSharedInstance()
+        if (sdkNativeEngine == null) {
+            Log.w(TAG, "SDK not available, cannot trigger update")
+            onError("SDK not available")
+            return
+        }
+
         if (isMapDataReady) {
             Log.d(TAG, "Map data is ready, checking for updates...")
             // Check for updates on existing installed regions
@@ -618,10 +679,30 @@ class MapDownloaderManager(
                         Log.d(TAG, "No installed Rwanda region found for update check")
                         onStatusUpdate("No installed map data found for updates")
                     }
+                } catch (e: MapLoaderException) {
+                    val errorString = e.error.toString()
+                    if (errorString.contains("OPERATION_AFTER_DISPOSE", ignoreCase = true) ||
+                        errorString.contains("DISPOSE", ignoreCase = true)) {
+                        Log.w(TAG, "SDK disposed during update check: ${e.error}")
+                        onError("SDK unavailable, cannot check for updates")
+                    } else {
+                        Log.e(TAG, "Error checking for updates: ${e.error}", e)
+                        onError("Error checking for updates: ${e.error}")
+                    }
                 } catch (e: Exception) {
-                    Log.e(TAG, "Error checking for updates: ${e.message}", e)
-                    onError("Error checking for updates: ${e.message}")
+                    val errorMessage = e.message ?: "Unknown error"
+                    if (errorMessage.contains("dispose", ignoreCase = true) || 
+                        errorMessage.contains("OPERATION_AFTER_DISPOSE", ignoreCase = true)) {
+                        Log.w(TAG, "SDK disposed during update check")
+                        onError("SDK unavailable, cannot check for updates")
+                    } else {
+                        Log.e(TAG, "Error checking for updates: ${e.message}", e)
+                        onError("Error checking for updates: ${e.message}")
+                    }
                 }
+            } ?: run {
+                Log.w(TAG, "MapDownloader not available")
+                onError("Map downloader not available")
             }
         } else {
             Log.d(TAG, "Map data not ready, starting fresh download...")

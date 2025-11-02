@@ -6,12 +6,14 @@ import kotlinx.serialization.Serializable
 // MQTT Status Messages
 @Serializable
 data class CarStatusMessage(
+    val vehicle_id: String,
     val status: String,
-    val car_id: String,
     val timestamp: Long,
     val current_latitude: Double? = null,
     val current_longitude: Double? = null,
-    val current_speed: Double? = null
+    val current_speed: Double? = null,
+    val foreground: Boolean = false,
+    val bearing: Double? = null
 )
 
 @Serializable

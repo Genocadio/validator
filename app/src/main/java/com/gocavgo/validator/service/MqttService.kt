@@ -147,6 +147,7 @@ class MqttService private constructor(
     private val carTopics = listOf(
         "car/$carId/trip",           // Trip assignments
         "car/$carId/ping",           // Ping requests
+        "car/$carId/settings",       // Vehicle settings updates
         "trip/+/booking",            // Booking events for any trip (wildcard)
         "trip/+/bookings",           // Booking updates for any trip (wildcard)
         "trip/+/booking_bundle/outbound"      // Full booking bundle from backend (booking + payment + tickets)
@@ -157,9 +158,11 @@ class MqttService private constructor(
     private val lastWillMessage: String
         get() = json.encodeToString(
             CarStatusMessage(
+                vehicle_id = carId,
                 status = "OFFLINE",
-                car_id = carId,
-                timestamp = System.currentTimeMillis()
+                timestamp = System.currentTimeMillis(),
+                foreground = false,
+                bearing = null
             )
         )
 
@@ -759,7 +762,7 @@ class MqttService private constructor(
             val heartbeat = HeartbeatMessage(
                 vehicle_id = carId,
                 timestamp = System.currentTimeMillis(),
-                status = "heartbeat",
+                status = "ONLINE",
                 foreground = isAppInForeground.get(),
                 current_latitude = currentLat,
                 current_longitude = currentLng,
@@ -1080,6 +1083,7 @@ class MqttService private constructor(
         var currentLat: Double? = null
         var currentLng: Double? = null
         var currentSpeed: Double? = null
+        var bearing: Double? = null
         
         if (vehicleId != null) {
             try {
@@ -1093,7 +1097,8 @@ class MqttService private constructor(
                     currentLat = vehicleLocation.latitude
                     currentLng = vehicleLocation.longitude
                     currentSpeed = vehicleLocation.speed
-                    Log.d(TAG, "Including location in status: lat=$currentLat, lng=$currentLng, speed=$currentSpeed")
+                    bearing = vehicleLocation.bearing
+                    Log.d(TAG, "Including location in status: lat=$currentLat, lng=$currentLng, speed=$currentSpeed, bearing=$bearing")
                 } else {
                     Log.d(TAG, "No location data available for status message (sending nulls)")
                 }
@@ -1103,12 +1108,14 @@ class MqttService private constructor(
         }
         
         val status = CarStatusMessage(
+            vehicle_id = carId,
             status = "ONLINE",
-            car_id = carId,
             timestamp = System.currentTimeMillis(),
             current_latitude = currentLat,
             current_longitude = currentLng,
-            current_speed = currentSpeed
+            current_speed = currentSpeed,
+            foreground = isAppInForeground.get(),
+            bearing = bearing
         )
         val payload = json.encodeToString(status)
         publish("car/$carId/status", payload, QOS, true) // Retained message
@@ -1119,9 +1126,11 @@ class MqttService private constructor(
      */
     private fun publishOfflineStatus() {
         val status = CarStatusMessage(
+            vehicle_id = carId,
             status = "OFFLINE",
-            car_id = carId,
-            timestamp = System.currentTimeMillis()
+            timestamp = System.currentTimeMillis(),
+            foreground = isAppInForeground.get(),
+            bearing = null
         )
         val payload = json.encodeToString(status)
         publish("car/$carId/status", payload, QOS, true) // Retained message
@@ -1441,6 +1450,7 @@ class MqttService private constructor(
                     }
                 }
                 topic.startsWith("car/$carId/ping") -> handlePingMessage(payload)
+                topic == "car/$carId/settings" -> handleSettingsMessage(payload)
                 topic.contains("/booking_bundle") -> handleBookingBundleMessage(topic, payload)
                 topic.contains("/booking") -> handleBookingMessage(topic, payload)
                 topic.contains("/bookings") -> handleBookingUpdateMessage(topic, payload)
@@ -1938,6 +1948,56 @@ class MqttService private constructor(
 
         } catch (e: Exception) {
             Log.e(TAG, "Error parsing ping message", e)
+        }
+    }
+
+    /**
+     * Handle vehicle settings messages from MQTT
+     */
+    private fun handleSettingsMessage(payload: String) {
+        try {
+            Log.d(TAG, "=== SETTINGS MESSAGE RECEIVED ===")
+            Log.d(TAG, "Payload: $payload")
+            
+            // Parse MQTT payload format (may include licensePlate)
+            val mqttPayload = json.decodeFromString<VehicleSettingsMqttPayload>(payload)
+            
+            // Convert to VehicleSettings format (using vehicleId from carId)
+            val vehicleId = carId.toIntOrNull()
+            if (vehicleId == null) {
+                Log.e(TAG, "Invalid vehicle ID from carId: $carId")
+                return
+            }
+            
+            val settings = VehicleSettings(
+                id = 1, // MQTT doesn't provide id, use default
+                vehicleId = vehicleId,
+                logout = mqttPayload.logout,
+                devmode = mqttPayload.devmode,
+                deactivate = mqttPayload.deactivate,
+                appmode = mqttPayload.appmode,
+                simulate = mqttPayload.simulate
+            )
+            
+            Log.d(TAG, "Parsed settings: logout=${settings.logout}, devmode=${settings.devmode}, deactivate=${settings.deactivate}, simulate=${settings.simulate}")
+            
+            // Save settings to database in background
+            ioScope.launch {
+                try {
+                    val settingsManager = com.gocavgo.validator.security.VehicleSettingsManager.getInstance(context)
+                    settingsManager.saveSettings(settings)
+                    Log.d(TAG, "Settings saved to database from MQTT")
+                    
+                    // Apply settings (check logout/deactivate)
+                    settingsManager.applySettings(context, settings)
+                    Log.d(TAG, "Settings applied successfully")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error saving settings from MQTT: ${e.message}", e)
+                }
+            }
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "Error parsing settings message: ${e.message}", e)
         }
     }
 

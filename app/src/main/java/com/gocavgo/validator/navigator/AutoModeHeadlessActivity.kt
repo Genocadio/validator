@@ -1,6 +1,5 @@
 package com.gocavgo.validator.navigator
 
-import android.annotation.SuppressLint
 import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
@@ -14,7 +13,6 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
-import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -38,6 +36,14 @@ import com.gocavgo.validator.network.NetworkMonitor
 import com.gocavgo.validator.network.NetworkUtils
 import com.gocavgo.validator.service.MqttService
 import com.gocavgo.validator.service.AutoModeHeadlessForegroundService
+import com.gocavgo.validator.service.MqttForegroundService
+import com.gocavgo.validator.service.MqttHealthCheckWorker
+import com.gocavgo.validator.service.NetworkMonitorWorker
+import com.gocavgo.validator.service.SettingsTimeoutWorker
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import com.gocavgo.validator.ui.theme.ValidatorTheme
 import com.gocavgo.validator.ui.components.NetworkStatusIndicator
 import com.gocavgo.validator.util.Logging
@@ -46,31 +52,25 @@ import com.here.sdk.core.engine.SDKNativeEngine
 import com.here.sdk.core.engine.SDKOptions
 import com.here.sdk.core.errors.InstantiationErrorException
 import com.here.sdk.location.LocationAccuracy
-import com.here.sdk.location.LocationEngine
-import com.here.sdk.location.LocationEngineStatus
-import com.here.sdk.location.LocationFeature
-import com.here.sdk.location.LocationStatusListener
 import com.here.sdk.core.LocationListener
 import com.here.sdk.core.Location
-import com.here.sdk.navigation.Navigator
 import com.here.sdk.navigation.RouteProgressListener
 import com.here.sdk.navigation.NavigableLocationListener
-import com.here.sdk.navigation.RouteDeviation
-import com.here.sdk.navigation.RouteDeviationListener
-import com.here.sdk.navigation.LocationSimulator
-import com.here.sdk.navigation.LocationSimulatorOptions
 import com.here.sdk.navigation.Milestone
 import com.here.sdk.navigation.MilestoneStatus
 import com.here.sdk.navigation.MilestoneStatusListener
 import com.here.sdk.navigation.DestinationReachedListener
 import com.here.sdk.routing.CarOptions
-import com.here.sdk.routing.OfflineRoutingEngine
 import com.here.sdk.routing.Route
-import com.here.sdk.routing.RoutingEngine
 import com.here.sdk.routing.Waypoint
 import com.here.sdk.routing.WaypointType
 import com.here.sdk.core.GeoCoordinates
 import com.gocavgo.validator.security.VehicleSecurityManager
+import com.gocavgo.validator.security.VehicleSettingsManager
+import com.gocavgo.validator.security.ACTION_SETTINGS_CHANGED
+import com.gocavgo.validator.security.ACTION_SETTINGS_LOGOUT
+import com.gocavgo.validator.security.ACTION_SETTINGS_DEACTIVATE
+import com.gocavgo.validator.dataclass.VehicleSettings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -79,6 +79,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.runBlocking
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.TimeUnit
@@ -88,22 +89,30 @@ import java.util.Date
 import com.gocavgo.validator.ui.components.TripConfirmationData
 import com.gocavgo.validator.ui.components.TripConfirmationDialog
 import com.gocavgo.validator.receiver.TripConfirmationReceiver
+import com.gocavgo.validator.MapDownloaderManager
+import android.widget.Toast
 import java.util.Locale
 
 class AutoModeHeadlessActivity : ComponentActivity() {
     companion object {
         private const val TAG = "AutoModeHeadlessActivity"
+        private const val NOTIFICATION_PERMISSION_CODE = 1001
         
         @Volatile
         private var isActivityActive = AtomicBoolean(false)
+        
+        // Synchronization lock for SDK initialization
+        private val sdkInitLock = Any()
         
         fun isActive(): Boolean = isActivityActive.get()
     }
 
     private lateinit var databaseManager: DatabaseManager
     private lateinit var vehicleSecurityManager: VehicleSecurityManager
+    private lateinit var settingsManager: VehicleSettingsManager
     private var tripResponse: TripResponse? = null
-    private var isSimulated: Boolean = false// Auto mode uses real GPS
+    // isSimulated removed - now uses settings.simulate
+    private var currentSettings by mutableStateOf<VehicleSettings?>(null)
     private var messageViewText by mutableStateOf("Auto Mode: Waiting for trip...")
 
     // Auto mode state
@@ -118,22 +127,14 @@ class AutoModeHeadlessActivity : ComponentActivity() {
     private var showConfirmationDialog by mutableStateOf(false)
     private var confirmationTripData by mutableStateOf<TripConfirmationData?>(null)
 
-    // HERE SDK components
-    private var navigator: Navigator? = null
-    private var locationEngine: LocationEngine? = null
-    private var locationSimulator: LocationSimulator? = null
-    private var onlineRoutingEngine: RoutingEngine? = null
-    private var offlineRoutingEngine: OfflineRoutingEngine? = null
+    // HERE SDK components - using NavigationExample instead of direct Navigator
+    private var navigationExample: NavigationExample? = null
+    private var messageViewUpdater: MessageViewUpdater? = null
+    private var routeCalculator: RouteCalculator? = null
     private var currentRoute: Route? = null
     private var currentUserLocation: Location? = null
     private var isNavigationStarted = false
     private var currentSpeedInMetersPerSecond: Double = 0.0
-    
-    // Route deviation handling
-    private var isReturningToRoute = false
-    private var deviationCounter = 0
-    private val DEVIATION_THRESHOLD_METERS = 50
-    private val MIN_DEVIATION_EVENTS = 3
     
     // Trip section validator for route validation and waypoint tracking
     private lateinit var tripSectionValidator: TripSectionValidator
@@ -143,6 +144,7 @@ class AutoModeHeadlessActivity : ComponentActivity() {
     private var mqttService: MqttService? = null
     private var bookingBundleReceiver: BroadcastReceiver? = null
     private var confirmationReceiver: BroadcastReceiver? = null
+    private var settingsChangeReceiver: BroadcastReceiver? = null
     private val handler = Handler(Looper.getMainLooper())
     private var isDestroyed = false
     
@@ -172,6 +174,15 @@ class AutoModeHeadlessActivity : ComponentActivity() {
     
     // HERE SDK offline mode state
     private var pendingOfflineMode: Boolean? = null
+    
+    // Map downloader
+    private var mapDownloaderManager: MapDownloaderManager? = null
+    private var mapDownloadProgress by mutableStateOf(0)
+    private var mapDownloadTotalSize by mutableStateOf(0)
+    private var mapDownloadMessage by mutableStateOf("")
+    private var mapDownloadStatus by mutableStateOf("")
+    private var showMapDownloadDialog by mutableStateOf(false)
+    private var isMapDataReady by mutableStateOf(false)
     
     // Periodic backend fetch
     private var periodicFetchJob: Job? = null
@@ -448,6 +459,94 @@ class AutoModeHeadlessActivity : ComponentActivity() {
         // Initialize database manager
         databaseManager = DatabaseManager.getInstance(this)
         vehicleSecurityManager = VehicleSecurityManager(this)
+        settingsManager = VehicleSettingsManager.getInstance(this)
+
+        // Fetch settings on create
+        lifecycleScope.launch {
+            val vehicleId = vehicleSecurityManager.getVehicleId()
+            try {
+                val result = settingsManager.fetchSettingsFromApi(vehicleId.toInt())
+                result.onSuccess { settings ->
+                    currentSettings = settings
+                    // Apply settings (check logout/deactivate)
+                    settingsManager.applySettings(this@AutoModeHeadlessActivity, settings)
+                }.onFailure { error ->
+                    Logging.e(TAG, "Failed to fetch settings: ${error.message}")
+                    // Use saved settings if available
+                    val savedSettings = settingsManager.getSettings(vehicleId.toInt())
+                    savedSettings?.let {
+                        currentSettings = it
+                    }
+                }
+            } catch (e: Exception) {
+                Logging.e(TAG, "Exception fetching settings: ${e.message}", e)
+                // Use saved settings if available
+                val savedSettings = settingsManager.getSettings(vehicleId.toInt())
+                savedSettings?.let {
+                    currentSettings = it
+                }
+            }
+        }
+
+        // Handle back press - exit app when all settings are false
+        onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                val settings = currentSettings
+                if (settings != null && settingsManager.areAllSettingsFalse(settings)) {
+                    Logging.d(TAG, "All settings are false - exiting app on back press")
+                    finishAffinity() // Exit app
+                } else {
+                    // If not all false, allow normal back behavior (finish activity)
+                    isEnabled = false
+                    onBackPressedDispatcher.onBackPressed()
+                }
+            }
+        })
+
+        // Restore state from database immediately (synchronous) before showing UI
+        try {
+            val vehicleId = vehicleSecurityManager.getVehicleId()
+            val activeTrip = runBlocking {
+                withContext(Dispatchers.IO) {
+                    databaseManager.getActiveTripByVehicle(vehicleId.toInt())
+                }
+            }
+
+            if (activeTrip != null) {
+                Logging.d(TAG, "Restoring state for active trip: ${activeTrip.id} (${activeTrip.status})")
+                currentTrip = activeTrip
+                tripResponse = activeTrip
+                if (activeTrip.status.equals("IN_PROGRESS", ignoreCase = true)) {
+                    Logging.d(TAG, "Trip is IN_PROGRESS, will resume navigation after initialization")
+                    // Clear any confirmation state that might have persisted
+                    isAwaitingConfirmation.set(false)
+                    showConfirmationDialog = false
+                    confirmationTimeoutJob?.cancel()
+                    // Will be handled after navigation components are initialized
+                    isNavigating.set(true)
+                    val origin = activeTrip.route.origin.custom_name ?: activeTrip.route.origin.google_place_name
+                    messageViewText = "Resuming navigation: $origin"
+                } else if (activeTrip.status.equals("SCHEDULED", ignoreCase = true)) {
+                    // Check if departure time has passed - if so, start navigation immediately
+                    val departureTimeMillis = activeTrip.departure_time * 1000
+                    val currentTime = System.currentTimeMillis()
+                    if (currentTime >= departureTimeMillis) {
+                        Logging.d(TAG, "Trip departure time has passed, will start navigation after initialization (skipping confirmation)")
+                        val origin = activeTrip.route.origin.custom_name ?: activeTrip.route.origin.google_place_name
+                        val destination = activeTrip.route.destination.custom_name ?: activeTrip.route.destination.google_place_name
+                        messageViewText = "Resuming navigation: $origin → $destination"
+                    } else {
+                        val origin = activeTrip.route.origin.custom_name ?: activeTrip.route.origin.google_place_name
+                        val destination = activeTrip.route.destination.custom_name ?: activeTrip.route.destination.google_place_name
+                        messageViewText = "Trip scheduled: $origin → $destination"
+                    }
+                }
+            } else {
+                messageViewText = "Auto Mode: Waiting for trip..."
+            }
+        } catch (e: Exception) {
+            Logging.w(TAG, "State restore failed: ${e.message}")
+        }
 
         // Start and bind to foreground service
         startAndBindForegroundService()
@@ -500,22 +599,64 @@ class AutoModeHeadlessActivity : ComponentActivity() {
                     isConnected = isConnected,
                     connectionType = connectionType,
                     isMetered = isMetered,
+                    showMapDownloadDialog = showMapDownloadDialog,
+                    mapDownloadProgress = mapDownloadProgress,
+                    mapDownloadTotalSize = mapDownloadTotalSize,
+                    mapDownloadMessage = mapDownloadMessage,
+                    mapDownloadStatus = mapDownloadStatus,
+                    onMapDownloadCancel = {
+                        mapDownloaderManager?.cancelDownloads()
+                        showMapDownloadDialog = false
+                    },
                     modifier = Modifier.fillMaxSize()
                 )
             }
         }
 
+
         // Initialize components in background
         lifecycleScope.launch(Dispatchers.IO) {
             try {
+                // Check if activity is still valid before initializing SDK
+                if (isDestroyed) {
+                    Logging.w(TAG, "Activity is being destroyed, skipping SDK initialization")
+                    return@launch
+                }
+                
                 // Initialize HERE SDK first
                 initializeHERESDK()
+
+                // Verify SDK is initialized before proceeding
+                val sdkNativeEngine = SDKNativeEngine.getSharedInstance()
+                if (sdkNativeEngine == null) {
+                    Logging.e(TAG, "HERE SDK initialization failed or SDK was disposed")
+                    withContext(Dispatchers.Main) {
+                        if (!isDestroyed) {
+                            messageViewText = "Error: HERE SDK initialization failed"
+                        }
+                    }
+                    return@launch
+                }
+                Logging.d(TAG, "HERE SDK verified and ready for navigation components")
+
+                // Initialize map downloader after HERE SDK is ready
+                withContext(Dispatchers.Main) {
+                    initializeMapDownloader()
+                }
 
                 // Get MQTT service instance
                 mqttService = MqttService.getInstance()
 
                 // Switch to main thread for remaining initialization
                 withContext(Dispatchers.Main) {
+                    // Verify SDK is still valid before initializing navigation components
+                    val currentSdk = SDKNativeEngine.getSharedInstance()
+                    if (currentSdk == null) {
+                        Logging.e(TAG, "HERE SDK was disposed before navigation components initialization")
+                        messageViewText = "Error: HERE SDK unavailable"
+                        return@withContext
+                    }
+                    
                     // Initialize network monitoring
                     initializeNetworkMonitoring()
                     
@@ -530,8 +671,53 @@ class AutoModeHeadlessActivity : ComponentActivity() {
                     // Register confirmation receiver
                     registerConfirmationReceiver()
                     
-                    // Initialize navigation components
+                    // Register settings change receiver
+                    registerSettingsChangeReceiver()
+                    
+                    // Initialize navigation components (requires SDK)
                     initializeNavigationComponents()
+                    
+                    // After initialization, check if we need to resume navigation for restored trip
+                    currentTrip?.let { trip ->
+                        Logging.d(TAG, "=== CHECKING RESTORED TRIP AFTER INITIALIZATION ===")
+                        Logging.d(TAG, "Trip ID: ${trip.id}, Status: ${trip.status}")
+                        
+                        // If trip is IN_PROGRESS, resume navigation immediately
+                        if (trip.status.equals("IN_PROGRESS", ignoreCase = true)) {
+                            Logging.d(TAG, "Resuming navigation for IN_PROGRESS trip after initialization")
+                            // Reset navigation flags before resuming
+                            isNavigationStarted = false
+                            currentRoute = null
+                            if (!isNavigating.get()) {
+                                // Navigation was not active, start it
+                                handleTripReceived(trip)
+                            } else {
+                                // Navigation was already marked active, resume it directly
+                                Logging.d(TAG, "Navigation already active, resuming directly")
+                                startNavigationInternal(trip, allowResume = true)
+                            }
+                        } 
+                        // If trip is SCHEDULED and departure time has passed, start navigation (skip confirmation)
+                        else if (trip.status.equals("SCHEDULED", ignoreCase = true)) {
+                            val departureTimeMillis = trip.departure_time * 1000
+                            val currentTime = System.currentTimeMillis()
+                            if (currentTime >= departureTimeMillis) {
+                                Logging.d(TAG, "Trip departure time has passed, starting navigation immediately (skipping confirmation)")
+                                val origin = trip.route.origin.custom_name ?: trip.route.origin.google_place_name
+                                val destination = trip.route.destination.custom_name ?: trip.route.destination.google_place_name
+                                messageViewText = "Resuming navigation: $origin → $destination"
+                                foregroundService?.updateNotification("Resuming navigation...")
+                                // Reset navigation flags
+                                isNavigationStarted = false
+                                currentRoute = null
+                                startNavigationInternal(trip, allowResume = true)
+                            } else {
+                                Logging.d(TAG, "Trip departure time not yet passed, will use normal schedule logic")
+                                // Handle normally with countdown/confirmation
+                                handleTripReceived(trip)
+                            }
+                        }
+                    }
                     
                     // Start periodic trip data refresh
                     tripRefreshHandler.postDelayed(tripRefreshRunnable, 10000)
@@ -548,6 +734,64 @@ class AutoModeHeadlessActivity : ComponentActivity() {
                     messageViewText = "Error: ${e.message}"
                 }
             }
+        }
+    }
+
+    
+    /**
+     * Schedule background workers (health checks, network monitoring, settings timeout)
+     */
+    private fun scheduleBackgroundWorkers() {
+        try {
+            // Schedule WorkManager health checks
+            MqttHealthCheckWorker.schedule(this)
+            
+            // Schedule network monitoring worker
+            NetworkMonitorWorker.schedule(this)
+            
+            // Schedule settings timeout worker (checks for 4-day timeout)
+            SettingsTimeoutWorker.schedule(this)
+            
+            Logging.d(TAG, "Background workers scheduled")
+        } catch (e: Exception) {
+            Logging.e(TAG, "Failed to schedule background workers: ${e.message}", e)
+        }
+    }
+    
+    /**
+     * Request notification permission for Android 13+
+     */
+    private fun requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) 
+                != PackageManager.PERMISSION_GRANTED) {
+                ActivityCompat.requestPermissions(
+                    this,
+                    arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                    NOTIFICATION_PERMISSION_CODE
+                )
+            }
+        }
+    }
+    
+    /**
+     * Start MQTT foreground service
+     */
+    private fun startMqttForegroundService() {
+        try {
+            val serviceIntent = Intent(this, MqttForegroundService::class.java).apply {
+                action = MqttForegroundService.ACTION_START_SERVICE
+            }
+            
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(serviceIntent)
+            } else {
+                startService(serviceIntent)
+            }
+            
+            Logging.d(TAG, "MQTT foreground service started")
+        } catch (e: Exception) {
+            Logging.e(TAG, "Failed to start MQTT foreground service: ${e.message}", e)
         }
     }
 
@@ -589,15 +833,29 @@ class AutoModeHeadlessActivity : ComponentActivity() {
                 return@setTripEventCallback
             }
             
-            // Ignore new trips if already navigating (existing logic)
-            if (isNavigating.get()) {
-                Logging.w(TAG, "Navigation active, ignoring new trip")
+            // Check if this is the same trip we're already handling
+            val tripId = tripEvent.data.id
+            val isSameTrip = currentTrip?.id == tripId
+            
+            // Ignore new trips if already navigating a different trip (existing logic)
+            if (isNavigating.get() && !isSameTrip) {
+                Logging.w(TAG, "Navigation active for different trip, ignoring new trip")
                 return@setTripEventCallback
             }
             
             lifecycleScope.launch(Dispatchers.Main) {
                 try {
                     val trip = convertBackendTripToAndroid(tripEvent.data)
+                    
+                    // If trip is IN_PROGRESS and we're awaiting confirmation, clear confirmation immediately
+                    if (trip.status.equals("IN_PROGRESS", ignoreCase = true) && isAwaitingConfirmation.get()) {
+                        Logging.d(TAG, "MQTT trip is IN_PROGRESS - clearing confirmation state")
+                        isAwaitingConfirmation.set(false)
+                        showConfirmationDialog = false
+                        confirmationTimeoutJob?.cancel()
+                        foregroundService?.cancelConfirmationNotification()
+                    }
+                    
                     handleTripReceived(trip)
                     
                     // Record MQTT update for sync coordination
@@ -636,8 +894,12 @@ class AutoModeHeadlessActivity : ComponentActivity() {
             messageViewText = "Resuming navigation: $origin → $destination"
             foregroundService?.updateNotification("Resuming navigation...")
             
+            // Reset navigation flags to allow resuming
+            isNavigationStarted = false
+            currentRoute = null
+            
             // Start navigation immediately, bypassing all countdown/confirmation logic
-            startNavigationInternal(trip)
+            startNavigationInternal(trip, allowResume = true)
             return
         }
         
@@ -652,6 +914,13 @@ class AutoModeHeadlessActivity : ComponentActivity() {
         
         if (currentTime >= departureTimeMillis) {
             // LATE: Actual departure time has passed - show confirmation
+            // BUT: Double-check status again - if trip became IN_PROGRESS, skip confirmation
+            if (trip.status.equals("IN_PROGRESS", ignoreCase = true)) {
+                Logging.d(TAG, "Trip is IN_PROGRESS even though departure time passed - starting navigation directly")
+                startNavigationInternal(trip, allowResume = true)
+                return
+            }
+            
             val delayMinutes = ((currentTime - departureTimeMillis) / (60 * 1000)).toInt()
             Logging.d(TAG, "Trip is late by $delayMinutes minutes, requesting confirmation")
             showTripConfirmation(trip, delayMinutes)
@@ -712,14 +981,18 @@ class AutoModeHeadlessActivity : ComponentActivity() {
         }
     }
 
-    private fun startNavigationInternal(trip: TripResponse) {
-        if (isNavigating.get()) {
+    private fun startNavigationInternal(trip: TripResponse, allowResume: Boolean = false) {
+        // Check if navigation is already active - but allow resume if explicitly requested
+        if (isNavigating.get() && !allowResume) {
             Logging.w(TAG, "Navigation already active, ignoring start request")
             return
         }
         
         Logging.d(TAG, "=== STARTING NAVIGATION INTERNALLY ===")
         Logging.d(TAG, "Trip ID: ${trip.id}")
+        Logging.d(TAG, "Allow resume: $allowResume")
+        Logging.d(TAG, "IsNavigating: ${isNavigating.get()}")
+        Logging.d(TAG, "IsNavigationStarted: $isNavigationStarted")
         
         // Clear any confirmation state (safety check)
         if (isAwaitingConfirmation.get() || showConfirmationDialog) {
@@ -728,6 +1001,13 @@ class AutoModeHeadlessActivity : ComponentActivity() {
             showConfirmationDialog = false
             confirmationTimeoutJob?.cancel()
             foregroundService?.cancelConfirmationNotification()
+        }
+        
+        // Reset navigation started flag to allow route calculation
+        if (allowResume) {
+            Logging.d(TAG, "Resuming navigation - resetting navigation flags")
+            isNavigationStarted = false
+            currentRoute = null
         }
         
         isNavigating.set(true)
@@ -744,6 +1024,7 @@ class AutoModeHeadlessActivity : ComponentActivity() {
         updatePassengerCounts()
         
         // Start navigation using existing HeadlessNavigActivity logic
+        Logging.d(TAG, "Calling startNavigation()...")
         startNavigation()
         
         // Update again after navigation starts
@@ -752,6 +1033,13 @@ class AutoModeHeadlessActivity : ComponentActivity() {
     }
     
     private fun showTripConfirmation(trip: TripResponse, delayMinutes: Int) {
+        // Safety check: Never show confirmation for IN_PROGRESS trips
+        if (trip.status.equals("IN_PROGRESS", ignoreCase = true)) {
+            Logging.d(TAG, "Trip is IN_PROGRESS - skipping confirmation and starting navigation directly")
+            startNavigationInternal(trip, allowResume = true)
+            return
+        }
+        
         isAwaitingConfirmation.set(true)
         
         // Format times
@@ -790,9 +1078,18 @@ class AutoModeHeadlessActivity : ComponentActivity() {
             delay(3 * 60 * 1000) // 3 minutes
             
             if (isAwaitingConfirmation.get()) {
-                Logging.d(TAG, "Confirmation timeout - auto-starting navigation")
-                withContext(Dispatchers.Main) {
-                    handleConfirmStart()
+                // Double-check trip status before auto-starting
+                val currentTripStatus = currentTrip?.status ?: trip.status
+                if (currentTripStatus.equals("IN_PROGRESS", ignoreCase = true)) {
+                    Logging.d(TAG, "Trip became IN_PROGRESS during confirmation timeout - starting navigation directly")
+                    withContext(Dispatchers.Main) {
+                        startNavigationInternal(trip, allowResume = true)
+                    }
+                } else {
+                    Logging.d(TAG, "Confirmation timeout - auto-starting navigation")
+                    withContext(Dispatchers.Main) {
+                        handleConfirmStart()
+                    }
                 }
             }
         }
@@ -802,6 +1099,18 @@ class AutoModeHeadlessActivity : ComponentActivity() {
         Logging.d(TAG, "=== HANDLE CONFIRM START ===")
         Logging.d(TAG, "IsAwaitingConfirmation: ${isAwaitingConfirmation.get()}")
         Logging.d(TAG, "IsNavigating: ${isNavigating.get()}")
+        
+        // Safety check: If trip is IN_PROGRESS, skip confirmation and start navigation directly
+        val trip = confirmationTripData?.trip ?: currentTrip
+        if (trip != null && trip.status.equals("IN_PROGRESS", ignoreCase = true)) {
+            Logging.d(TAG, "Trip is IN_PROGRESS - skipping confirmation and starting navigation directly")
+            isAwaitingConfirmation.set(false)
+            showConfirmationDialog = false
+            confirmationTimeoutJob?.cancel()
+            foregroundService?.cancelConfirmationNotification()
+            startNavigationInternal(trip, allowResume = true)
+            return
+        }
         
         // If already navigating, just dismiss UI elements
         if (isNavigating.get()) {
@@ -820,8 +1129,8 @@ class AutoModeHeadlessActivity : ComponentActivity() {
             return
         }
         
-        val trip = confirmationTripData?.trip
-        if (trip == null) {
+        val confirmTrip = confirmationTripData?.trip
+        if (confirmTrip == null) {
             Logging.e(TAG, "No trip data available for confirmation")
             return
         }
@@ -833,7 +1142,7 @@ class AutoModeHeadlessActivity : ComponentActivity() {
         foregroundService?.cancelConfirmationNotification()
         
         Logging.d(TAG, "User confirmed trip start, initiating navigation")
-        startNavigationInternal(trip)
+        startNavigationInternal(confirmTrip)
     }
     
     private fun handleConfirmCancel() {
@@ -911,11 +1220,8 @@ class AutoModeHeadlessActivity : ComponentActivity() {
     
     private fun stopNavigationAndCleanup() {
         try {
-            // Stop navigator
-            navigator?.route = null
-            
-            // Stop location simulator if active
-            locationSimulator?.stop()
+            // Stop headless navigation using NavigationExample
+            navigationExample?.stopHeadlessNavigation()
             
             // Reset trip section validator
             if (::tripSectionValidator.isInitialized) {
@@ -934,6 +1240,28 @@ class AutoModeHeadlessActivity : ComponentActivity() {
         isNavigating.set(false)
         currentTrip = null
         tripResponse = null
+        
+        // Fetch settings on trip completion
+        lifecycleScope.launch {
+            val vehicleId = vehicleSecurityManager.getVehicleId()
+            try {
+                val result = settingsManager.fetchSettingsFromApi(vehicleId.toInt())
+                result.onSuccess { settings ->
+                    currentSettings = settings
+                    // Apply settings (check logout/deactivate)
+                    settingsManager.applySettings(this@AutoModeHeadlessActivity, settings)
+                }.onFailure { error ->
+                    Logging.e(TAG, "Failed to fetch settings on trip completion: ${error.message}")
+                    // Use saved settings if available
+                    val savedSettings = settingsManager.getSettings(vehicleId.toInt())
+                    savedSettings?.let {
+                        currentSettings = it
+                    }
+                }
+            } catch (e: Exception) {
+                Logging.e(TAG, "Exception fetching settings on trip completion: ${e.message}", e)
+            }
+        }
         
         // Reset to listening state
         messageViewText = "Auto Mode: Waiting for trip..."
@@ -956,14 +1284,8 @@ class AutoModeHeadlessActivity : ComponentActivity() {
                 Logging.d(TAG, "MQTT service initialized in trip section validator")
             }
 
-            // Initialize routing engines
-            initializeRoutingEngines()
-
-            // Initialize navigator
-            initializeNavigator()
-
-            // Initialize location engine
-            initializeLocationEngine()
+            // Initialize NavigationExample (replaces Navigator, RoutingEngines, and LocationEngine)
+            initializeNavigationExample()
 
             Logging.d(TAG, "Navigation components initialized successfully")
         } catch (e: Exception) {
@@ -981,43 +1303,117 @@ class AutoModeHeadlessActivity : ComponentActivity() {
     // - All UI helper methods and state management
 
     private fun initializeHERESDK(lowMem: Boolean = false) {
-        try {
-            // Check if SDK is already initialized to avoid duplicate initialization
-            if (SDKNativeEngine.getSharedInstance() != null) {
-                Logging.d(TAG, "HERE SDK already initialized, skipping")
-                return
+        // Check if activity is still valid before initializing
+        if (isDestroyed) {
+            Logging.w(TAG, "Activity is being destroyed, cannot initialize HERE SDK")
+            return
+        }
+        
+        // Synchronize to prevent concurrent initialization attempts
+        synchronized(sdkInitLock) {
+            try {
+                // Check if activity is still valid inside synchronized block
+                if (isDestroyed) {
+                    Logging.w(TAG, "Activity was destroyed during SDK initialization check")
+                    return
+                }
+                
+                // Double-check pattern: Check again inside synchronized block
+                if (SDKNativeEngine.getSharedInstance() != null) {
+                    Logging.d(TAG, "HERE SDK already initialized, skipping")
+                    return
+                }
+                
+                Logging.d(TAG, "Initializing HERE SDK...")
+                val accessKeyID = com.gocavgo.validator.BuildConfig.HERE_ACCESS_KEY_ID
+                val accessKeySecret = com.gocavgo.validator.BuildConfig.HERE_ACCESS_KEY_SECRET
+                val authenticationMode = AuthenticationMode.withKeySecret(accessKeyID, accessKeySecret)
+                val options = SDKOptions(authenticationMode)
+                if(lowMem) {
+                    options.lowMemoryMode = true
+                    Logging.d(TAG, "Initialised in Low memory mode")
+                }
+                
+                // Initialize SDK - this is the critical section that must not run concurrently
+                SDKNativeEngine.makeSharedInstance(this, options)
+                Logging.d(TAG, "HERE SDK initialized successfully")
+                
+                // Apply pending offline mode if any
+                pendingOfflineMode?.let { offlineMode ->
+                    try {
+                        SDKNativeEngine.getSharedInstance()?.setOfflineMode(offlineMode)
+                        Logging.d(TAG, "Applied pending HERE SDK offline mode: $offlineMode")
+                        pendingOfflineMode = null
+                    } catch (e: Exception) {
+                        Logging.e(TAG, "Failed to apply pending offline mode: ${e.message}", e)
+                    }
+                }
+            } catch (e: InstantiationErrorException) {
+                Logging.e(TAG, "Initialization of HERE SDK failed: ${e.error.name}", e)
+                throw RuntimeException("Initialization of HERE SDK failed: " + e.error.name)
+            } catch (e: Exception) {
+                Logging.e(TAG, "Unexpected error during HERE SDK initialization: ${e.message}", e)
+                throw RuntimeException("Unexpected error during HERE SDK initialization: ${e.message}")
             }
-            
-            val accessKeyID = com.gocavgo.validator.BuildConfig.HERE_ACCESS_KEY_ID
-            val accessKeySecret = com.gocavgo.validator.BuildConfig.HERE_ACCESS_KEY_SECRET
-            val authenticationMode = AuthenticationMode.withKeySecret(accessKeyID, accessKeySecret)
-            val options = SDKOptions(authenticationMode)
-            if(lowMem) {
-                options.lowMemoryMode = true
-                Logging.d(TAG, "Initialised in Low memory mode")
-            }
-            
-            // Initialize SDK
-            SDKNativeEngine.makeSharedInstance(this, options)
-            Logging.d(TAG, "HERE SDK initialized successfully")
-            
-            // Apply pending offline mode if any
-            pendingOfflineMode?.let { offlineMode ->
-                try {
-                    SDKNativeEngine.getSharedInstance()?.setOfflineMode(offlineMode)
-                    Logging.d(TAG, "Applied pending HERE SDK offline mode: $offlineMode")
-                    pendingOfflineMode = null
-                } catch (e: Exception) {
-                    Logging.e(TAG, "Failed to apply pending offline mode: ${e.message}", e)
+        }
+    }
+
+    private fun initializeMapDownloader() {
+        Logging.d(TAG, "=== INITIALIZING MAP DOWNLOADER ===")
+        
+        // Check if HERE SDK is initialized
+        val sdkNativeEngine = SDKNativeEngine.getSharedInstance()
+        if (sdkNativeEngine == null) {
+            Logging.e(TAG, "HERE SDK not initialized! Cannot initialize map downloader.")
+            isMapDataReady = true // Proceed without offline maps
+            return
+        }
+        
+        Logging.d(TAG, "HERE SDK is initialized, proceeding with map downloader")
+        
+        mapDownloaderManager = MapDownloaderManager(
+            context = this,
+            onProgressUpdate = { message, progress, totalSizeMB ->
+                mapDownloadMessage = message
+                mapDownloadProgress = progress
+                mapDownloadTotalSize = totalSizeMB
+                Logging.d(TAG, "Map download progress: $message - $progress% (${totalSizeMB}MB)")
+            },
+            onStatusUpdate = { status ->
+                mapDownloadStatus = status
+                Logging.d(TAG, "Map download status: $status")
+            },
+            onDownloadComplete = {
+                isMapDataReady = true
+                showMapDownloadDialog = false
+                Logging.d(TAG, "Map download completed successfully")
+            },
+            onError = { error ->
+                Logging.e(TAG, "Map download error: $error")
+                showMapDownloadDialog = false
+            },
+            onToastMessage = { message ->
+                runOnUiThread {
+                    Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+                }
+            },
+            onShowProgressDialog = {
+                runOnUiThread {
+                    showMapDownloadDialog = true
                 }
             }
-        } catch (e: InstantiationErrorException) {
-            Logging.e(TAG, "Initialization of HERE SDK failed: ${e.error.name}", e)
-            throw RuntimeException("Initialization of HERE SDK failed: " + e.error.name)
+        )
+        
+        // Initialize the map downloader in background
+        try {
+            mapDownloaderManager?.initialize()
+            Logging.d(TAG, "Map downloader initialized successfully")
         } catch (e: Exception) {
-            Logging.e(TAG, "Unexpected error during HERE SDK initialization: ${e.message}", e)
-            throw RuntimeException("Unexpected error during HERE SDK initialization: ${e.message}")
+            Logging.e(TAG, "Failed to initialize map downloader: ${e.message}", e)
+            isMapDataReady = true // Proceed without offline maps
         }
+        
+        Logging.d(TAG, "================================")
     }
 
     private fun initializeNetworkMonitoring() {
@@ -1040,6 +1436,17 @@ class AutoModeHeadlessActivity : ComponentActivity() {
             // Update HERE SDK offline mode
             updateHERESDKOfflineMode(connected)
             
+            // Update RouteCalculator with network state
+            routeCalculator?.setNetworkState(connected)
+            
+            // Update NavigationHandler with network state
+            navigationExample?.getNavigationHandler()?.setNetworkState(connected)
+            
+            // Notify map downloader of network availability
+            if (connected) {
+                mapDownloaderManager?.onNetworkAvailable()
+            }
+            
             // Handle network recovery for backend sync
             if (connected) {
                 handleNetworkRestored()
@@ -1049,43 +1456,70 @@ class AutoModeHeadlessActivity : ComponentActivity() {
         }
 
         networkMonitor?.startMonitoring()
+        
+        // Update RouteCalculator with initial network state
+        routeCalculator?.setNetworkState(isConnected)
+        
         Logging.d(TAG, "Network monitoring started")
     }
 
-    private fun initializeRoutingEngines() {
+    private fun initializeNavigationExample() {
         try {
-            onlineRoutingEngine = RoutingEngine()
-            offlineRoutingEngine = OfflineRoutingEngine()
-            Logging.d(TAG, "Routing engines initialized successfully")
+            // Verify SDK is initialized before creating NavigationExample
+            val sdkNativeEngine = SDKNativeEngine.getSharedInstance()
+            if (sdkNativeEngine == null) {
+                Logging.e(TAG, "HERE SDK not initialized, cannot create NavigationExample")
+                throw RuntimeException("HERE SDK not initialized. Cannot create NavigationExample.")
+            }
+            
+            // Create MessageViewUpdater for navigation updates
+            messageViewUpdater = MessageViewUpdater()
+            
+            // Create RouteCalculator for route calculation
+            routeCalculator = RouteCalculator()
+            
+            // Create NavigationExample (handles Navigator, RoutingEngines, LocationEngine internally)
+            // For headless mode, mapView is null
+            navigationExample = NavigationExample(
+                context = this,
+                mapView = null, // Headless mode - no map view
+                messageView = messageViewUpdater!!,
+                tripSectionValidator = tripSectionValidator
+            )
+            
+            // Start location provider for getting current location before route calculation
+            navigationExample?.startLocationProvider()
+            
+            // Setup headless listeners using NavigationHandler
+            navigationExample?.let { navExample ->
+                val navigator = navExample.getHeadlessNavigator()
+                val dynamicRoutingEngine = navExample.getDynamicRoutingEngine()
+                val navigationHandler = navExample.getNavigationHandler()
+                
+                // Setup headless listeners (NavigationHandler handles all listener setup)
+                if (dynamicRoutingEngine != null) {
+                    navigationHandler.setupHeadlessListeners(navigator, dynamicRoutingEngine)
+                    Logging.d(TAG, "NavigationExample initialized successfully with headless listeners")
+                } else {
+                    Logging.e(TAG, "DynamicRoutingEngine is null, cannot setup headless listeners")
+                    throw RuntimeException("DynamicRoutingEngine is null, cannot setup headless listeners")
+                }
+            }
         } catch (e: InstantiationErrorException) {
-            Logging.e(TAG, "Initialization of routing engines failed: ${e.error.name}", e)
-            throw RuntimeException("Initialization of routing engines failed: " + e.error.name)
-        }
-    }
-
-    private fun initializeNavigator() {
-        try {
-            navigator = Navigator()
-            Logging.d(TAG, "Navigator initialized successfully")
-        } catch (e: InstantiationErrorException) {
-            Logging.e(TAG, "Initialization of Navigator failed: ${e.error.name}", e)
-            throw RuntimeException("Initialization of Navigator failed: " + e.error.name)
-        }
-    }
-
-    private fun initializeLocationEngine() {
-        try {
-            locationEngine = LocationEngine()
-            Logging.d(TAG, "LocationEngine initialized successfully")
-        } catch (e: InstantiationErrorException) {
-            Logging.e(TAG, "Initialization of LocationEngine failed: ${e.error.name}", e)
-            // Continue without GPS if initialization fails
+            Logging.e(TAG, "Initialization of NavigationExample failed: ${e.error.name}", e)
+            throw RuntimeException("Initialization of NavigationExample failed: " + e.error.name)
+        } catch (e: Exception) {
+            Logging.e(TAG, "Failed to initialize NavigationExample: ${e.message}", e)
+            throw RuntimeException("Failed to initialize NavigationExample: ${e.message}", e)
         }
     }
 
     private fun startNavigation() {
         tripResponse?.let { trip ->
-            if (!isSimulated) {
+            // Get simulate value from settings
+            val simulate = currentSettings?.simulate ?: false
+            
+            if (!simulate) {
                 startLocationEngineAndWaitForLocation()
             } else {
                 isNavigationStarted = true
@@ -1095,59 +1529,48 @@ class AutoModeHeadlessActivity : ComponentActivity() {
     }
 
     private fun startLocationEngineAndWaitForLocation() {
-        locationEngine?.let { engine ->
-            Logging.d(TAG, "Starting location engine for real-time navigation...")
-
-            val locationStatusListener: LocationStatusListener = object : LocationStatusListener {
-                override fun onStatusChanged(locationEngineStatus: LocationEngineStatus) {
-                    Logging.d(TAG, "Location engine status: ${locationEngineStatus.name}")
-                }
-
-                override fun onFeaturesNotAvailable(features: List<LocationFeature>) {
-                    for (feature in features) {
-                        Logging.w(TAG, "Location feature not available: ${feature.name}")
-                    }
-                }
-            }
-
-            val locationListener = LocationListener { location ->
-                Logging.d(TAG, "Received location: ${location.coordinates.latitude}, ${location.coordinates.longitude}")
-                currentUserLocation = location
-
-                // Start navigation once we have a location (only once)
-                if (!isNavigationStarted) {
-                    Logging.d(TAG, "Location acquired, starting navigation...")
+        navigationExample?.let { navExample ->
+            Logging.d(TAG, "Waiting for location from NavigationExample location provider...")
+            
+            // Check if we already have a valid location
+            if (navExample.hasValidLocation()) {
+                currentUserLocation = navExample.getLastKnownLocation()
+                if (currentUserLocation != null) {
+                    Logging.d(TAG, "Location already available, starting navigation...")
                     isNavigationStarted = true
                     calculateRouteAndStartNavigation()
+                    return
                 }
             }
-
-            try {
-                engine.addLocationListener(locationListener)
-                engine.addLocationStatusListener(locationStatusListener)
-                engine.confirmHEREPrivacyNoticeInclusion()
-                engine.start(LocationAccuracy.NAVIGATION)
-
-                // Set a timeout to fallback to simulation if no location is received
-                Handler(Looper.getMainLooper()).postDelayed({
-                    if (currentUserLocation == null && !isNavigationStarted) {
+            
+            // Wait for location with timeout
+            val handler = Handler(Looper.getMainLooper())
+            var attempts = 0
+            val maxAttempts = 10 // 10 seconds total
+            
+            val checkLocation = object : Runnable {
+                override fun run() {
+                    attempts++
+                    if (navExample.hasValidLocation()) {
+                        currentUserLocation = navExample.getLastKnownLocation()
+                        if (currentUserLocation != null && !isNavigationStarted) {
+                            Logging.d(TAG, "Location acquired after $attempts attempts, starting navigation...")
+                            isNavigationStarted = true
+                            calculateRouteAndStartNavigation()
+                        }
+                    } else if (attempts < maxAttempts) {
+                        handler.postDelayed(this, 1000) // Check every second
+                    } else {
                         Logging.w(TAG, "No location received within timeout, falling back to simulated navigation")
-                        isSimulated = true
                         isNavigationStarted = true
                         calculateRouteAndStartNavigation()
                     }
-                }, 10000) // 10 second timeout
-
-            } catch (e: Exception) {
-                Logging.e(TAG, "Failed to start location engine: ${e.message}", e)
-                Logging.w(TAG, "Falling back to simulated navigation due to GPS failure")
-                isSimulated = true
-                isNavigationStarted = true
-                calculateRouteAndStartNavigation()
+                }
             }
+            
+            handler.postDelayed(checkLocation, 1000) // Start checking after 1 second
         } ?: run {
-            Logging.w(TAG, "Location engine not available, falling back to simulated navigation")
-            isSimulated = true
+            Logging.w(TAG, "NavigationExample not available, falling back to simulated navigation")
             isNavigationStarted = true
             calculateRouteAndStartNavigation()
         }
@@ -1155,10 +1578,13 @@ class AutoModeHeadlessActivity : ComponentActivity() {
 
     private fun calculateRouteAndStartNavigation() {
         tripResponse?.let { trip ->
+            // Get simulate value from settings
+            val simulate = currentSettings?.simulate ?: false
+            
             var origin: Waypoint? = null
-            if (currentUserLocation == null && !isSimulated) {
-                Logging.w(TAG, "No current user location available, switching to simulated navigation")
-                isSimulated = true
+            if (currentUserLocation == null && !simulate) {
+                Logging.w(TAG, "No current user location available, falling back to simulated navigation")
+                // Fallback to simulated mode if no location
             } else {
                 currentUserLocation?.let {
                     origin = Waypoint(it.coordinates)
@@ -1167,19 +1593,12 @@ class AutoModeHeadlessActivity : ComponentActivity() {
             }
             val waypoints = createWaypointsFromTrip(trip, origin)
 
-            val carOptions = CarOptions().apply {
-                routeOptions.optimizeWaypointsOrder = false
-                routeOptions.enableTolls = true
-                routeOptions.alternatives = 1
-            }
-
-            val routingEngine = onlineRoutingEngine ?: offlineRoutingEngine!!
-
             Logging.d(TAG, "Calculating route")
             Logging.d(TAG, "Trip ID: ${trip.id}")
             Logging.d(TAG, "Waypoints: ${waypoints.size}")
 
-            routingEngine.calculateRoute(waypoints, carOptions) { routingError, routes ->
+            // Use RouteCalculator for route calculation (handles network switching automatically)
+            routeCalculator?.calculateRouteWithWaypoints(waypoints) { routingError, routes ->
                 if (routingError == null && routes != null && routes.isNotEmpty()) {
                     val route = routes[0]
                     currentRoute = route
@@ -1273,13 +1692,7 @@ class AutoModeHeadlessActivity : ComponentActivity() {
     }
 
     private fun startHeadlessGuidance(route: Route) {
-        navigator?.let { nav ->
-            // Set up listeners
-            setupHeadlessListeners(nav)
-            
-            // Set the route
-            nav.route = route
-            
+        navigationExample?.let { navExample ->
             // Verify route sections with trip section validator
             tripResponse?.let { trip ->
                 // Calculate skipped waypoint count
@@ -1289,10 +1702,13 @@ class AutoModeHeadlessActivity : ComponentActivity() {
                 Logging.d(TAG, "Skipped waypoints: $skippedCount")
                 Logging.d(TAG, "Total waypoints: ${trip.waypoints.size}")
                 
+                // Get simulate value from settings
+                val simulate = currentSettings?.simulate ?: false
+                
                 val isVerified = tripSectionValidator.verifyRouteSections(
                     tripResponse = trip,
                     route = route,
-                    isSimulated = isSimulated,
+                    isSimulated = simulate,
                     deviceLocation = currentUserLocation?.coordinates,
                     skippedWaypointCount = skippedCount
                 )
@@ -1300,184 +1716,112 @@ class AutoModeHeadlessActivity : ComponentActivity() {
                 Logging.d(TAG, "================================================")
             }
             
-            // Set up location source
-            setupLocationSource(nav, route, isSimulated)
+            // Get simulate value from settings
+            val simulate = currentSettings?.simulate ?: false
+            
+            // Start headless navigation using NavigationExample
+            // This handles route setting, location source, and listener setup
+            navExample.startHeadlessNavigation(route, simulate)
+            
+            // Add AutoMode-specific callbacks to existing listeners
+            // NavigationHandler already set up listeners, we wrap them to add AutoMode behavior
+            val navigator = navExample.getHeadlessNavigator()
+            val originalDestinationReachedListener = navigator.destinationReachedListener
+            
+            // Wrap navigable location listener to update currentSpeedInMetersPerSecond
+            val originalNavigableLocationListener = navigator.navigableLocationListener
+            navigator.navigableLocationListener = NavigableLocationListener { currentNavigableLocation ->
+                // Guard: Don't process if activity is destroyed
+                if (isDestroyed) {
+                    return@NavigableLocationListener
+                }
+                
+                // Call original listener (NavigationHandler's listener) if it exists
+                originalNavigableLocationListener?.let { listener ->
+                    listener.onNavigableLocationUpdated(currentNavigableLocation)
+                }
+                
+                // AutoMode-specific: Update current speed for navigation display
+                try {
+                    val speed = currentNavigableLocation.originalLocation.speedInMetersPerSecond ?: 0.0
+                    currentSpeedInMetersPerSecond = speed
+                } catch (e: Exception) {
+                    Logging.e(TAG, "Error updating speed in navigable location listener: ${e.message}", e)
+                }
+            }
+            
+            // Wrap destination reached listener to add AutoMode-specific behavior
+            navigator.destinationReachedListener = DestinationReachedListener {
+                // Guard: Don't process if activity is destroyed
+                if (isDestroyed) {
+                    return@DestinationReachedListener
+                }
+                
+                // Call original listener (NavigationHandler's listener) if it exists
+                originalDestinationReachedListener?.let { 
+                    it.onDestinationReached()
+                }
+                
+                // AutoMode-specific: Handle navigation complete
+                lifecycleScope.launch(Dispatchers.Main) {
+                    onNavigationComplete()
+                }
+            }
+            
+            // Wrap route progress listener to add AutoMode-specific behavior
+            val originalRouteProgressListener = navigator.routeProgressListener
+            navigator.routeProgressListener = RouteProgressListener { routeProgress ->
+                // Guard: Don't process if activity is destroyed
+                if (isDestroyed) {
+                    return@RouteProgressListener
+                }
+                
+                // Call original listener (NavigationHandler's listener) if it exists
+                originalRouteProgressListener?.let { listener ->
+                    listener.onRouteProgressUpdated(routeProgress)
+                }
+                
+                // AutoMode-specific: Extract and display navigation info (speed, remaining distance)
+                try {
+                    val maneuverProgressList = routeProgress.maneuverProgress
+                    if (maneuverProgressList.isNotEmpty()) {
+                        val nextManeuverProgress = maneuverProgressList[0]
+                        nextManeuverProgress?.let { progress ->
+                            val remainingDistance = progress.remainingDistanceInMeters / 1000.0
+                            
+                            // Get current speed from navigable location listener
+                            // currentSpeedInMetersPerSecond is updated by NavigationHandler's navigableLocationListener
+                            val speedInKmh = currentSpeedInMetersPerSecond * 3.6
+                            
+                            // Update messageViewText with navigation info (speed and distance to next point)
+                            // Format: "Next: X.X km | Speed: X.X km/h" (same as NavigActivity)
+                            val navigationText = "Next: ${String.format("%.1f", remainingDistance)} km | Speed: ${String.format("%.1f", speedInKmh)} km/h"
+                            
+                            // Update both messageViewText and notification on UI thread
+                            runOnUiThread {
+                                messageViewText = navigationText
+                                foregroundService?.updateNotification(navigationText)
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    Logging.e(TAG, "Error extracting navigation info: ${e.message}", e)
+                }
+                
+                // AutoMode-specific: Update passenger counts when route progress changes
+                updatePassengerCounts()
+            }
+            
+            // Update current route reference
+            currentRoute = route
             
             messageViewText = "Navigation in progress"
             Logging.d(TAG, "Navigation started")
         }
     }
 
-    private fun setupHeadlessListeners(nav: Navigator) {
-        nav.routeProgressListener = RouteProgressListener { routeProgress ->
-            try {
-                Logging.d(TAG, "Route progress update received")
-                
-                // Process section progress through trip section validator for verified trips
-                val sectionProgressList = routeProgress.sectionProgress
-                val totalSections = sectionProgressList.size
-                tripSectionValidator.processSectionProgress(sectionProgressList, totalSections)
-                
-                // Update passenger counts when route progress changes
-                updatePassengerCounts()
-                
-                val maneuverProgressList = routeProgress.maneuverProgress
-                if (maneuverProgressList.isNotEmpty()) {
-                    val nextManeuverProgress = maneuverProgressList[0]
-                    nextManeuverProgress?.let { progress ->
-                        val remainingDistance = progress.remainingDistanceInMeters / 1000.0
-                        if (sectionProgressList.isNotEmpty()) {
-                            val lastSection = sectionProgressList.last()
-                            val totalRemainingDistance = lastSection.remainingDistanceInMeters / 1000.0
-
-                            val speedInKmh = currentSpeedInMetersPerSecond * 3.6
-                            messageViewText = "Next: ${String.format("%.1f", remainingDistance)} km | Speed: ${String.format("%.1f", speedInKmh)} km/h"
-                        }
-                    }
-                }
-            } catch (e: Exception) {
-                Logging.e(TAG, "Error in route progress listener: ${e.message}", e)
-            }
-        }
-
-        nav.navigableLocationListener = NavigableLocationListener { currentNavigableLocation ->
-            try {
-                val lastMapMatchedLocation = currentNavigableLocation.mapMatchedLocation
-                if (lastMapMatchedLocation == null) {
-                    Logging.w(TAG, "No map-matched location available")
-                    return@NavigableLocationListener
-                }
-
-                val speed = currentNavigableLocation.originalLocation.speedInMetersPerSecond ?: 0.0
-                val accuracy = currentNavigableLocation.originalLocation.speedAccuracyInMetersPerSecond ?: 0.0
-                currentSpeedInMetersPerSecond = speed
-                
-                // Extract location data from map-matched location
-                val lat = lastMapMatchedLocation.coordinates.latitude
-                val lng = lastMapMatchedLocation.coordinates.longitude
-                val bearing = lastMapMatchedLocation.bearingInDegrees
-                
-                // Store location data for use by TripSectionValidator
-                tripSectionValidator.updateLocationData(lat, lng, speed, accuracy, bearing)
-            } catch (e: Exception) {
-                Logging.e(TAG, "Error in navigable location listener: ${e.message}", e)
-            }
-        }
-
-        // Notifies on route deviation events
-        nav.routeDeviationListener = RouteDeviationListener { routeDeviation ->
-            try {
-                handleRouteDeviation(routeDeviation)
-            } catch (e: Exception) {
-                Logging.e(TAG, "Error in route deviation listener: ${e.message}", e)
-            }
-        }
-
-        // Notifies when a waypoint on the route is reached or missed
-        nav.milestoneStatusListener =
-            MilestoneStatusListener { milestone, milestoneStatus ->
-                if (milestone.waypointIndex != null && milestoneStatus == MilestoneStatus.REACHED) {
-                    val waypointOrder = milestone.waypointIndex!!
-                    val waypointCoordinates = milestone.originalCoordinates!!
-                    Logging.d(TAG, "Waypoint reached: milestoneIndex=${milestone.waypointIndex}, waypointOrder=$waypointOrder")
-                    tripSectionValidator.markWaypointAsPassedByMilestone(waypointOrder, waypointCoordinates)
-                }
-            }
-
-        // Notifies when the destination of the route is reached
-        nav.destinationReachedListener = DestinationReachedListener {
-            Logging.d(TAG, "Destination reached!")
-            tripSectionValidator.handleDestinationReached()
-            
-            // Navigation complete - return to listening state
-            lifecycleScope.launch(Dispatchers.Main) {
-                onNavigationComplete()
-            }
-        }
-    }
-
-    private fun handleRouteDeviation(routeDeviation: RouteDeviation) {
-        val route = navigator?.route ?: return
-        
-        val currentMapMatchedLocation = routeDeviation.currentLocation.mapMatchedLocation
-        val currentGeoCoordinates = currentMapMatchedLocation?.coordinates
-            ?: routeDeviation.currentLocation.originalLocation.coordinates
-        
-        val lastGeoCoordinatesOnRoute = if (routeDeviation.lastLocationOnRoute != null) {
-            val lastMapMatched = routeDeviation.lastLocationOnRoute!!.mapMatchedLocation
-            lastMapMatched?.coordinates ?: routeDeviation.lastLocationOnRoute!!.originalLocation.coordinates
-        } else {
-            route.sections[0].departurePlace.originalCoordinates
-        }
-        
-        val distanceInMeters = currentGeoCoordinates.distanceTo(lastGeoCoordinatesOnRoute!!).toInt()
-        deviationCounter++
-        
-        if (isReturningToRoute) {
-            Logging.d(TAG, "Rerouting already in progress")
-            return
-        }
-        
-        if (distanceInMeters > DEVIATION_THRESHOLD_METERS && deviationCounter >= MIN_DEVIATION_EVENTS) {
-            Logging.d(TAG, "=== ROUTE DEVIATION DETECTED ===")
-            Logging.d(TAG, "Distance: ${distanceInMeters}m - Starting reroute")
-            isReturningToRoute = true
-            
-            val newStartingPoint = Waypoint(currentGeoCoordinates)
-            currentMapMatchedLocation?.bearingInDegrees?.let { 
-                newStartingPoint.headingInDegrees = it 
-            }
-            
-            val routingEngine = onlineRoutingEngine ?: offlineRoutingEngine!!
-            routingEngine.returnToRoute(
-                route,
-                newStartingPoint,
-                routeDeviation.lastTraveledSectionIndex,
-                routeDeviation.traveledDistanceOnLastSectionInMeters
-            ) { routingError, routes ->
-                if (routingError == null && routes != null && routes.isNotEmpty()) {
-                    val newRoute = routes[0]
-                    currentRoute = newRoute
-                    navigator?.route = newRoute
-                    Logging.d(TAG, "Rerouting successful")
-                    runOnUiThread {
-                        messageViewText = "Route recalculated"
-                    }
-                } else {
-                    Logging.e(TAG, "Rerouting failed: ${routingError?.name}")
-                }
-                isReturningToRoute = false
-                deviationCounter = 0
-            }
-        }
-    }
-
-    private fun setupLocationSource(locationListener: LocationListener, route: Route, isSimulator: Boolean) {
-        if (!isSimulator) {
-            locationEngine?.let { engine ->
-                Logging.d(TAG, "Setting up location source for real-time navigation")
-                try {
-                    engine.addLocationListener(locationListener)
-                    Logging.d(TAG, "Added navigation location listener to existing location engine")
-                } catch (e: Exception) {
-                    Logging.e(TAG, "Failed to add location listener: ${e.message}")
-                }
-            }
-        } else {
-            try {
-                locationSimulator = LocationSimulator(route, LocationSimulatorOptions())
-            } catch (e: InstantiationErrorException) {
-                Logging.e(TAG, "Initialization of LocationSimulator failed: ${e.error.name}")
-                throw RuntimeException("Initialization of LocationSimulator failed: " + e.error.name)
-            }
-
-            locationSimulator?.let { simulator ->
-                simulator.listener = locationListener
-                simulator.start()
-                Logging.d(TAG, "Location simulation started")
-            }
-        }
-    }
+    // setupHeadlessListeners, handleRouteDeviation, and setupLocationSource removed
+    // NavigationHandler and NavigationExample now handle all listener setup, route deviation, and location source
 
     // [CONTINUE WITH ALL NFC, BOOKING, VALIDATION, AND UI METHODS FROM HeadlessNavigActivity]
     // Due to length limits, I'm including the key parts here. The rest follows the same pattern.
@@ -1941,6 +2285,24 @@ class AutoModeHeadlessActivity : ComponentActivity() {
                     val freshTrip = databaseManager.getTripById(currentTrip.id)
                     withContext(Dispatchers.Main) {
                         if (freshTrip != null) {
+                            // If trip status changed to IN_PROGRESS, clear any confirmation state
+                            val wasScheduled = currentTrip.status.equals("SCHEDULED", ignoreCase = true)
+                            val nowInProgress = freshTrip.status.equals("IN_PROGRESS", ignoreCase = true)
+                            
+                            if (wasScheduled && nowInProgress) {
+                                Logging.d(TAG, "Trip status changed from SCHEDULED to IN_PROGRESS - clearing confirmation state")
+                                isAwaitingConfirmation.set(false)
+                                showConfirmationDialog = false
+                                confirmationTimeoutJob?.cancel()
+                                foregroundService?.cancelConfirmationNotification()
+                                
+                                // Start navigation if not already navigating
+                                if (!isNavigating.get()) {
+                                    Logging.d(TAG, "Trip became IN_PROGRESS - starting navigation")
+                                    startNavigationInternal(freshTrip, allowResume = true)
+                                }
+                            }
+                            
                             tripResponse = freshTrip
                             updatePassengerCounts()
                         }
@@ -2183,6 +2545,76 @@ class AutoModeHeadlessActivity : ComponentActivity() {
             Logging.e(TAG, "Failed to register confirmation receiver: ${e.message}", e)
         }
     }
+    
+    private fun registerSettingsChangeReceiver() {
+        try {
+            settingsChangeReceiver = object : BroadcastReceiver() {
+                override fun onReceive(context: Context?, intent: Intent?) {
+                    if (context == null || intent == null) return
+                    
+                    when (intent.action) {
+                        ACTION_SETTINGS_LOGOUT -> {
+                            Logging.d(TAG, "Received logout broadcast during navigation - finishing activity")
+                            // Logout is handled by VehicleSettingsManager, just finish activity
+                            // Stop navigation gracefully first
+                            stopNavigationAndCleanup()
+                            finish()
+                        }
+                        ACTION_SETTINGS_DEACTIVATE -> {
+                            val isDeactivated = intent.getBooleanExtra("is_deactivated", false)
+                            Logging.d(TAG, "Received deactivate broadcast - isDeactivated: $isDeactivated")
+                            // Note: During navigation, deactivate doesn't stop navigation, but we log it
+                        }
+                        ACTION_SETTINGS_CHANGED -> {
+                            Logging.d(TAG, "Received settings changed broadcast during navigation - refreshing settings")
+                            // Refresh settings from database without re-applying (to prevent loop)
+                            lifecycleScope.launch {
+                                val vehicleId = vehicleSecurityManager.getVehicleId()
+                                val savedSettings = settingsManager.getSettings(vehicleId.toInt())
+                                savedSettings?.let {
+                                    // Only update if different from current
+                                    if (currentSettings == null || 
+                                        currentSettings?.logout != it.logout ||
+                                        currentSettings?.devmode != it.devmode ||
+                                        currentSettings?.deactivate != it.deactivate ||
+                                        currentSettings?.appmode != it.appmode ||
+                                        currentSettings?.simulate != it.simulate) {
+                                        currentSettings = it
+                                        Logging.d(TAG, "Settings updated from broadcast (no re-apply to prevent loop)")
+                                        
+                                        // Check logout/deactivate without calling applySettings to prevent loop
+                                        if (it.logout) {
+                                            Logging.d(TAG, "Logout detected from broadcast - finishing activity")
+                                            stopNavigationAndCleanup()
+                                            finish()
+                                        }
+                                    } else {
+                                        Logging.d(TAG, "Settings unchanged, skipping update")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            val filter = IntentFilter().apply {
+                addAction(ACTION_SETTINGS_LOGOUT)
+                addAction(ACTION_SETTINGS_DEACTIVATE)
+                addAction(ACTION_SETTINGS_CHANGED)
+            }
+            
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(settingsChangeReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                @Suppress("UnspecifiedRegisterReceiverFlag")
+                registerReceiver(settingsChangeReceiver, filter)
+            }
+            Logging.d(TAG, "Settings change receiver registered")
+        } catch (e: Exception) {
+            Logging.e(TAG, "Failed to register settings change receiver: ${e.message}", e)
+        }
+    }
 
     private fun showMqttBookingNotification(
         passengerName: String,
@@ -2260,46 +2692,78 @@ class AutoModeHeadlessActivity : ComponentActivity() {
         
         Logging.d(TAG, "=== ON RESUME ===")
         Logging.d(TAG, "IsNavigating: ${isNavigating.get()}")
+        Logging.d(TAG, "CurrentTrip: ${currentTrip?.id}")
         Logging.d(TAG, "IsAwaitingConfirmation: ${isAwaitingConfirmation.get()}")
-        Logging.d(TAG, "ShowConfirmationDialog: $showConfirmationDialog")
         
-        // Reconcile state with actual navigation status
-        Logging.d(TAG, "State reconciliation - isNavigating: ${isNavigating.get()}, countdownActive: ${countdownText.isNotEmpty()}, awaitingConfirmation: ${isAwaitingConfirmation.get()}")
-        
-        when {
-            isNavigating.get() -> {
-                // Navigation active - ensure UI reflects this
-                if (countdownText.isNotEmpty()) {
-                    Logging.d(TAG, "Clearing countdown text during active navigation")
-                    countdownText = ""
+        // Re-verify state from database to catch any missed updates
+        lifecycleScope.launch(Dispatchers.IO) {
+            val vehicleId = vehicleSecurityManager.getVehicleId()
+            val dbTrip = databaseManager.getActiveTripByVehicle(vehicleId.toInt())
+            
+            withContext(Dispatchers.Main) {
+                // If database shows IN_PROGRESS but we're not navigating, restart navigation
+                if (dbTrip != null && dbTrip.status.equals("IN_PROGRESS", ignoreCase = true) && !isNavigating.get()) {
+                    Logging.w(TAG, "State mismatch detected: DB shows IN_PROGRESS but not navigating - fixing")
+                    currentTrip = dbTrip
+                    tripResponse = dbTrip
+                    isNavigating.set(true)
+                    
+                    val origin = dbTrip.route.origin.custom_name ?: dbTrip.route.origin.google_place_name
+                    messageViewText = "Navigating: $origin"
+                    foregroundService?.updateNotification("Navigating: $origin")
+                    
+                    // Re-initialize navigation if needed
+                    // Guard: Check if activity is destroyed before accessing Navigator
+                    if (!isDestroyed && navigationExample?.getHeadlessNavigator()?.route == null) {
+                        startNavigation()
+                    }
                 }
-                if (isAwaitingConfirmation.get() || showConfirmationDialog) {
-                    Logging.d(TAG, "Clearing confirmation UI during active navigation")
+                
+                // Check if trip is IN_PROGRESS - if so, clear any confirmation state
+                if (dbTrip != null && dbTrip.status.equals("IN_PROGRESS", ignoreCase = true)) {
+                    if (isAwaitingConfirmation.get() || showConfirmationDialog) {
+                        Logging.d(TAG, "Trip is IN_PROGRESS - clearing confirmation state on resume")
+                        isAwaitingConfirmation.set(false)
+                        showConfirmationDialog = false
+                        confirmationTimeoutJob?.cancel()
+                        foregroundService?.cancelConfirmationNotification()
+                    }
+                }
+                
+                // If navigating, ensure UI is consistent
+                if (isNavigating.get()) {
+                    countdownText = ""
                     isAwaitingConfirmation.set(false)
                     showConfirmationDialog = false
                     confirmationTimeoutJob?.cancel()
                     foregroundService?.cancelConfirmationNotification()
+                    
+                    if (!messageViewText.contains("Navigat") && !messageViewText.contains("Next:")) {
+                        val origin = currentTrip?.route?.origin?.custom_name 
+                            ?: currentTrip?.route?.origin?.google_place_name 
+                            ?: "destination"
+                        messageViewText = "Navigating: $origin"
+                        foregroundService?.updateNotification("Navigating: $origin")
+                    }
+                } else if (isAwaitingConfirmation.get()) {
+                    // Awaiting confirmation - ensure UI shows dialog
+                    // BUT: Only show if trip is NOT IN_PROGRESS
+                    val tripStatus = dbTrip?.status ?: currentTrip?.status
+                    if (tripStatus != null && !tripStatus.equals("IN_PROGRESS", ignoreCase = true)) {
+                        countdownText = ""
+                        if (!showConfirmationDialog && confirmationTripData != null) {
+                            Logging.d(TAG, "Restoring confirmation dialog display")
+                            showConfirmationDialog = true
+                        }
+                    } else {
+                        // Trip is IN_PROGRESS but awaiting confirmation - clear confirmation state
+                        Logging.d(TAG, "Trip is IN_PROGRESS but awaiting confirmation - clearing confirmation state")
+                        isAwaitingConfirmation.set(false)
+                        showConfirmationDialog = false
+                        confirmationTimeoutJob?.cancel()
+                        foregroundService?.cancelConfirmationNotification()
+                    }
                 }
-                // Ensure message reflects navigation
-                if (!messageViewText.contains("Navigat") && !messageViewText.contains("Next:")) {
-                    val origin = currentTrip?.route?.origin?.custom_name 
-                        ?: currentTrip?.route?.origin?.google_place_name 
-                        ?: "destination"
-                    messageViewText = "Navigating: $origin"
-                    Logging.d(TAG, "Updated message to navigation state")
-                }
-            }
-            isAwaitingConfirmation.get() -> {
-                // Awaiting confirmation - ensure UI shows dialog
-                countdownText = ""
-                if (!showConfirmationDialog && confirmationTripData != null) {
-                    Logging.d(TAG, "Restoring confirmation dialog display")
-                    showConfirmationDialog = true
-                }
-            }
-            countdownText.isNotEmpty() -> {
-                // Countdown active - this is correct state
-                Logging.d(TAG, "Countdown active: $countdownText")
             }
         }
         
@@ -2311,6 +2775,30 @@ class AutoModeHeadlessActivity : ComponentActivity() {
             nfcReaderHelper?.let { helper ->
                 if (helper.isNfcSupported() && helper.isNfcEnabled()) {
                     helper.enableNfcReader(this)
+                }
+            }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        Logging.d(TAG, "=== ON NEW INTENT ===")
+        Logging.d(TAG, "Activity received new intent (SINGLE_TOP behavior)")
+        
+        // Trigger state refresh from database
+        lifecycleScope.launch(Dispatchers.IO) {
+            val vehicleId = vehicleSecurityManager.getVehicleId()
+            val activeTrip = databaseManager.getActiveTripByVehicle(vehicleId.toInt())
+            
+            withContext(Dispatchers.Main) {
+                if (activeTrip != null) {
+                    Logging.d(TAG, "Refreshing state for active trip: ${activeTrip.id}")
+                    
+                    // Only update if trip changed or state is inconsistent
+                    if (currentTrip?.id != activeTrip.id || 
+                        (activeTrip.status.equals("IN_PROGRESS", ignoreCase = true) && !isNavigating.get())) {
+                        handleTripReceived(activeTrip)
+                    }
                 }
             }
         }
@@ -2353,34 +2841,43 @@ class AutoModeHeadlessActivity : ComponentActivity() {
         networkMonitor?.stopMonitoring()
         networkMonitor = null
         
-        // Stop navigation
-        navigator?.route = null
-        navigator?.routeProgressListener = null
-        navigator?.navigableLocationListener = null
-        navigator?.routeDeviationListener = null
-        navigator?.milestoneStatusListener = null
-        navigator?.destinationReachedListener = null
+        // Stop navigation using NavigationExample (handles all cleanup)
+        navigationExample?.let { navExample ->
+            // Set shutdown flag to prevent starting services during cleanup
+            navExample.setShuttingDown(true)
+            
+            // Clear Navigator listeners FIRST to prevent accessing disposed Navigator
+            // This must be done before stopping navigation to prevent listener callbacks
+            try {
+                val navigator = navExample.getHeadlessNavigator()
+                navigator.routeProgressListener = null
+                navigator.navigableLocationListener = null
+                navigator.routeDeviationListener = null
+                navigator.milestoneStatusListener = null
+                navigator.destinationReachedListener = null
+                Logging.d(TAG, "Navigator listeners cleared in onDestroy")
+            } catch (e: Exception) {
+                Logging.e(TAG, "Error clearing Navigator listeners: ${e.message}", e)
+            }
+            
+            // Stop headless navigation (stops route, location, listeners)
+            navExample.stopHeadlessNavigation()
+            
+            // Stop location services
+            navExample.stopLocating()
+            
+            // Stop rendering (if any)
+            navExample.stopRendering()
+            
+            Logging.d(TAG, "NavigationExample stopped and cleaned up")
+        }
+        
+        // Null out navigationExample to prevent any access after cleanup
+        navigationExample = null
         
         // Reset trip section validator
         if (::tripSectionValidator.isInitialized) {
             tripSectionValidator.reset()
-        }
-        
-        // Stop location engine
-        locationEngine?.let { engine ->
-            try {
-                engine.stop()
-                Logging.d(TAG, "Location engine stopped")
-            } catch (e: Exception) {
-                Logging.e(TAG, "Error stopping location engine: ${e.message}")
-            }
-        }
-        
-        // Stop location simulator
-        locationSimulator?.let { simulator ->
-            simulator.stop()
-            simulator.listener = null
-            Logging.d(TAG, "Location simulator stopped")
         }
         
         // Clean up NFC reader
@@ -2406,6 +2903,14 @@ class AutoModeHeadlessActivity : ComponentActivity() {
             Logging.w(TAG, "Error unregistering confirmation receiver: ${e.message}")
         }
         
+        // Unregister settings change receiver
+        try {
+            settingsChangeReceiver?.let { unregisterReceiver(it) }
+            settingsChangeReceiver = null
+        } catch (e: Exception) {
+            Logging.w(TAG, "Error unregistering settings change receiver: ${e.message}")
+        }
+        
         // Unregister MQTT callbacks
         try {
             mqttService?.setBookingBundleCallback(null)
@@ -2419,12 +2924,25 @@ class AutoModeHeadlessActivity : ComponentActivity() {
         
         handler.removeCallbacksAndMessages(null)
         
+        // Clean up map downloader
+        mapDownloaderManager?.cleanup()
+        
         // Unbind and stop foreground service
         try {
+            // Unbind from service first
             unbindService(serviceConnection)
-            stopService(Intent(this, AutoModeHeadlessForegroundService::class.java))
+            
+            // Stop the service explicitly
+            val serviceIntent = Intent(this, AutoModeHeadlessForegroundService::class.java)
+            stopService(serviceIntent)
+            
+            // Null out the reference
+            foregroundService = null
+            
+            Logging.d(TAG, "AutoModeHeadlessForegroundService stopped and unbound")
         } catch (e: Exception) {
             Logging.e(TAG, "Error stopping foreground service: ${e.message}", e)
+            foregroundService = null
         }
         
         // Dispose HERE SDK
@@ -2432,9 +2950,16 @@ class AutoModeHeadlessActivity : ComponentActivity() {
     }
 
     private fun disposeHERESDK() {
-        SDKNativeEngine.getSharedInstance()?.dispose()
-        SDKNativeEngine.setSharedInstance(null)
-        Logging.d(TAG, "HERE SDK disposed")
+        // Free HERE SDK resources before the application shuts down.
+        // Usually, this should be called only on application termination.
+        // Afterwards, the HERE SDK is no longer usable unless it is initialized again.
+        val sdkNativeEngine = SDKNativeEngine.getSharedInstance()
+        if (sdkNativeEngine != null) {
+            sdkNativeEngine.dispose()
+            // For safety reasons, we explicitly set the shared instance to null to avoid situations,
+            // where a disposed instance is accidentally reused.
+            SDKNativeEngine.setSharedInstance(null)
+        }
     }
 }
 
@@ -2484,6 +3009,12 @@ fun AutoModeHeadlessScreen(
     isConnected: Boolean,
     connectionType: String,
     isMetered: Boolean,
+    showMapDownloadDialog: Boolean,
+    mapDownloadProgress: Int,
+    mapDownloadTotalSize: Int,
+    mapDownloadMessage: String,
+    mapDownloadStatus: String,
+    onMapDownloadCancel: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Box(
@@ -2660,5 +3191,93 @@ fun AutoModeHeadlessScreen(
                 onCancel = onConfirmCancel
             )
         }
+        
+        // Map download dialog overlay
+        if (showMapDownloadDialog) {
+            MapDownloadDialog(
+                progress = mapDownloadProgress,
+                totalSize = mapDownloadTotalSize,
+                message = mapDownloadMessage,
+                status = mapDownloadStatus,
+                onCancel = onMapDownloadCancel
+            )
+        }
     }
+}
+
+@Composable
+fun MapDownloadDialog(
+    progress: Int,
+    totalSize: Int,
+    message: String,
+    status: String,
+    onCancel: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = { /* Dialog cannot be dismissed during download */ },
+        title = {
+            Text(
+                text = "Downloading Map Data",
+                style = MaterialTheme.typography.headlineSmall
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                // Status message
+                Text(
+                    text = status.ifEmpty { "Preparing download..." },
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                
+                // Progress bar
+                LinearProgressIndicator(
+                    progress = { progress / 100f },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = ProgressIndicatorDefaults.linearColor,
+                    trackColor = ProgressIndicatorDefaults.linearTrackColor,
+                    strokeCap = ProgressIndicatorDefaults.LinearStrokeCap,
+                )
+                
+                // Progress text
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "$progress%",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    if (totalSize > 0) {
+                        Text(
+                            text = "${totalSize}MB",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+                
+                // Detailed message
+                if (message.isNotEmpty()) {
+                    Text(
+                        text = message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                
+                Text(
+                    text = "This may take several minutes depending on your internet connection. The app will work normally once complete.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onCancel) {
+                Text("Cancel")
+            }
+        }
+    )
 }

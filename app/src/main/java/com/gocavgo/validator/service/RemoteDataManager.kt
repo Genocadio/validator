@@ -20,6 +20,7 @@ class RemoteDataManager {
     companion object {
         private const val TAG = "RemoteDataManager"
         private const val TRIPS_BASE_URL = "https://api.gocavgo.com/api/navig/trips"
+        private const val SETTINGS_BASE_URL = "https://api.gocavgo.com/api/main/vehicles"
 
         @Volatile
         private var INSTANCE: RemoteDataManager? = null
@@ -134,6 +135,56 @@ class RemoteDataManager {
         }
     }
 
+    /**
+     * Get vehicle settings for a specific vehicle
+     * @param vehicleId ID of the vehicle to get settings for
+     * @return RemoteResult containing VehicleSettings object
+     */
+    suspend fun getVehicleSettings(vehicleId: Int): RemoteResult<VehicleSettings> {
+        return withContext(Dispatchers.IO) {
+            try {
+                Log.d(TAG, "=== FETCHING SETTINGS FOR VEHICLE $vehicleId FROM REMOTE ===")
+
+                val url = "$SETTINGS_BASE_URL/$vehicleId/settings".toHttpUrl()
+                Log.d(TAG, "Request URL: $url")
+
+                val request = Request.Builder()
+                    .url(url)
+                    .get()
+                    .addHeader("Accept", "application/json")
+                    .addHeader("Content-Type", "application/json")
+                    .build()
+
+                val response = httpClient.newCall(request).execute()
+
+                response.use { resp ->
+                    if (resp.isSuccessful) {
+                        val responseBody = resp.body?.string() ?: ""
+                        Log.d(TAG, "Settings response: $responseBody")
+
+                        val settings = json.decodeFromString<VehicleSettings>(responseBody)
+                        Log.d(TAG, "Retrieved settings for vehicle $vehicleId")
+                        Log.d(TAG, "===============================")
+                        RemoteResult.Success(settings)
+                    } else {
+                        val errorBody = resp.body?.string() ?: "Unknown error"
+                        Log.e(
+                            TAG,
+                            "Failed to fetch settings. Response code: ${resp.code}, Error: $errorBody"
+                        )
+                        RemoteResult.Error("Failed to fetch settings: HTTP ${resp.code} - $errorBody")
+                    }
+                }
+
+            } catch (e: IOException) {
+                Log.e(TAG, "Network error while fetching settings: ${e.message}", e)
+                RemoteResult.Error("Network error: ${e.message}")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to fetch settings: ${e.message}", e)
+                RemoteResult.Error("Failed to fetch settings: ${e.message}")
+            }
+        }
+    }
 
     data class PaginatedResult<T>(
         val data: T,

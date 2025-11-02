@@ -54,6 +54,8 @@ class NavigationExample(
 ) {
     private var visualNavigator: VisualNavigator
     private var navigator: Navigator
+    private var isRenderingStarted: Boolean = false
+    private val isHeadlessMode: Boolean = mapView == null
     // A class to receive real location events.
     private val herePositioningProvider: HEREPositioningProvider = HEREPositioningProvider()
     // A class to receive simulated location events.
@@ -87,7 +89,11 @@ class NavigationExample(
         visualNavigator.guidanceFrameRate = 60
 
         // This enables a navigation view including a rendered navigation arrow.
-        visualNavigator.startRendering(mapView!!)
+        // Only render if mapView is available (headless mode doesn't need rendering)
+        if (mapView != null) {
+            visualNavigator.startRendering(mapView)
+            isRenderingStarted = true
+        }
 
         createDynamicRoutingEngine()
         initializeOfflineRoutingEngine()
@@ -95,7 +101,11 @@ class NavigationExample(
 
         // A class to handle various kinds of guidance events.
         navigationHandler = NavigationHandler(context, messageView, tripSectionValidator)
-        dynamicRoutingEngine?.let { navigationHandler.setupListeners(visualNavigator, it) }
+        // Only setup visual navigator listeners if mapView is available (non-headless mode)
+        // For headless mode, listeners will be setup separately via setupHeadlessListeners
+        if (mapView != null) {
+            dynamicRoutingEngine?.let { navigationHandler.setupListeners(visualNavigator, it) }
+        }
 
         messageView.updateText("Initialization completed.")
     }
@@ -356,7 +366,12 @@ class NavigationExample(
     }
 
     fun stopHeadlessNavigation() {
-        // Stop headless navigation
+        // Clear all listeners FIRST to prevent accessing disposed Navigator
+        // This must be done before setting route to null, as setting route to null
+        // might trigger listener callbacks
+        clearNavigatorListeners()
+        
+        // Stop headless navigation (set route to null)
         navigator.route = null
         
         // Only enable device positioning if we're not shutting down
@@ -374,6 +389,22 @@ class NavigationExample(
         // Cleanup network monitoring
         cleanupNetworkMonitoring()
     }
+    
+    /**
+     * Clear all Navigator listeners to prevent accessing disposed Navigator
+     */
+    fun clearNavigatorListeners() {
+        try {
+            navigator.routeProgressListener = null
+            navigator.navigableLocationListener = null
+            navigator.routeDeviationListener = null
+            navigator.milestoneStatusListener = null
+            navigator.destinationReachedListener = null
+            Log.d(TAG, "Navigator listeners cleared")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error clearing Navigator listeners: ${e.message}", e)
+        }
+    }
 
     fun getHeadlessNavigator(): Navigator = navigator
 
@@ -388,7 +419,12 @@ class NavigationExample(
     // Provides simulated location updates based on the given route.
     private fun enableRoutePlayback(route: Route?) {
         herePositioningProvider.stopLocating()
-        herePositioningSimulator.startLocating(visualNavigator, route!!)
+        // Use navigator for headless mode, visualNavigator for visual mode
+        if (isHeadlessMode) {
+            herePositioningSimulator.startLocating(navigator, route!!)
+        } else {
+            herePositioningSimulator.startLocating(visualNavigator, route!!)
+        }
     }
 
     // Provides location updates based on the device's GPS sensor.
@@ -404,7 +440,12 @@ class NavigationExample(
         herePositioningSimulator.stopLocating()
         // Don't stop and restart if already running - this can cause location loss
         if (!herePositioningProvider.isLocating()) {
-            herePositioningProvider.startLocating(visualNavigator, LocationAccuracy.NAVIGATION)
+            // Use navigator for headless mode, visualNavigator for visual mode
+            if (isHeadlessMode) {
+                herePositioningProvider.startLocating(navigator, LocationAccuracy.NAVIGATION)
+            } else {
+                herePositioningProvider.startLocating(visualNavigator, LocationAccuracy.NAVIGATION)
+            }
             Log.d(TAG, "Device positioning started")
         } else {
             Log.d(TAG, "Device positioning already active")
@@ -439,7 +480,11 @@ class NavigationExample(
     fun stopRendering() {
         // It is recommended to stop rendering before leaving an activity.
         // This also removes the current location marker.
-        visualNavigator.stopRendering()
+        // Only stop if rendering was started (i.e., not in headless mode)
+        if (isRenderingStarted) {
+            visualNavigator.stopRendering()
+            isRenderingStarted = false
+        }
     }
     
     /**
@@ -482,6 +527,11 @@ class NavigationExample(
      * Get navigation handler for external access
      */
     fun getNavigationHandler(): NavigationHandler = navigationHandler
+    
+    /**
+     * Get dynamic routing engine for external access
+     */
+    fun getDynamicRoutingEngine(): DynamicRoutingEngine? = dynamicRoutingEngine
 
     companion object {
         private val TAG: String = NavigationExample::class.java.name
