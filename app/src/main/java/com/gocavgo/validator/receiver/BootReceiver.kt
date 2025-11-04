@@ -3,7 +3,6 @@ package com.gocavgo.validator.receiver
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import com.gocavgo.validator.navigator.AutoModeHeadlessActivity
 import com.gocavgo.validator.security.VehicleSecurityManager
 import com.gocavgo.validator.security.VehicleSettingsManager
 import com.gocavgo.validator.service.SettingsTimeoutWorker
@@ -14,8 +13,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
 /**
- * Receives BOOT_COMPLETED broadcast and starts AutoModeHeadlessActivity
- * Activity will listen for MQTT trips and handle autonomous navigation
+ * Receives BOOT_COMPLETED broadcast and starts LauncherActivity
+ * LauncherActivity handles permission checks and routes to appropriate activity
  */
 class BootReceiver : BroadcastReceiver() {
     
@@ -27,13 +26,13 @@ class BootReceiver : BroadcastReceiver() {
         if (intent.action == Intent.ACTION_BOOT_COMPLETED || 
             intent.action == Intent.ACTION_LOCKED_BOOT_COMPLETED) {
             Logging.d(TAG, "=== BOOT COMPLETED ===")
-            Logging.d(TAG, "Starting AutoModeHeadlessActivity")
+            Logging.d(TAG, "Starting LauncherActivity")
             
             try {
                 // Check if vehicle is registered before starting activity
                 val vehicleSecurityManager = VehicleSecurityManager(context)
                 if (!vehicleSecurityManager.isVehicleRegistered()) {
-                    Logging.w(TAG, "Vehicle not registered, skipping auto mode start")
+                    Logging.w(TAG, "Vehicle not registered, skipping app start")
                     return
                 }
                 
@@ -68,22 +67,22 @@ class BootReceiver : BroadcastReceiver() {
                 // Schedule settings timeout worker (checks for 4-day timeout)
                 SettingsTimeoutWorker.schedule(context)
                 
-                // Start AutoModeHeadlessActivity
-                // It will listen for MQTT trips and handle navigation automatically
-                val activityIntent = Intent(context, AutoModeHeadlessActivity::class.java).apply {
+                // Start LauncherActivity
+                // It will handle permission checks and routing to appropriate activity
+                val activityIntent = Intent(context, com.gocavgo.validator.LauncherActivity::class.java).apply {
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK
                 }
                 
                 context.startActivity(activityIntent)
                 
-                Logging.d(TAG, "AutoModeHeadlessActivity started after boot")
+                Logging.d(TAG, "LauncherActivity started after boot")
                 
             } catch (e: IllegalStateException) {
                 // SharedPreferences not available until device is unlocked
                 // UserUnlockedReceiver will start the activity when device is unlocked
-                Logging.w(TAG, "Device not unlocked yet, SharedPreferences unavailable. Will start auto mode after unlock: ${e.message}")
+                Logging.w(TAG, "Device not unlocked yet, SharedPreferences unavailable. Will start app after unlock: ${e.message}")
             } catch (e: Exception) {
-                Logging.e(TAG, "Error starting auto mode after boot: ${e.message}", e)
+                Logging.e(TAG, "Error starting app after boot: ${e.message}", e)
             }
         }
     }

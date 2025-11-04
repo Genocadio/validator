@@ -177,6 +177,9 @@ class DatabaseManager(context: Context) {
         bearing: Double?
     ) = tripRepository.updateVehicleCurrentLocation(vehicleId, latitude, longitude, speed, accuracy, bearing)
     
+    // Get vehicle location from VehicleLocationEntity
+    suspend fun getVehicleLocation(vehicleId: Int) = tripRepository.getVehicleLocation(vehicleId)
+    
     // Trip cleanup operations
     suspend fun cleanupUnavailableTrips(vehicleId: Int, availableTripIds: List<Int>) =
         tripRepository.cleanupUnavailableTrips(vehicleId, availableTripIds)

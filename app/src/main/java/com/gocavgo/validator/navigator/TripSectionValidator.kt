@@ -72,8 +72,11 @@ class TripSectionValidator(private val context: Context) {
     private var tripSessionLogger: TripSessionLogger? = null
     private var isFirstProgressUpdate = true
     
-    // Callback for waypoint passed notifications
-    private var waypointPassedCallback: ((Int) -> Unit)? = null
+    // Flag to prevent database writes during initialization/resume
+    private var isInitializingAfterResume = true
+    
+    // Callback for waypoint passed notifications (for UI updates)
+    private var waypointPassedCallback: (() -> Unit)? = null
     
     // Integrated RouteProgressTracker functionality
     private val databaseManager = DatabaseManager.getInstance(context)
@@ -129,6 +132,13 @@ class TripSectionValidator(private val context: Context) {
         latestSpeed = speed
         latestAccuracy = accuracy
         latestBearing = bearing
+    }
+    
+    /**
+     * Set callback for UI updates when waypoint is passed
+     */
+    fun setWaypointPassedCallback(callback: (() -> Unit)?) {
+        this.waypointPassedCallback = callback
     }
 
     /**
@@ -210,8 +220,15 @@ class TripSectionValidator(private val context: Context) {
             // Initialize waypoint data for MQTT tracking
             initializeWaypointData(route.sections)
             
-            // Mark origin as passed at trip start (verification time)
-            markOriginAsPassed()
+            // Rebuild passedWaypoints set from database state to fix index mismatch
+            rebuildPassedWaypointsFromDatabase()
+            
+            // Mark origin as passed at trip start (verification time) if not already marked
+            if (!passedWaypoints.contains(0)) {
+                markOriginAsPassed()
+            } else {
+                Log.d(TAG, "Origin already marked as passed in database, skipping markOriginAsPassed()")
+            }
             
             // Log initial section details
             logSectionDetails(route.sections)
@@ -247,6 +264,13 @@ class TripSectionValidator(private val context: Context) {
             val detailedStatus = getComprehensiveStatusInfo()
             tripSessionLogger?.logFirstProgressUpdate(detailedStatus)
             isFirstProgressUpdate = false
+            
+            // Set initialization flag to false after first real progress update
+            // This prevents overwriting correct database state with incorrect in-memory indices during resume
+            if (isInitializingAfterResume) {
+                Log.d(TAG, "First real progress update received - enabling database writes")
+                isInitializingAfterResume = false
+            }
         }
         
         // Store current section progress for UI access
@@ -257,7 +281,12 @@ class TripSectionValidator(private val context: Context) {
         
         // CRITICAL: ALWAYS write to database first, then trigger MQTT
         // This ensures database is the single source of truth
-        writeProgressToDatabase(sectionProgressList)
+        // Skip database writes during initialization to prevent index mismatch issues
+        if (!isInitializingAfterResume) {
+            writeProgressToDatabase(sectionProgressList)
+        } else {
+            Log.d(TAG, "Skipping database write during initialization - preserving database state")
+        }
         
         // Send periodic progress update via MQTT (reads from database)
         publishTripProgressUpdate()
@@ -347,6 +376,53 @@ class TripSectionValidator(private val context: Context) {
         }
     }
 
+    /**
+     * Rebuilds passedWaypoints set from database state to fix index mismatch after resume
+     */
+    private fun rebuildPassedWaypointsFromDatabase() {
+        tripResponse?.let { trip ->
+            Log.d(TAG, "=== REBUILDING PASSED WAYPOINTS FROM DATABASE ===")
+            passedWaypoints.clear()
+            passedWaypointData.clear()
+            
+            // Check which waypoints are marked as passed in the database
+            val sortedWaypoints = trip.waypoints.sortedBy { it.order }
+            val unpassedWaypoints = sortedWaypoints.filter { !it.is_passed }
+            
+            Log.d(TAG, "Total waypoints in trip: ${sortedWaypoints.size}")
+            Log.d(TAG, "Passed waypoints in DB: ${sortedWaypoints.count { it.is_passed }}")
+            Log.d(TAG, "Unpassed waypoints in DB: ${unpassedWaypoints.size}")
+            
+            // Map database waypoint state to waypointNames indices
+            // waypointNames = ["Origin", "Unpassed Waypoint 1", "Unpassed Waypoint 2", ..., "Destination"]
+            
+            // Index 0 is always origin - check if trip origin is conceptually "passed" (trip started)
+            if (trip.status.equals("IN_PROGRESS", ignoreCase = true) || sortedWaypoints.any { it.is_passed }) {
+                // Trip has started, so origin is passed
+                passedWaypoints.add(0)
+                Log.d(TAG, "Added origin (index 0) to passedWaypoints based on trip status")
+                
+                // Add origin to passedWaypointData
+                val originName = waypointNames.getOrNull(0) ?: "Origin"
+                val passedInfo = PassedWaypointInfo(
+                    waypointIndex = 0,
+                    waypointName = originName,
+                    passedTimestamp = System.currentTimeMillis(),
+                    passedDistance = 0.0,
+                    sectionIndex = -1
+                )
+                passedWaypointData.add(passedInfo)
+            }
+            
+            // Note: waypointNames excludes passed waypoints, so we don't need to mark them
+            // The passed waypoints are already filtered out from waypointNames by buildWaypointNamesList()
+            // So passedWaypoints should only contain index 0 (origin) if the trip has started
+            
+            Log.d(TAG, "Rebuilt passedWaypoints set: $passedWaypoints")
+            Log.d(TAG, "================================================")
+        }
+    }
+    
     /**
      * Marks the starting location as passed at trip start time
      */
@@ -637,9 +713,6 @@ class TripSectionValidator(private val context: Context) {
         val detailedStatus = getComprehensiveStatusInfo()
         tripSessionLogger?.logWaypointMark(waypointName, waypointOrder, detailedStatus)
         
-        // Notify callback
-        notifyWaypointPassed(waypointOrder)
-        
         // Handle MQTT
         handleWaypointReached(waypointOrder, wayCordinates)
         publishTripProgressUpdate()
@@ -808,19 +881,6 @@ class TripSectionValidator(private val context: Context) {
         return distance <= thresholdMeters
     }
     
-    /**
-     * Set callback for waypoint passed notifications
-     */
-    fun setWaypointPassedCallback(callback: (Int) -> Unit) {
-        waypointPassedCallback = callback
-    }
-    
-    /**
-     * Notify that a waypoint has been passed
-     */
-    private fun notifyWaypointPassed(waypointOrder: Int) {
-        waypointPassedCallback?.invoke(waypointOrder)
-    }
     
     /**
      * Resets the validator state
@@ -841,6 +901,7 @@ class TripSectionValidator(private val context: Context) {
         isDeviceLocationMode = false
         deviceLocationOffset = 0
         isFirstProgressUpdate = true
+        isInitializingAfterResume = true
         
         // Reset MQTT-related state
         isInitialized = false
@@ -1207,6 +1268,33 @@ class TripSectionValidator(private val context: Context) {
         }
     }
     
+    /**
+     * Merges vehicle location from VehicleLocationEntity into TripResponse if vehicle location is null
+     */
+    private suspend fun mergeVehicleLocationIfNeeded(trip: TripResponse): TripResponse {
+        // If vehicle location is already set, return as-is
+        if (trip.vehicle.current_latitude != null && trip.vehicle.current_longitude != null) {
+            return trip
+        }
+        
+        // Try to get location from VehicleLocationEntity
+        val vehicleLocation = databaseManager.getVehicleLocation(trip.vehicle_id)
+        if (vehicleLocation != null) {
+            Logging.d(TAG, "Merging vehicle location from VehicleLocationEntity: ${vehicleLocation.latitude}, ${vehicleLocation.longitude}, speed=${vehicleLocation.speed}")
+            return trip.copy(
+                vehicle = trip.vehicle.copy(
+                    current_latitude = vehicleLocation.latitude,
+                    current_longitude = vehicleLocation.longitude,
+                    current_speed = vehicleLocation.speed,
+                    last_location_update = vehicleLocation.timestamp
+                )
+            )
+        }
+        
+        Logging.d(TAG, "No vehicle location available in VehicleLocationEntity for vehicle ${trip.vehicle_id}")
+        return trip
+    }
+    
     private fun publishFinalTripProgressUpdate() {
         coroutineScope.launch {
             try {
@@ -1217,17 +1305,27 @@ class TripSectionValidator(private val context: Context) {
                     Logging.d(TAG, "Trip status: ${trip.status}")
                     Logging.d(TAG, "Completion timestamp: $completionTimestamp")
                     
-                    // Mark trip as completed with timestamp in database
+                    // Mark trip as completed with timestamp and status in database
                     databaseManager.updateTripCompletionTimestamp(trip.id, completionTimestamp)
-                    Logging.d(TAG, "Marked trip as completed in database with timestamp: $completionTimestamp")
+                    databaseManager.updateTripStatus(trip.id, "COMPLETED")
+                    Logging.d(TAG, "Marked trip as completed in database with timestamp: $completionTimestamp and status: COMPLETED")
                     
-                    // Use dedicated MQTT service for completion event
-                    routeProgressMqttService.sendTripCompletionEvent(trip)?.whenComplete { result, throwable ->
-                        if (throwable != null) {
-                            Logging.e(TAG, "Failed to publish final trip progress update: ${throwable.message}")
-                        } else {
-                            Logging.d(TAG, "Final trip progress update published successfully via dedicated MQTT service")
+                    // Fetch fresh trip data after status update
+                    val freshTrip = databaseManager.getTripById(trip.id)
+                    if (freshTrip != null) {
+                        // Merge vehicle location if needed
+                        val tripWithLocation = mergeVehicleLocationIfNeeded(freshTrip)
+                        
+                        // Use dedicated MQTT service for completion event
+                        routeProgressMqttService.sendTripCompletionEvent(tripWithLocation)?.whenComplete { result, throwable ->
+                            if (throwable != null) {
+                                Logging.e(TAG, "Failed to publish final trip progress update: ${throwable.message}")
+                            } else {
+                                Logging.d(TAG, "Final trip progress update published successfully via dedicated MQTT service")
+                            }
                         }
+                    } else {
+                        Logging.w(TAG, "Failed to fetch fresh trip data after completion update")
                     }
                 }
             } catch (e: Exception) {
@@ -1291,6 +1389,9 @@ class TripSectionValidator(private val context: Context) {
                     }
                     
                     Logging.d(TAG, "=============================================")
+                    
+                    // Notify activity to update UI
+                    waypointPassedCallback?.invoke()
                 }
             } catch (e: Exception) {
                 Logging.e(TAG, "Failed to mark waypoint $waypointId as passed: ${e.message}", e)
@@ -1323,65 +1424,61 @@ class TripSectionValidator(private val context: Context) {
                 // Get current waypoint progress data
                 val waypointProgressData = getCurrentWaypointProgress()
                 
-                // Write all progress to database
-                waypointProgressData.forEach { progressInfo ->
-                    val waypoint = trip.waypoints.find { it.order == progressInfo.waypointIndex }
-                    if (waypoint != null) {
-                        Logging.d(TAG, "Writing waypoint ${waypoint.order} (${waypoint.location.google_place_name}) to database:")
-                        Logging.d(TAG, "  - Is passed: ${progressInfo.isPassed}")
-                        Logging.d(TAG, "  - Is next: ${progressInfo.isNext}")
-                        Logging.d(TAG, "  - Remaining time: ${progressInfo.remainingTimeInSeconds?.let { formatDuration(it) } ?: "null"}")
-                        Logging.d(TAG, "  - Remaining distance: ${progressInfo.remainingDistanceInMeters?.let { String.format("%.1f", it) } ?: "null"}m")
-                        
-                        // Write to database
-                        coroutineScope.launch {
-                            try {
-                                // Update waypoint status (is_passed)
-                                if (waypoint.is_passed != progressInfo.isPassed) {
-                                    databaseManager.updateWaypointStatus(trip.id, waypoint.id, progressInfo.isPassed)
-                                    Logging.d(TAG, "  - ✅ Updated is_passed status: ${progressInfo.isPassed}")
+                // Determine the single current next waypoint (first unpassed)
+                val nextUnpassed = try { trip.waypoints.filter { !it.is_passed }.minByOrNull { it.order } } catch (e: Exception) { null }
+
+                // Resolve progress row for the next waypoint (display-only list)
+                val nextProgress = waypointProgressData.find { it.isNext }
+
+                // Update ONLY the current next waypoint; skip origin/destination entries entirely
+                if (nextUnpassed != null && nextProgress != null) {
+                    Logging.d(TAG, "Updating DB for next waypoint only: order=${nextUnpassed.order}, id=${nextUnpassed.id}")
+
+                    coroutineScope.launch {
+                        try {
+                            // Set is_next flags
+                            trip.waypoints.forEach { wp ->
+                                val shouldBeNext = wp.id == nextUnpassed.id
+                                if (wp.is_next != shouldBeNext) {
+                                    databaseManager.updateWaypointNextStatus(trip.id, wp.id, shouldBeNext)
                                 }
-                                
-                                // Update waypoint next status (is_next)
-                                if (waypoint.is_next != progressInfo.isNext) {
-                                    databaseManager.updateWaypointNextStatus(trip.id, waypoint.id, progressInfo.isNext)
-                                    Logging.d(TAG, "  - ✅ Updated is_next status: ${progressInfo.isNext}")
-                                }
-                                
-                                // Update remaining time and distance for the next waypoint
-                                if (progressInfo.isNext && progressInfo.remainingTimeInSeconds != null && progressInfo.remainingDistanceInMeters != null) {
-                                    databaseManager.updateWaypointRemaining(
-                                        tripId = trip.id,
-                                        waypointId = waypoint.id,
-                                        remainingTimeSeconds = progressInfo.remainingTimeInSeconds,
-                                        remainingDistanceMeters = progressInfo.remainingDistanceInMeters
-                                    )
-                                    Logging.d(TAG, "  - ✅ Updated remaining time/distance for next waypoint: ${progressInfo.remainingTimeInSeconds}s, ${progressInfo.remainingDistanceInMeters}m")
-                                } else if (!progressInfo.isNext) {
-                                    // Clear remaining time/distance for non-next waypoints
-                                    databaseManager.updateWaypointRemaining(
-                                        tripId = trip.id,
-                                        waypointId = waypoint.id,
-                                        remainingTimeSeconds = null,
-                                        remainingDistanceMeters = null
-                                    )
-                                    Logging.d(TAG, "  - ✅ Cleared remaining time/distance for non-next waypoint")
-                                } else if (progressInfo.isNext) {
-                                    Logging.w(TAG, "  - ⚠️ Next waypoint but no remaining time/distance data available")
-                                }
-                                
-                                // Update passed timestamp if waypoint was just marked as passed
-                                if (progressInfo.isPassed && progressInfo.passedTimestamp != null && waypoint.passed_timestamp == null) {
-                                    databaseManager.updateWaypointPassedTimestamp(trip.id, waypoint.id, progressInfo.passedTimestamp)
-                                    Logging.d(TAG, "  - ✅ Updated passed timestamp: ${progressInfo.passedTimestamp}")
-                                }
-                                
-                            } catch (e: Exception) {
-                                Logging.e(TAG, "Failed to write waypoint ${waypoint.id} to database: ${e.message}", e)
                             }
+
+                            // Set remaining time/distance for next waypoint if available
+                            if (nextProgress.remainingTimeInSeconds != null && nextProgress.remainingDistanceInMeters != null) {
+                                databaseManager.updateWaypointRemaining(
+                                    tripId = trip.id,
+                                    waypointId = nextUnpassed.id,
+                                    remainingTimeSeconds = nextProgress.remainingTimeInSeconds,
+                                    remainingDistanceMeters = nextProgress.remainingDistanceInMeters
+                                )
+                                Logging.d(TAG, "  - ✅ Updated remaining for next waypoint id=${nextUnpassed.id}: ${nextProgress.remainingTimeInSeconds}s, ${nextProgress.remainingDistanceInMeters}m")
+                            } else {
+                                Logging.w(TAG, "  - ⚠️ Next waypoint has no remaining data; skipping remaining update")
+                            }
+
+                            // IMPORTANT: Do NOT mark is_passed here. Passing is handled by milestone/section-reduction/<=10m rule elsewhere.
+                        } catch (e: Exception) {
+                            Logging.e(TAG, "Failed to update next waypoint ${nextUnpassed.id}: ${e.message}", e)
                         }
-                    } else {
-                        Logging.w(TAG, "Waypoint with order ${progressInfo.waypointIndex} not found in trip data")
+                    }
+                } else {
+                    Logging.d(TAG, "No next unpassed waypoint to update or no progress row for it; skipping waypoint DB writes")
+                }
+
+                // Update trip-level remaining (destination progress) using last section
+                val lastSection = sectionProgressList.lastOrNull()
+                if (lastSection != null) {
+                    coroutineScope.launch {
+                        try {
+                            databaseManager.updateTripRemaining(
+                                tripId = trip.id,
+                                remainingTimeToDestination = lastSection.remainingDuration.toSeconds(),
+                                remainingDistanceToDestination = lastSection.remainingDistanceInMeters.toDouble()
+                            )
+                        } catch (e: Exception) {
+                            Logging.e(TAG, "Failed to persist trip remaining progress: ${e.message}", e)
+                        }
                     }
                 }
                 
@@ -1593,26 +1690,29 @@ class TripSectionValidator(private val context: Context) {
                                 Logging.d(TAG, "Next waypoint: ${unpassedWaypoints.minByOrNull { it.order }?.location?.google_place_name ?: "None"}")
                                 Logging.d(TAG, "=====================================")
                                 
-                // Extract vehicle location data from database
-                val currentSpeed = freshTrip.vehicle.current_speed
-                val currentLocation = if (freshTrip.vehicle.current_latitude != null && 
-                                          freshTrip.vehicle.current_longitude != null) {
-                    MqttService.Location(
-                        latitude = freshTrip.vehicle.current_latitude!!,
-                        longitude = freshTrip.vehicle.current_longitude!!
-                    )
-                } else {
-                    null
-                }
-                
-                // CRITICAL: Use ONLY database trip data - no calculated data
-                routeProgressMqttService.sendTripProgressUpdate(
-                    tripResponse = freshTrip, // Use fresh database data directly
-                    remainingTimeToDestination = tripLevelTime,
-                    remainingDistanceToDestination = tripLevelDistance,
-                    currentSpeed = currentSpeed,
-                    currentLocation = currentLocation
-                )?.whenComplete { result, throwable ->
+                                // Merge vehicle location from VehicleLocationEntity if needed
+                                val tripWithLocation = mergeVehicleLocationIfNeeded(freshTrip)
+                                
+                                // Extract vehicle location data from trip (with merged location if needed)
+                                val currentSpeed = tripWithLocation.vehicle.current_speed
+                                val currentLocation = if (tripWithLocation.vehicle.current_latitude != null && 
+                                          tripWithLocation.vehicle.current_longitude != null) {
+                                    MqttService.Location(
+                                        latitude = tripWithLocation.vehicle.current_latitude!!,
+                                        longitude = tripWithLocation.vehicle.current_longitude!!
+                                    )
+                                } else {
+                                    null
+                                }
+                                
+                                // CRITICAL: Use ONLY database trip data (with merged location if needed) - no calculated data
+                                routeProgressMqttService.sendTripProgressUpdate(
+                                    tripResponse = tripWithLocation, // Use fresh database data with merged location
+                                    remainingTimeToDestination = tripLevelTime,
+                                    remainingDistanceToDestination = tripLevelDistance,
+                                    currentSpeed = currentSpeed,
+                                    currentLocation = currentLocation
+                                )?.whenComplete { result, throwable ->
                                     if (throwable != null) {
                                         Logging.e(TAG, "Failed to publish trip progress update: ${throwable.message}", throwable)
                                     } else {

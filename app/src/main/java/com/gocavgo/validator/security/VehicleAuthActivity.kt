@@ -1,5 +1,6 @@
 package com.gocavgo.validator.security
 
+import android.content.Intent
 import android.os.Bundle
 import com.gocavgo.validator.R
 import android.util.Log
@@ -353,10 +354,15 @@ class VehicleAuthActivity : AppCompatActivity() {
                                     Toast.LENGTH_LONG
                                 ).show()
 
-                                // Fetch and apply settings after successful authentication
-                                fetchAndApplySettings(vehicleResponse.id.toInt())
-
-                                loadSavedVehicleData()
+                                // Fetch and apply settings after successful authentication, then navigate
+                                fetchAndApplySettings(vehicleResponse.id.toInt()) {
+                                    // Navigate back to LauncherActivity to re-evaluate settings
+                                    val intent = Intent(this@VehicleAuthActivity, com.gocavgo.validator.LauncherActivity::class.java).apply {
+                                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                                    }
+                                    startActivity(intent)
+                                    finish()
+                                }
                             } catch (e: Exception) {
                                 Log.e(TAG, "Error parsing login response", e)
                                 Toast.makeText(
@@ -524,10 +530,15 @@ class VehicleAuthActivity : AppCompatActivity() {
                                     Toast.LENGTH_LONG
                                 ).show()
 
-                                // Fetch and apply settings after successful authentication
-                                fetchAndApplySettings(vehicleResponse.id.toInt())
-
-                                loadSavedVehicleData()
+                                // Fetch and apply settings after successful authentication, then navigate
+                                fetchAndApplySettings(vehicleResponse.id.toInt()) {
+                                    // Navigate back to LauncherActivity to re-evaluate settings
+                                    val intent = Intent(this@VehicleAuthActivity, com.gocavgo.validator.LauncherActivity::class.java).apply {
+                                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                                    }
+                                    startActivity(intent)
+                                    finish()
+                                }
 
                             } catch (e: Exception) {
                                 Log.e(TAG, "Error parsing response", e)
@@ -652,7 +663,7 @@ class VehicleAuthActivity : AppCompatActivity() {
     /**
      * Fetch settings from API and apply them after successful authentication
      */
-    private fun fetchAndApplySettings(vehicleId: Int) {
+    private fun fetchAndApplySettings(vehicleId: Int, onComplete: () -> Unit) {
         settingsScope.launch {
             try {
                 Log.d(TAG, "Fetching settings after authentication for vehicle $vehicleId")
@@ -663,13 +674,20 @@ class VehicleAuthActivity : AppCompatActivity() {
                     // Apply settings (check logout/deactivate)
                     runOnUiThread {
                         settingsManager.applySettings(this@VehicleAuthActivity, settings)
+                        onComplete()
                     }
                 }.onFailure { error ->
                     Log.e(TAG, "Failed to fetch settings after authentication: ${error.message}")
                     // Continue without settings - they'll be fetched on next app launch
+                    runOnUiThread {
+                        onComplete()
+                    }
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Exception fetching settings after authentication: ${e.message}", e)
+                runOnUiThread {
+                    onComplete()
+                }
             }
         }
     }

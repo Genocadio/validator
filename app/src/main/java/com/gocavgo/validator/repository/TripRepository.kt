@@ -382,4 +382,9 @@ class TripRepository(context: Context) {
     suspend fun getAllTripIdsByVehicle(vehicleId: Int): List<Int> {
         return tripDao.getAllTripIdsByVehicle(vehicleId)
     }
+    
+    // Get vehicle location from VehicleLocationEntity
+    suspend fun getVehicleLocation(vehicleId: Int): com.gocavgo.validator.database.VehicleLocationEntity? {
+        return vehicleLocationDao.getVehicleLocation(vehicleId)
+    }
 }

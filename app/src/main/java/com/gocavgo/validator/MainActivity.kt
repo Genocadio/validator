@@ -33,15 +33,11 @@ import com.gocavgo.validator.security.VehicleSecurityManager
 import com.gocavgo.validator.dataclass.TripResponse
 import com.gocavgo.validator.dataclass.TripStatus
 import com.gocavgo.validator.database.DatabaseManager
-import com.gocavgo.validator.service.MqttForegroundService
-import com.gocavgo.validator.service.MqttHealthCheckWorker
-import com.gocavgo.validator.service.NetworkMonitorWorker
 import android.Manifest
 import android.os.Build
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.core.app.ActivityCompat
 import com.gocavgo.validator.service.MqttService
-import com.gocavgo.validator.service.SettingsTimeoutWorker
 import com.gocavgo.validator.sync.SyncCoordinator
 import com.gocavgo.validator.util.Logging
 import com.gocavgo.validator.ui.components.NetworkStatusIndicator
@@ -629,86 +625,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /**
-     * Initialize MQTT background services
-     */
-    private fun initializeMqttBackgroundServices() {
-        try {
-            Logging.d(TAG, "Initializing MQTT background services...")
-            
-            // Request notification permission for Android 13+
-            requestNotificationPermission()
-            
-            // Start MQTT foreground service
-            startMqttForegroundService()
-            
-            // Schedule WorkManager health checks
-            MqttHealthCheckWorker.schedule(this)
-            
-            // Schedule network monitoring worker
-            NetworkMonitorWorker.schedule(this)
-            
-            // Schedule settings timeout worker (checks for 4-day timeout)
-            SettingsTimeoutWorker.schedule(this)
-            
-            Logging.d(TAG, "MQTT background services initialized successfully")
-        } catch (e: Exception) {
-            Logging.e(TAG, "Failed to initialize MQTT background services: ${e.message}", e)
-        }
-    }
-    
-    /**
-     * Request notification permission for Android 13+
-     */
-    private fun requestNotificationPermission() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) 
-                != PackageManager.PERMISSION_GRANTED) {
-                ActivityCompat.requestPermissions(
-                    this,
-                    arrayOf(Manifest.permission.POST_NOTIFICATIONS),
-                    NOTIFICATION_PERMISSION_CODE
-                )
-            }
-        }
-    }
-    
-    /**
-     * Start MQTT foreground service
-     */
-    private fun startMqttForegroundService() {
-        try {
-            val serviceIntent = Intent(this, MqttForegroundService::class.java).apply {
-                action = MqttForegroundService.ACTION_START_SERVICE
-            }
-            
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                startForegroundService(serviceIntent)
-            } else {
-                startService(serviceIntent)
-            }
-            
-            Logging.d(TAG, "MQTT foreground service started")
-        } catch (e: Exception) {
-            Logging.e(TAG, "Failed to start MQTT foreground service: ${e.message}", e)
-        }
-    }
-    
-    /**
-     * Stop MQTT foreground service
-     */
-    private fun stopMqttForegroundService() {
-        try {
-            val serviceIntent = Intent(this, MqttForegroundService::class.java).apply {
-                action = MqttForegroundService.ACTION_STOP_SERVICE
-            }
-            startService(serviceIntent)
-            
-            Logging.d(TAG, "MQTT foreground service stopped")
-        } catch (e: Exception) {
-            Logging.e(TAG, "Failed to stop MQTT foreground service: ${e.message}", e)
-        }
-    }
     
     private fun initializeManagers() {
         // vehicleSecurityManager already initialized in onCreate
@@ -957,19 +873,6 @@ class MainActivity : ComponentActivity() {
         permissionsRequestor!!.onRequestPermissionsResult(requestCode, grantResults)
     }
 
-    private fun handleAndroidPermissions() {
-        permissionsRequestor = PermissionsRequestor(this)
-        permissionsRequestor!!.request(object :
-            PermissionsRequestor.ResultListener {
-            override fun permissionsGranted() {
-                Logging.d(TAG, "All permissions granted by user.")
-            }
-
-            override fun permissionsDenied() {
-                Logging.e(TAG, "Permissions denied by user.")
-            }
-        })
-    }
 
     private fun initializeHERESDK() {
         // Initialize HERE SDK in background to prevent ANR
@@ -1032,65 +935,24 @@ class MainActivity : ComponentActivity() {
         
         // Set this activity as active and disable its logging
         Logging.setActivityLoggingEnabled(TAG, false)
-        permissionsRequestor = PermissionsRequestor(this)
 
-        // Check login status first - if not logged in, launch VehicleAuthActivity and finish
+        // Initialize managers
         vehicleSecurityManager = VehicleSecurityManager(this)
-        if (!vehicleSecurityManager.isVehicleRegistered()) {
-            Logging.d(TAG, "Vehicle not registered, launching VehicleAuthActivity")
-            val intent = Intent(this, com.gocavgo.validator.security.VehicleAuthActivity::class.java)
-            startActivity(intent)
-            finish()
-            return
-        }
+        vehicleInfo = vehicleSecurityManager.getVehicleInfo()
 
         // Initialize settings manager
         settingsManager = VehicleSettingsManager.getInstance(this)
-
-        // Check settings asynchronously from database - handle redirects when loaded
-        val vehicleId = vehicleSecurityManager.getVehicleId()
-        lifecycleScope.launch {
-            val savedSettings = settingsManager.getSettings(vehicleId.toInt())
-            
-            // Check if MainActivity should be accessible based on settings
-            if (savedSettings != null) {
-                // Check if all settings are false - redirect to AutoModeHeadlessActivity immediately
-                if (settingsManager.areAllSettingsFalse(savedSettings)) {
-                    Logging.d(TAG, "All settings are false - redirecting to AutoModeHeadlessActivity immediately")
-                    val intent = Intent(this@MainActivity, com.gocavgo.validator.navigator.AutoModeHeadlessActivity::class.java).apply {
-                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
-                    }
-                    startActivity(intent)
-                    finish()
-                    return@launch
-                }
-                
-                // Check devmode - if false, restrict access (redirect to AutoModeHeadlessActivity)
-                if (!savedSettings.devmode) {
-                    Logging.d(TAG, "Devmode is false - redirecting to AutoModeHeadlessActivity")
-                    val intent = Intent(this@MainActivity, com.gocavgo.validator.navigator.AutoModeHeadlessActivity::class.java).apply {
-                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
-                    }
-                    startActivity(intent)
-                    finish()
-                    return@launch
-                }
-            }
-        }
 
         // Initialize HERE SDK in background to prevent ANR
         initializeHERESDK()
         
         checkAndRequestNetworkPermissions()
         initializeManagers()
-        
-        // Initialize MQTT background services
-        initializeMqttBackgroundServices()
 
         // Register settings change broadcast receiver
         registerSettingsChangeReceiver()
 
-        // Fetch settings from API on create (will check again after fetch)
+        // Fetch settings from API on create
         fetchSettings()
         
         setContent {
@@ -1099,7 +961,6 @@ class MainActivity : ComponentActivity() {
                     Box(modifier = Modifier.fillMaxSize()) {
                         NavigationScreen(
                             onStartNavigation = { startNavigator() },
-                            onVehicleAuth = { startVehicleAuth() },
                             onRefreshTrips = { forceRefreshFromRemote() },
                             latestTrip = latestTrip,
                             isLoadingTrips = isLoadingTrips,
@@ -1135,7 +996,6 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-        handleAndroidPermissions()
 
         // Fetch trips after UI is set up
         fetchLatestVehicleTrip()
@@ -1451,19 +1311,6 @@ class MainActivity : ComponentActivity() {
         // Clean up map downloader
         mapDownloaderManager?.cleanup()
         
-        // Stop MQTT background services BEFORE disposing HERE SDK
-        // This ensures LocationEngine is stopped before SDK disposal
-        stopMqttForegroundService()
-        
-        // Give the service time to stop LocationEngine cleanly
-        try {
-            Thread.sleep(500) // 500ms grace period
-        } catch (e: InterruptedException) {
-            Logging.w(TAG, "Interrupted while waiting for service cleanup")
-        }
-        
-        MqttHealthCheckWorker.cancel(this)
-        
         // Unregister settings change receiver
         unregisterSettingsChangeReceiver()
         
@@ -1533,7 +1380,12 @@ class MainActivity : ComponentActivity() {
             addAction(ACTION_SETTINGS_CHANGED)
         }
         
-        registerReceiver(settingsChangeReceiver, filter)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(settingsChangeReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            registerReceiver(settingsChangeReceiver, filter)
+        }
         Logging.d(TAG, "Settings change receiver registered")
     }
     
@@ -1589,7 +1441,6 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun NavigationScreen(
     onStartNavigation: () -> Unit,
-    onVehicleAuth: () -> Unit,
     onRefreshTrips: () -> Unit,
     latestTrip: TripResponse?,
     isLoadingTrips: Boolean,
@@ -1772,26 +1623,6 @@ fun NavigationScreen(
                             onCheckedChange = onShowMapChanged
                         )
                     }
-                    
-                    // Simulate value from settings (read-only, no toggle)
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 8.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            "Simulate Mode",
-                            style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.weight(1f)
-                        )
-                        Text(
-                            "Set via API",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
                 }
             }
         }
@@ -1849,24 +1680,6 @@ fun NavigationScreen(
             ) {
                 Text(
                     "Auto Mode",
-                    style = MaterialTheme.typography.bodyLarge
-                )
-            }
-        }
-        
-        item {
-            Button(
-                onClick = onVehicleAuth,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 4.dp),
-                enabled = !isDeactivated,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.secondary
-                )
-            ) {
-                Text(
-                    "Vehicle Authentication Setup",
                     style = MaterialTheme.typography.bodyLarge
                 )
             }
@@ -1981,7 +1794,6 @@ fun NavigationScreenPreview() {
     ValidatorTheme {
         NavigationScreen(
             onStartNavigation = { },
-            onVehicleAuth = { },
             onRefreshTrips = { },
             latestTrip = null,
             isLoadingTrips = false,

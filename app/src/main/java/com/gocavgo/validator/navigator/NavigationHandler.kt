@@ -132,12 +132,22 @@ class NavigationHandler(
                     )
                 }
                 
+                // CRITICAL: Process section progress FIRST, before checking maneuver progress
+                // Section progress is always available and needed for TripSectionValidator tracking
+                // This ensures progress tracking works even when maneuver progress isn't available yet (e.g., real GPS before movement)
+                val sectionProgressList = routeProgress.sectionProgress
+                if (sectionProgressList.isNotEmpty()) {
+                    val totalSections = sectionProgressList.size
+                    tripSectionValidator.processSectionProgress(sectionProgressList, totalSections)
+                    Log.d(TAG, "Processed section progress: ${sectionProgressList.size} sections")
+                }
+                
                 // Contains the progress for the next maneuver ahead and the next-next maneuvers, if any.
                 val nextManeuverList = routeProgress.maneuverProgress
 
                 val nextManeuverProgress = nextManeuverList[0]
                 if (nextManeuverProgress == null) {
-                    Log.d(TAG, "No next maneuver available.")
+                    Log.d(TAG, "No next maneuver available (but section progress was processed).")
                     return@RouteProgressListener
                 }
 
@@ -302,12 +312,22 @@ class NavigationHandler(
                     )
                 }
                 
+                // CRITICAL: Process section progress FIRST, before checking maneuver progress
+                // Section progress is always available and needed for TripSectionValidator tracking
+                // This ensures progress tracking works even when maneuver progress isn't available yet (e.g., real GPS before movement)
+                val sectionProgressList = routeProgress.sectionProgress
+                if (sectionProgressList.isNotEmpty()) {
+                    val totalSections = sectionProgressList.size
+                    tripSectionValidator.processSectionProgress(sectionProgressList, totalSections)
+                    Log.d(TAG, "Processed section progress: ${sectionProgressList.size} sections")
+                }
+                
                 // Contains the progress for the next maneuver ahead and the next-next maneuvers, if any.
                 val nextManeuverList = routeProgress.maneuverProgress
 
                 val nextManeuverProgress = nextManeuverList[0]
                 if (nextManeuverProgress == null) {
-                    Log.d(TAG, "No next maneuver available.")
+                    Log.d(TAG, "No next maneuver available (but section progress was processed).")
                     return@RouteProgressListener
                 }
 
@@ -432,8 +452,8 @@ class NavigationHandler(
         val lastSectionProgress = sectionProgressList[sectionProgressList.size - 1]
         val totalSections = sectionProgressList.size
 
-        // Process section progress through trip section validator for verified trips
-        tripSectionValidator.processSectionProgress(sectionProgressList, totalSections)
+        // NOTE: Section progress is already processed earlier in the routeProgressListener
+        // This method only extracts ETA string and waypoint data from the processed progress
 
         // Update waypoint with first section's remaining time and distance
         if (sectionProgressList.isNotEmpty()) {

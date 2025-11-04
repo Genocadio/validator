@@ -27,3 +27,7 @@ data class VehicleSettingsMqttPayload(
     val simulate: Boolean
 )
 
+
+
+
+

@@ -63,9 +63,9 @@
             android:turnScreenOn="true"
             android:exported="false" />
             
-        <!-- Main Activity -->
+        <!-- Launcher Activity -->
         <activity
-            android:name=".MainActivity"
+            android:name=".LauncherActivity"
             android:exported="true"
             android:theme="@style/Theme.Validator">
             <intent-filter>
@@ -74,6 +74,12 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        
+        <!-- Main Activity -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="false"
+            android:theme="@style/Theme.Validator" />
         
         <!-- AutoMode Activity - DEPRECATED: Use AutoModeHeadlessActivity instead -->
         <!--

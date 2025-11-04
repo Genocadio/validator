@@ -43,3 +43,7 @@ data class VehicleSettingsEntity(
     }
 }
 
+
+
+
+

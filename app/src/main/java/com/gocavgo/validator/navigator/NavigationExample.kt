@@ -41,6 +41,7 @@ import com.here.time.Duration
 import com.here.sdk.navigation.Navigator
 import com.gocavgo.validator.network.NetworkMonitor
 import android.widget.Toast
+import com.gocavgo.validator.util.Logging
 
 // Shows how to start and stop turn-by-turn navigation on a car route.
 // By default, tracking mode is enabled. When navigation is stopped, tracking mode is enabled again.
@@ -116,7 +117,14 @@ class NavigationExample(
         // and choose a suitable accuracy for the tbt navigation use case.
         // Start immediately to begin GPS acquisition
         Log.d(TAG, "Starting location provider for GPS acquisition...")
-        herePositioningProvider.startLocating(visualNavigator, LocationAccuracy.NAVIGATION)
+        // Use navigator for headless mode, visualNavigator for visual mode
+        if (isHeadlessMode) {
+            herePositioningProvider.startLocating(navigator, LocationAccuracy.NAVIGATION)
+            Log.d(TAG, "Location provider started with headless navigator")
+        } else {
+            herePositioningProvider.startLocating(visualNavigator, LocationAccuracy.NAVIGATION)
+            Log.d(TAG, "Location provider started with visual navigator")
+        }
     }
 
     private fun prefetchMapData(currentGeoCoordinates: GeoCoordinates) {
@@ -282,6 +290,7 @@ class NavigationExample(
 
         // Set the route for headless navigation only
         navigator.route = route
+        Logging.d(TAG, "Starting headless navigation.")
 
         if (isSimulated) {
             enableRoutePlayback(route)
@@ -439,17 +448,14 @@ class NavigationExample(
         
         herePositioningSimulator.stopLocating()
         // Don't stop and restart if already running - this can cause location loss
-        if (!herePositioningProvider.isLocating()) {
-            // Use navigator for headless mode, visualNavigator for visual mode
-            if (isHeadlessMode) {
-                herePositioningProvider.startLocating(navigator, LocationAccuracy.NAVIGATION)
-            } else {
-                herePositioningProvider.startLocating(visualNavigator, LocationAccuracy.NAVIGATION)
-            }
-            Log.d(TAG, "Device positioning started")
+        if (isHeadlessMode) {
+            Log.d(TAG, "Headless started")
+            herePositioningProvider.startLocating(navigator, LocationAccuracy.NAVIGATION)
         } else {
-            Log.d(TAG, "Device positioning already active")
+            Log.d(TAG, "Visual started")
+            herePositioningProvider.startLocating(visualNavigator, LocationAccuracy.NAVIGATION)
         }
+        Log.d(TAG, "Device positioning started")
     }
 
     fun startCameraTracking() {

@@ -31,6 +31,10 @@ class RouteProgressTracker(
         private const val WAYPOINT_APPROACHING_TIME_SECONDS = 300L // 5 minutes
         private const val PROGRESS_UPDATE_INTERVAL_SECONDS = 5L // 5 seconds (reduced for testing)
     }
+    
+    interface WaypointPassedCallback {
+        fun onWaypointPassed()
+    }
 
     private val databaseManager = DatabaseManager.getInstance(context)
     private var currentTrip: TripResponse? = null
@@ -43,6 +47,13 @@ class RouteProgressTracker(
     private var lastProgressUpdateTime = 0L
     private var lastWaypointApproachNotification = mutableSetOf<Int>()
     private var tripStarted = false
+    
+    // Callback for waypoint passed events
+    private var waypointPassedCallback: WaypointPassedCallback? = null
+    
+    fun setWaypointPassedCallback(callback: WaypointPassedCallback?) {
+        this.waypointPassedCallback = callback
+    }
 
     init {
         // Initialize dedicated MQTT service
@@ -366,6 +377,9 @@ class RouteProgressTracker(
                         }
                     }
                 }
+                
+                // Notify activity to update UI
+                waypointPassedCallback?.onWaypointPassed()
             } catch (e: Exception) {
                 Logging.e(TAG, "Failed to mark waypoint $waypointId as passed: ${e.message}", e)
             }
