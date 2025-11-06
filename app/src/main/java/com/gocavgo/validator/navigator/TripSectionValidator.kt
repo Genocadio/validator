@@ -78,6 +78,9 @@ class TripSectionValidator(private val context: Context) {
     // Callback for waypoint passed notifications (for UI updates)
     private var waypointPassedCallback: (() -> Unit)? = null
     
+    // Callback for trip deletion/cancellation (notifies service/activity to stop navigation)
+    private var tripDeletedCallback: ((Int) -> Unit)? = null
+    
     // Integrated RouteProgressTracker functionality
     private val databaseManager = DatabaseManager.getInstance(context)
     private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -139,6 +142,14 @@ class TripSectionValidator(private val context: Context) {
      */
     fun setWaypointPassedCallback(callback: (() -> Unit)?) {
         this.waypointPassedCallback = callback
+    }
+    
+    /**
+     * Set callback for trip deletion/cancellation
+     * Called when trip is not found in database during processing
+     */
+    fun setTripDeletedCallback(callback: ((Int) -> Unit)?) {
+        this.tripDeletedCallback = callback
     }
 
     /**
@@ -250,6 +261,16 @@ class TripSectionValidator(private val context: Context) {
      * @param totalSections Total number of sections in current route
      */
     fun processSectionProgress(sectionProgressList: List<SectionProgress>, totalSections: Int) {
+        // FIRST: Check if trip is still valid (not null/reset)
+        if (tripResponse == null) {
+            Log.w(TAG, "Trip is null (cancelled/reset), skipping section progress processing")
+            return
+        }
+        
+        // SECOND: Verify trip still exists in database (might have been deleted)
+        // Note: We check this in publishTripProgressUpdate() where we already fetch fresh trip data
+        // This avoids blocking the main processing thread with a database check on every update
+        
         if (!isVerified) {
             Log.w(TAG, "Trip not verified, skipping section progress processing")
             return
@@ -1163,12 +1184,49 @@ class TripSectionValidator(private val context: Context) {
         try {
             tripResponse?.let { trip ->
                 if (!tripStarted) {
-                    routeProgressMqttService.sendTripStartEvent(trip)?.whenComplete { result, throwable ->
-                        if (throwable != null) {
-                            Logging.e(TAG, "Failed to publish trip start event: ${throwable.message}", throwable)
-                        } else {
-                            Logging.d(TAG, "Trip start event published successfully via dedicated MQTT service")
-                            tripStarted = true
+                    // Fetch fresh trip data from database to ensure status is IN_PROGRESS
+                    coroutineScope.launch {
+                        try {
+                            val freshTrip = databaseManager.getTripById(trip.id)
+                            if (freshTrip != null) {
+                                // Merge vehicle location if needed
+                                val tripWithLocation = mergeVehicleLocationIfNeeded(freshTrip)
+                                
+                                // Update local tripResponse with fresh data
+                                tripResponse = tripWithLocation
+                                
+                                // Send trip start event with fresh data (including updated IN_PROGRESS status)
+                                routeProgressMqttService.sendTripStartEvent(tripWithLocation)?.whenComplete { result, throwable ->
+                                    if (throwable != null) {
+                                        Logging.e(TAG, "Failed to publish trip start event: ${throwable.message}", throwable)
+                                    } else {
+                                        Logging.d(TAG, "Trip start event published successfully with status: ${tripWithLocation.status}")
+                                        tripStarted = true
+                                    }
+                                }
+                            } else {
+                                // Fallback to original trip data if database fetch fails
+                                Logging.w(TAG, "Failed to fetch fresh trip data for trip start event, using original trip data")
+                                routeProgressMqttService.sendTripStartEvent(trip)?.whenComplete { result, throwable ->
+                                    if (throwable != null) {
+                                        Logging.e(TAG, "Failed to publish trip start event: ${throwable.message}", throwable)
+                                    } else {
+                                        Logging.d(TAG, "Trip start event published successfully via dedicated MQTT service")
+                                        tripStarted = true
+                                    }
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Logging.e(TAG, "Error fetching fresh trip data for trip start event: ${e.message}", e)
+                            // Fallback to original trip data
+                            routeProgressMqttService.sendTripStartEvent(trip)?.whenComplete { result, throwable ->
+                                if (throwable != null) {
+                                    Logging.e(TAG, "Failed to publish trip start event: ${throwable.message}", throwable)
+                                } else {
+                                    Logging.d(TAG, "Trip start event published successfully via dedicated MQTT service")
+                                    tripStarted = true
+                                }
+                            }
                         }
                     }
                 }
@@ -1721,7 +1779,17 @@ class TripSectionValidator(private val context: Context) {
                                     }
                                 }
                             } else {
-                                Logging.e(TAG, "❌ Failed to fetch fresh trip data from database")
+                                Logging.e(TAG, "❌ Failed to fetch fresh trip data from database - trip may have been deleted")
+                                
+                                // Trip was deleted - reset validator and notify service/activity
+                                val deletedTripId = currentTrip.id
+                                Logging.w(TAG, "Trip $deletedTripId not found in database - resetting validator and notifying service")
+                                
+                                // Reset validator state
+                                reset()
+                                
+                                // Notify service/activity that trip was deleted
+                                tripDeletedCallback?.invoke(deletedTripId)
                             }
                         }
                     } catch (e: Exception) {

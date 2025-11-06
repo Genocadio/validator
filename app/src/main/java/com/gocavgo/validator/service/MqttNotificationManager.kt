@@ -8,9 +8,10 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.util.Log
+import androidx.compose.ui.text.toLowerCase
 import androidx.core.app.NotificationCompat
 import com.gocavgo.validator.R
-import com.gocavgo.validator.navigator.NavigActivity
+import com.gocavgo.validator.navigator.AutoModeHeadlessActivity
 import com.gocavgo.validator.dataclass.TripEventMessage
 import com.gocavgo.validator.dataclass.TripData
 import java.text.SimpleDateFormat
@@ -133,10 +134,18 @@ class MqttNotificationManager(private val context: Context) {
      * Create trip update notification
      */
     private fun createTripUpdateNotification(tripData: TripData, event: String): Notification {
-        val title = when (event) {
-            "trip_started" -> "Trip Started"
-            "progress_update" -> "Trip Progress Update"
-            "trip_completed" -> "Trip Completed"
+
+        // Determine title based on trip status first, then fall back to event
+        val title = when {
+            // Check trip status for created/cancelled
+            tripData.status.equals("scheduled", ignoreCase = true) -> "Trip Created"
+            tripData.status.equals("cancelled", ignoreCase = true) -> "Trip Cancelled"
+            // Fall back to event-based titles
+            event == "trip_started" || event == "TRIP_STARTED" -> "Trip Started"
+            event == "progress_update" || event == "PROGRESS_UPDATE" -> "Trip Progress Update"
+            event == "trip_completed" || event == "TRIP_COMPLETED" -> "Trip Completed"
+            event == "created" || event == "CREATED" -> "Trip Created"
+            event == "TRIP_CANCELLED" || event == "trip_cancelled" -> "Trip Cancelled"
             else -> "Trip Update"
         }
         
@@ -147,11 +156,12 @@ class MqttNotificationManager(private val context: Context) {
         val contentText = "$origin → $destination"
         val contentSubText = if (departureTime.isNotEmpty()) "Departure: $departureTime" else null
         
-        // Create intent to open NavigActivity
-        val intent = Intent(context, NavigActivity::class.java).apply {
+        // Create intent to open AutoModeHeadlessActivity
+        val intent = Intent(context, AutoModeHeadlessActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+            // AutoModeHeadlessActivity loads active trip from database, so trip_id not needed
+            // but we can include it for reference if needed
             putExtra("trip_id", tripData.id)
-            putExtra("auto_start_navigation", true)
         }
         
         val pendingIntent = PendingIntent.getActivity(
@@ -206,11 +216,9 @@ class MqttNotificationManager(private val context: Context) {
         val contentText = "$passengerName: $pickup → $dropoff"
         val contentSubText = "$numTickets ticket${if (numTickets > 1) "s" else ""} • ${if (isPaid) "Paid" else "Pending Payment"}"
         
-        // Create intent to open NavigActivity
-        val intent = Intent(context, NavigActivity::class.java).apply {
+        // Create intent to open AutoModeHeadlessActivity
+        val intent = Intent(context, AutoModeHeadlessActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
-            putExtra("trip_id", tripId)
-            putExtra("show_bookings", true)
         }
         
         val pendingIntent = PendingIntent.getActivity(

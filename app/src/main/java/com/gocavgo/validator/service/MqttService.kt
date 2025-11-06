@@ -109,7 +109,12 @@ class MqttService private constructor(
     // Booking bundle callback for direct UI notification
     private var bookingBundleCallback: ((String, String, String, String, Int, Boolean) -> Unit)? = null
     
-    // Trip event callback for direct UI notification
+    // Trip event callbacks - router pattern for Activity and Service
+    private var activityTripEventCallback: ((com.gocavgo.validator.dataclass.TripEventMessage) -> Unit)? = null
+    private var serviceTripEventCallback: ((com.gocavgo.validator.dataclass.TripEventMessage) -> Unit)? = null
+    
+    // Legacy single callback (for backward compatibility, routes to activity callback)
+    @Deprecated("Use setTripEventCallback for Activity or setServiceTripEventCallback for Service")
     private var tripEventCallback: ((com.gocavgo.validator.dataclass.TripEventMessage) -> Unit)? = null
     
     // Notification manager for background notifications
@@ -1787,8 +1792,8 @@ class MqttService private constructor(
                     
                     val tripEntity = TripEntity.fromTripResponse(tripResponse)
                     
-                    // Use updateTrip to handle existing trips properly
-                    tripDao.updateTrip(tripEntity)
+                    // Use insertTrip to handle both new and existing trips (REPLACE on conflict)
+                    tripDao.insertTrip(tripEntity)
                     
                     Log.d(TAG, "Trip saved to database successfully: ID=${tripResponse.id}, status=${tripResponse.status}")
                     Log.d(TAG, "Route: ${tripResponse.route.origin.google_place_name} → ${tripResponse.route.destination.google_place_name}")
@@ -1801,23 +1806,14 @@ class MqttService private constructor(
                         notificationManager?.showTripUpdateNotification(tripEvent)
                     }
 
-                    // Call trip event callback for UI updates (if MainActivity is active)
-                    try {
-                        tripEventCallback?.invoke(tripEvent)
-                        Log.d(TAG, "Trip event callback invoked successfully")
-                    } catch (callbackError: Exception) {
-                        Log.w(TAG, "Error invoking trip event callback: ${callbackError.message}")
-                    }
+                    // Route trip event to appropriate callback (Activity or Service)
+                    routeTripEvent(tripEvent)
                     
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to save trip to database: ${e.message}", e)
                     
-                    // Still try to notify UI even if database save failed
-                    try {
-                        tripEventCallback?.invoke(tripEvent)
-                    } catch (callbackError: Exception) {
-                        Log.w(TAG, "Error invoking trip event callback after DB error: ${callbackError.message}")
-                    }
+                    // Still try to route event even if database save failed
+                    routeTripEvent(tripEvent)
                 }
             }
 
@@ -2074,10 +2070,59 @@ class MqttService private constructor(
     }
     
     /**
-     * Set trip event callback for direct UI notification
+     * Route trip event to appropriate callback (Activity if active, Service if inactive)
+     */
+    private fun routeTripEvent(tripEvent: com.gocavgo.validator.dataclass.TripEventMessage) {
+        try {
+            // Check if Activity is active
+            val isActivityActive = try {
+                com.gocavgo.validator.navigator.AutoModeHeadlessActivity.isActive()
+            } catch (e: Exception) {
+                false // If Activity not available, assume inactive
+            }
+            
+            if (isActivityActive && activityTripEventCallback != null) {
+                // Activity is active - route to Activity callback
+                Log.d(TAG, "Routing trip event to Activity callback (Activity is active)")
+                try {
+                    activityTripEventCallback?.invoke(tripEvent)
+                    Log.d(TAG, "Activity trip event callback invoked successfully")
+                } catch (callbackError: Exception) {
+                    Log.e(TAG, "Error invoking Activity trip event callback: ${callbackError.message}", callbackError)
+                }
+            } else if (!isActivityActive && serviceTripEventCallback != null) {
+                // Activity is inactive - route to Service callback
+                Log.d(TAG, "Routing trip event to Service callback (Activity is inactive)")
+                try {
+                    serviceTripEventCallback?.invoke(tripEvent)
+                    Log.d(TAG, "Service trip event callback invoked successfully")
+                } catch (callbackError: Exception) {
+                    Log.e(TAG, "Error invoking Service trip event callback: ${callbackError.message}", callbackError)
+                }
+            } else {
+                // No callback available - log warning but message is already in DB
+                Log.w(TAG, "No trip event callback available (Activity active: $isActivityActive, Activity callback: ${activityTripEventCallback != null}, Service callback: ${serviceTripEventCallback != null})")
+                Log.w(TAG, "Trip event message saved to database but no handler available. Service should poll database.")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error routing trip event: ${e.message}", e)
+        }
+    }
+    
+    /**
+     * Set trip event callback for Activity (used when Activity is active)
      */
     fun setTripEventCallback(callback: ((com.gocavgo.validator.dataclass.TripEventMessage) -> Unit)?) {
-        tripEventCallback = callback
+        activityTripEventCallback = callback
+        Log.d(TAG, "Activity trip event callback ${if (callback != null) "registered" else "unregistered"}")
+    }
+    
+    /**
+     * Set trip event callback for Service (used when Activity is inactive)
+     */
+    fun setServiceTripEventCallback(callback: ((com.gocavgo.validator.dataclass.TripEventMessage) -> Unit)?) {
+        serviceTripEventCallback = callback
+        Log.d(TAG, "Service trip event callback ${if (callback != null) "registered" else "unregistered"}")
     }
     
     /**

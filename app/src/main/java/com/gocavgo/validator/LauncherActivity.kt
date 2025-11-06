@@ -34,7 +34,7 @@ class LauncherActivity : ComponentActivity() {
         private const val TAG = "LauncherActivity"
         private const val PERMISSIONS_REQUEST_CODE = 42
         private const val SETTINGS_FETCH_CACHE_KEY = "last_settings_fetch_time"
-        private const val SETTINGS_FETCH_CACHE_MS = 1 * 60 * 1000L // 10 minutes
+        private const val SETTINGS_FETCH_CACHE_MS = 10 * 60 * 1000L // 10 minutes
     }
     
     private lateinit var vehicleSecurityManager: VehicleSecurityManager

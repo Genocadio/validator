@@ -73,9 +73,9 @@ class TripRepository(context: Context) {
     // Save a single trip to database
     suspend fun saveTrip(trip: TripResponse) {
         val entity = TripEntity.fromTripResponse(trip)
-        // Use updateTrip instead of insertTrip to update existing trip
-        tripDao.updateTrip(entity)
-        Log.d("TripRepository", "Updated trip in database: ID=${trip.id}, remaining_time=${trip.remaining_time_to_destination}, remaining_distance=${trip.remaining_distance_to_destination}")
+        // Use insertTrip to handle both new and existing trips (REPLACE on conflict)
+        tripDao.insertTrip(entity)
+        Log.d("TripRepository", "Saved trip in database: ID=${trip.id}, remaining_time=${trip.remaining_time_to_destination}, remaining_distance=${trip.remaining_distance_to_destination}")
     }
     
     // Update trip in database
