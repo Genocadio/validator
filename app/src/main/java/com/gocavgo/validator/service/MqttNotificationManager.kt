@@ -179,26 +179,36 @@ class MqttNotificationManager(private val context: Context) {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         
-        return NotificationCompat.Builder(context, TRIP_UPDATES_CHANNEL_ID)
+        val builder = NotificationCompat.Builder(context, TRIP_UPDATES_CHANNEL_ID)
             .setContentTitle(title)
             .setContentText(contentText)
             .setSubText(contentSubText)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentIntent(pendingIntent)
-            .addAction(
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
+        
+        // Only add "View Trip" action if trip is not cancelled
+        val isCancelled = tripData.status.equals("cancelled", ignoreCase = true) || 
+                         event == "TRIP_CANCELLED" || event == "trip_cancelled"
+        
+        if (!isCancelled) {
+            builder.addAction(
                 R.drawable.ic_launcher_foreground,
                 "View Trip",
                 pendingIntent
             )
-            .addAction(
-                R.drawable.ic_launcher_foreground,
-                "Dismiss",
-                dismissPendingIntent
-            )
-            .setAutoCancel(true)
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-            .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
-            .build()
+        }
+        
+        // Always add "Dismiss" action
+        builder.addAction(
+            R.drawable.ic_launcher_foreground,
+            "Dismiss",
+            dismissPendingIntent
+        )
+        
+        return builder.build()
     }
     
     /**

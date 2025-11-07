@@ -1665,6 +1665,32 @@ class TripSectionValidator(private val context: Context) {
     }
     
     /**
+     * Publish trip progress update immediately (bypass throttling)
+     * Used when network is restored during navigation to immediately sync state
+     * IMPORTANT: This method ONLY reads from database - no direct data setting in MQTT messages
+     */
+    fun publishTripProgressUpdateImmediate() {
+        try {
+            Logging.d(TAG, "=== PUBLISH TRIP PROGRESS UPDATE IMMEDIATE (NETWORK RESTORE) ===")
+            val currentTime = System.currentTimeMillis()
+            
+            // Force update by temporarily resetting last update time
+            val originalLastUpdateTime = lastProgressUpdateTime
+            lastProgressUpdateTime = 0L
+            
+            // Call the regular publish method which will now send immediately
+            publishTripProgressUpdate()
+            
+            // Restore original time to prevent too frequent updates after this
+            lastProgressUpdateTime = originalLastUpdateTime
+            
+            Logging.d(TAG, "=== IMMEDIATE TRIP PROGRESS UPDATE COMPLETE ===")
+        } catch (e: Exception) {
+            Logging.e(TAG, "Error publishing immediate trip progress update: ${e.message}", e)
+        }
+    }
+    
+    /**
      * Publish periodic trip progress update via MQTT
      * IMPORTANT: This method ONLY reads from database - no direct data setting in MQTT messages
      */

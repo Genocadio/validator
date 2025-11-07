@@ -33,8 +33,7 @@ class LauncherActivity : ComponentActivity() {
     companion object {
         private const val TAG = "LauncherActivity"
         private const val PERMISSIONS_REQUEST_CODE = 42
-        private const val SETTINGS_FETCH_CACHE_KEY = "last_settings_fetch_time"
-        private const val SETTINGS_FETCH_CACHE_MS = 10 * 60 * 1000L // 10 minutes
+        private const val SETTINGS_STALE_THRESHOLD_MS = 10 * 60 * 1000L // 10 minutes
     }
     
     private lateinit var vehicleSecurityManager: VehicleSecurityManager
@@ -146,28 +145,79 @@ class LauncherActivity : ComponentActivity() {
         initializeWorkManagerServices()
         
         // Fetch settings and route
+        // ALWAYS check database first (source of truth)
+        // Only fetch from API if database is stale (older than 10 minutes) or doesn't exist
         lifecycleScope.launch {
             try {
-                // Check if we should fetch from API or use cache
+                // STEP 1: Always check database first (settings are always saved to DB)
                 val savedSettings = withContext(Dispatchers.IO) {
                     settingsManager.getSettings(vehicleId.toInt())
                 }
                 
-                if (shouldFetchSettingsFromApi()) {
-                    // Fetch from API and update cache
-                    Logging.d(TAG, "Fetching settings from API for vehicle $vehicleId")
+                val dbLastUpdated = withContext(Dispatchers.IO) {
+                    settingsManager.getSettingsLastUpdated(vehicleId.toInt())
+                }
+                
+                val currentTime = System.currentTimeMillis()
+                val isDbStale = dbLastUpdated == null || (currentTime - dbLastUpdated) > SETTINGS_STALE_THRESHOLD_MS
+                
+                Logging.d(TAG, "=== SETTINGS EVALUATION ===")
+                Logging.d(TAG, "Database settings exist: ${savedSettings != null}")
+                Logging.d(TAG, "Database last updated: ${dbLastUpdated?.let { "${(currentTime - it) / 1000}s ago" } ?: "Never"}")
+                Logging.d(TAG, "Database is stale: $isDbStale")
+                
+                // STEP 2: If database has recent settings (within 10 minutes), use them immediately
+                if (savedSettings != null && !isDbStale) {
+                    Logging.d(TAG, "Using fresh settings from database (updated ${(currentTime - dbLastUpdated!!) / 1000}s ago)")
+                    Logging.d(TAG, "logout: ${savedSettings.logout}")
+                    Logging.d(TAG, "devmode: ${savedSettings.devmode}")
+                    Logging.d(TAG, "deactivate: ${savedSettings.deactivate}")
+                    Logging.d(TAG, "appmode: ${savedSettings.appmode}")
+                    Logging.d(TAG, "simulate: ${savedSettings.simulate}")
+                    
+                    // Apply settings (check logout/deactivate)
+                    settingsManager.applySettings(this@LauncherActivity, savedSettings)
+                    
+                    // Route based on settings
+                    routeBasedOnSettings(savedSettings)
+                    
+                    // STEP 3: Still fetch from API in background to keep database fresh (but don't wait)
+                    // This ensures database stays up-to-date for next time
+                    launch(Dispatchers.IO) {
+                        try {
+                            val result = settingsManager.fetchSettingsFromApi(vehicleId.toInt())
+                            result.onSuccess { freshSettings ->
+                                Logging.d(TAG, "Background API fetch successful - database updated")
+                                // Database is automatically updated by fetchSettingsFromApi
+                            }.onFailure { error ->
+                                Logging.w(TAG, "Background API fetch failed: ${error.message} - using existing database settings")
+                                // Continue with existing database settings
+                            }
+                        } catch (e: Exception) {
+                            Logging.w(TAG, "Background API fetch exception: ${e.message}")
+                            // Continue with existing database settings
+                        }
+                    }
+                } 
+                // STEP 4: If database is stale or doesn't exist, fetch from API
+                else {
+                    if (savedSettings == null) {
+                        Logging.d(TAG, "No settings in database - fetching from API")
+                    } else {
+                        Logging.d(TAG, "Database settings are stale (${(currentTime - dbLastUpdated!!) / 1000}s old) - fetching from API")
+                    }
+                    
                     val result = settingsManager.fetchSettingsFromApi(vehicleId.toInt())
                     
                     result.onSuccess { settings ->
-                        Logging.d(TAG, "Settings fetched successfully")
+                        Logging.d(TAG, "Settings fetched successfully from API")
                         Logging.d(TAG, "logout: ${settings.logout}")
                         Logging.d(TAG, "devmode: ${settings.devmode}")
                         Logging.d(TAG, "deactivate: ${settings.deactivate}")
                         Logging.d(TAG, "appmode: ${settings.appmode}")
                         Logging.d(TAG, "simulate: ${settings.simulate}")
                         
-                        // Update fetch timestamp
-                        updateSettingsFetchTime()
+                        // Settings are automatically saved to database by fetchSettingsFromApi
                         
                         // Apply settings (check logout/deactivate)
                         settingsManager.applySettings(this@LauncherActivity, settings)
@@ -175,43 +225,14 @@ class LauncherActivity : ComponentActivity() {
                         // Route based on settings
                         routeBasedOnSettings(settings)
                     }.onFailure { error ->
-                        Logging.e(TAG, "Failed to fetch settings: ${error.message}")
+                        Logging.e(TAG, "Failed to fetch settings from API: ${error.message}")
                         
-                        // Try using saved settings from database
+                        // Try using saved settings from database (even if stale)
                         if (savedSettings != null) {
-                            Logging.d(TAG, "Using saved settings from database")
+                            Logging.d(TAG, "Using existing database settings as fallback (may be stale)")
+                            settingsManager.applySettings(this@LauncherActivity, savedSettings)
                             routeBasedOnSettings(savedSettings)
                         } else {
-                            errorMessage = "Failed to load settings: ${error.message}"
-                            isLoading = false
-                        }
-                    }
-                } else {
-                    // Use cached settings (database)
-                    if (savedSettings != null) {
-                        Logging.d(TAG, "Using cached settings from database")
-                        Logging.d(TAG, "logout: ${savedSettings.logout}")
-                        Logging.d(TAG, "devmode: ${savedSettings.devmode}")
-                        Logging.d(TAG, "deactivate: ${savedSettings.deactivate}")
-                        Logging.d(TAG, "appmode: ${savedSettings.appmode}")
-                        Logging.d(TAG, "simulate: ${savedSettings.simulate}")
-                        
-                        // Apply settings (check logout/deactivate)
-                        settingsManager.applySettings(this@LauncherActivity, savedSettings)
-                        
-                        // Route based on settings
-                        routeBasedOnSettings(savedSettings)
-                    } else {
-                        Logging.w(TAG, "No cached settings available, fetching from API")
-                        // No cache available, fetch from API
-                        val result = settingsManager.fetchSettingsFromApi(vehicleId.toInt())
-                        
-                        result.onSuccess { settings ->
-                            updateSettingsFetchTime()
-                            settingsManager.applySettings(this@LauncherActivity, settings)
-                            routeBasedOnSettings(settings)
-                        }.onFailure { error ->
-                            Logging.e(TAG, "Failed to fetch settings: ${error.message}")
                             errorMessage = "Failed to load settings: ${error.message}"
                             isLoading = false
                         }
@@ -300,25 +321,6 @@ class LauncherActivity : ComponentActivity() {
         Logging.setActiveActivity(TAG)
     }
     
-    private fun shouldFetchSettingsFromApi(): Boolean {
-        val prefs = getSharedPreferences("settings_cache", Context.MODE_PRIVATE)
-        val lastFetchTime = prefs.getLong(SETTINGS_FETCH_CACHE_KEY, 0)
-        val timeSinceLastFetch = System.currentTimeMillis() - lastFetchTime
-        
-        if (timeSinceLastFetch > SETTINGS_FETCH_CACHE_MS) {
-            Logging.d(TAG, "Last fetch was ${timeSinceLastFetch / 1000} seconds ago - fetching from API")
-            return true
-        } else {
-            Logging.d(TAG, "Last fetch was ${timeSinceLastFetch / 1000} seconds ago - using cache")
-            return false
-        }
-    }
-    
-    private fun updateSettingsFetchTime() {
-        val prefs = getSharedPreferences("settings_cache", Context.MODE_PRIVATE)
-        prefs.edit().putLong(SETTINGS_FETCH_CACHE_KEY, System.currentTimeMillis()).apply()
-        Logging.d(TAG, "Updated settings fetch timestamp")
-    }
 }
 
 @Composable

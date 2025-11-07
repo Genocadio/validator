@@ -122,6 +122,22 @@ class VehicleSettingsManager private constructor(private val context: Context) {
             }
         }
     }
+    
+    /**
+     * Get the last updated timestamp for settings from database
+     * Returns null if no settings exist in database
+     */
+    suspend fun getSettingsLastUpdated(vehicleId: Int): Long? {
+        return withContext(Dispatchers.IO) {
+            try {
+                val entity = settingsDao.getSettings(vehicleId)
+                entity?.lastUpdated
+            } catch (e: Exception) {
+                Logging.e(TAG, "Failed to get settings last updated: ${e.message}", e)
+                null
+            }
+        }
+    }
 
 
     /**

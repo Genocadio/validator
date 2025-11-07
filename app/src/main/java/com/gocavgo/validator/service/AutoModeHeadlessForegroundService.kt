@@ -696,17 +696,41 @@ class AutoModeHeadlessForegroundService : Service() {
     
     /**
      * Save current state to SharedPreferences for recovery after app restart
+     * Includes all state fields with timestamps for detecting stale state
      */
     private fun saveStateToPersistence() {
         try {
+            val currentTime = System.currentTimeMillis()
             val editor = prefs.edit()
             editor.putInt("current_trip_id", currentTrip?.id ?: -1)
             editor.putBoolean("is_navigating", isNavigating.get())
             editor.putString("countdown_text", countdownText)
             editor.putBoolean("is_awaiting_confirmation", isAwaitingConfirmation.get())
-            editor.putLong("state_timestamp", System.currentTimeMillis())
+            editor.putLong("state_timestamp", currentTime)
+            
+            // Add navigation timestamp if navigating
+            if (isNavigating.get()) {
+                editor.putLong("navigation_start_timestamp", currentTime)
+            } else {
+                editor.remove("navigation_start_timestamp")
+            }
+            
+            // Add countdown timestamp if countdown is active
+            if (countdownText.isNotEmpty()) {
+                editor.putLong("countdown_start_timestamp", currentTime)
+            } else {
+                editor.remove("countdown_start_timestamp")
+            }
+            
+            // Add confirmation timestamp if awaiting confirmation
+            if (isAwaitingConfirmation.get()) {
+                editor.putLong("confirmation_start_timestamp", currentTime)
+            } else {
+                editor.remove("confirmation_start_timestamp")
+            }
+            
             editor.apply()
-            Logging.d(TAG, "SERVICE: State saved to persistence")
+            Logging.d(TAG, "SERVICE: State saved to persistence (trip=${currentTrip?.id}, navigating=${isNavigating.get()}, countdown=${countdownText.isNotEmpty()}, confirmation=${isAwaitingConfirmation.get()})")
         } catch (e: Exception) {
             Logging.e(TAG, "SERVICE: Failed to save state to persistence: ${e.message}", e)
         }
@@ -792,7 +816,7 @@ class AutoModeHeadlessForegroundService : Service() {
             countdownJob?.cancel()
             countdownJob = null
             countdownText = ""
-            clearPersistedState()
+            clearPersistedState() // Clear persisted state immediately
             withContext(Dispatchers.Main) {
                 updateNotification("Trip cancelled - Waiting for next trip...")
             }
@@ -811,7 +835,7 @@ class AutoModeHeadlessForegroundService : Service() {
         
         // Save as current trip
         currentTrip = trip
-        saveStateToPersistence() // Persist state change
+        saveStateToPersistence() // Persist state change immediately
         
         Logging.d(TAG, "SERVICE: Processing trip ${trip.id} - will start countdown/navigation automatically based on departure time")
         
@@ -938,6 +962,10 @@ class AutoModeHeadlessForegroundService : Service() {
                 
                 val countdown = "Depart in: %02d:%02d".format(minutes, seconds)
                 countdownText = countdown
+                // Save state periodically during countdown (every 10 seconds to avoid excessive writes)
+                if (remainingMs % 10000 < 1000) {
+                    saveStateToPersistence()
+                }
                 
                 // Final check before updating notification - ensure job is still active and trip is valid
                 if (coroutineContext.isActive && currentTrip?.id == tripId && tripInDb != null) {
@@ -1007,6 +1035,7 @@ class AutoModeHeadlessForegroundService : Service() {
             isAwaitingConfirmation.set(false)
             confirmationTimeoutJob?.cancel()
             cancelConfirmationNotification()
+            saveStateToPersistence() // Persist state change immediately
         }
         
         // Reset navigation started flag to allow route calculation
@@ -1018,7 +1047,7 @@ class AutoModeHeadlessForegroundService : Service() {
         
         isNavigating.set(true)
         currentTrip = trip
-        saveStateToPersistence() // Persist state change
+        saveStateToPersistence() // Persist state change immediately
         
         // Update trip status to IN_PROGRESS when navigation starts
         try {
@@ -1291,7 +1320,26 @@ class AutoModeHeadlessForegroundService : Service() {
                     tripSectionValidator?.processSectionProgress(sectionProgressList, totalSections)
                     
                     // Get next waypoint info
-                    val nextWaypointInfo = getNextWaypointInfo(trip)
+                    var nextWaypointInfo = getNextWaypointInfo(trip)
+                    
+                    // If waypoint info is null but we have route progress, use first section data
+                    if (nextWaypointInfo == null && sectionProgressList.isNotEmpty()) {
+                        val firstSection = sectionProgressList.firstOrNull()
+                        if (firstSection != null) {
+                            val remainingDistance = firstSection.remainingDistanceInMeters?.toDouble() ?: 0.0
+                            if (remainingDistance > 0) {
+                                // Get waypoint name from trip data
+                                val nextWaypoint = trip.waypoints.firstOrNull { !it.is_passed }
+                                val waypointName = if (nextWaypoint != null) {
+                                    nextWaypoint.location.custom_name ?: nextWaypoint.location.google_place_name
+                                } else {
+                                    trip.route.destination.custom_name ?: trip.route.destination.google_place_name
+                                }
+                                nextWaypointInfo = NextWaypointInfo(waypointName, remainingDistance)
+                                Logging.d(TAG, "SERVICE: Using route progress data directly (waypoint progress not available yet)")
+                            }
+                        }
+                    }
                     
                     // Get current speed
                     val speedInKmh = currentSpeedInMetersPerSecond * 3.6
@@ -1311,12 +1359,15 @@ class AutoModeHeadlessForegroundService : Service() {
                     
                     // Format navigation text
                     val navigationText = if (nextWaypointInfo.remainingDistanceInMeters == Double.MAX_VALUE) {
-                        "${nextWaypointInfo.name}"
+                        // Under timer or no distance data - show waypoint name and speed
+                        "${nextWaypointInfo.name} | ${String.format("%.1f", speedInKmh)} km/h"
                     } else {
                         val remainingDistanceKm = nextWaypointInfo.remainingDistanceInMeters / 1000.0
                         if (remainingDistanceKm < 0.01) {
+                            // Very close to waypoint - show just speed
                             "Next: ${String.format("%.1f", speedInKmh)} km/h"
                         } else {
+                            // Normal navigation - show distance and speed
                             "Next: ${String.format("%.1f", remainingDistanceKm)} km | Speed: ${String.format("%.1f", speedInKmh)} km/h"
                         }
                     }
@@ -1341,47 +1392,80 @@ class AutoModeHeadlessForegroundService : Service() {
     
     private fun getNextWaypointInfo(trip: TripResponse): NextWaypointInfo? {
         try {
-            // Check if trip is under timer (departure time not started)
+            // PRIORITY 1: Get waypoint progress from TripSectionValidator (most accurate, real-time data)
+            // This should be available as soon as route progress starts
+            val waypointProgress = tripSectionValidator?.getCurrentWaypointProgress() ?: emptyList()
+            
+            if (waypointProgress.isNotEmpty()) {
+                // We have waypoint progress data - use it (even if departure time hasn't passed)
+                // Find the waypoint with isNext = true
+                val nextWaypoint = waypointProgress.find { it.isNext }
+                if (nextWaypoint != null) {
+                    val cleanName = extractWaypointName(nextWaypoint.waypointName)
+                    val remainingDistance = nextWaypoint.remainingDistanceInMeters
+                    
+                    // If we have valid distance data, use it
+                    if (remainingDistance != null && remainingDistance != Double.MAX_VALUE && remainingDistance > 0) {
+                        return NextWaypointInfo(cleanName, remainingDistance)
+                    }
+                    // If distance is MAX_VALUE or null, check if trip is completed
+                    val allWaypointsPassed = trip.waypoints.all { it.is_passed }
+                    if (allWaypointsPassed) {
+                        // Check destination progress
+                        val destinationProgress = waypointProgress.find { it.waypointName.startsWith("Destination: ") }
+                        if (destinationProgress != null) {
+                            val destDistance = destinationProgress.remainingDistanceInMeters
+                            if (destDistance != null && destDistance > 10.0) {
+                                val cleanDestName = extractWaypointName(destinationProgress.waypointName)
+                                return NextWaypointInfo(cleanDestName, destDistance)
+                            } else {
+                                return null // Trip completed
+                            }
+                        } else {
+                            return null // Trip completed
+                        }
+                    }
+                }
+            }
+            
+            // PRIORITY 2: Check if trip is under timer (departure time not started)
+            // Only use this if we don't have waypoint progress data yet
             val departureTimeMillis = trip.departure_time * 1000
             val currentTime = System.currentTimeMillis()
-            if (currentTime < departureTimeMillis) {
+            if (currentTime < departureTimeMillis && waypointProgress.isEmpty()) {
                 val originName = trip.route.origin.custom_name ?: trip.route.origin.google_place_name
                 return NextWaypointInfo(originName, Double.MAX_VALUE)
             }
             
-            // Check if trip is completed
+            // PRIORITY 3: Check if trip is completed (fallback)
             val allWaypointsPassed = trip.waypoints.all { it.is_passed }
             if (allWaypointsPassed) {
-                val waypointProgress = tripSectionValidator?.getCurrentWaypointProgress() ?: emptyList()
-                val destinationProgress = waypointProgress.find { it.waypointName.startsWith("Destination: ") }
-                if (destinationProgress != null) {
-                    val remainingDistance = destinationProgress.remainingDistanceInMeters
-                    if (remainingDistance == null || remainingDistance <= 10.0) {
-                        return null // Trip completed
+                if (waypointProgress.isNotEmpty()) {
+                    val destinationProgress = waypointProgress.find { it.waypointName.startsWith("Destination: ") }
+                    if (destinationProgress != null) {
+                        val remainingDistance = destinationProgress.remainingDistanceInMeters
+                        if (remainingDistance == null || remainingDistance <= 10.0) {
+                            return null // Trip completed
+                        }
+                        val cleanName = extractWaypointName(destinationProgress.waypointName)
+                        return NextWaypointInfo(cleanName, remainingDistance)
                     }
-                    val cleanName = extractWaypointName(destinationProgress.waypointName)
+                }
+                return null // Trip completed
+            }
+            
+            // If we have waypoint progress but no "next" waypoint, try to get first unpassed waypoint
+            if (waypointProgress.isNotEmpty()) {
+                val firstUnpassed = waypointProgress.firstOrNull()
+                if (firstUnpassed != null) {
+                    val cleanName = extractWaypointName(firstUnpassed.waypointName)
+                    val remainingDistance = firstUnpassed.remainingDistanceInMeters ?: Double.MAX_VALUE
                     return NextWaypointInfo(cleanName, remainingDistance)
-                } else {
-                    return null // Trip completed
                 }
             }
             
-            // Get waypoint progress from TripSectionValidator
-            val waypointProgress = tripSectionValidator?.getCurrentWaypointProgress() ?: emptyList()
-            if (waypointProgress.isEmpty()) {
-                return null
-            }
-            
-            // Find the waypoint with isNext = true
-            val nextWaypoint = waypointProgress.find { it.isNext }
-            if (nextWaypoint == null) {
-                return null
-            }
-            
-            val cleanName = extractWaypointName(nextWaypoint.waypointName)
-            val remainingDistance = nextWaypoint.remainingDistanceInMeters ?: return null
-            
-            return NextWaypointInfo(cleanName, remainingDistance)
+            // No waypoint progress available yet - return null to avoid showing stale data
+            return null
         } catch (e: Exception) {
             Logging.e(TAG, "SERVICE: Error getting next waypoint info: ${e.message}", e)
             return null
@@ -1418,6 +1502,7 @@ class AutoModeHeadlessForegroundService : Service() {
         }
         
         isAwaitingConfirmation.set(true)
+        saveStateToPersistence() // Persist confirmation state immediately
         
         // Format times
         val expectedTime = formatTime(trip.departure_time * 1000)
@@ -1497,6 +1582,7 @@ class AutoModeHeadlessForegroundService : Service() {
         isAwaitingConfirmation.set(false)
         confirmationTimeoutJob?.cancel()
         cancelConfirmationNotification()
+        saveStateToPersistence() // Persist state change immediately
         
         Logging.d(TAG, "SERVICE: User confirmed trip start, initiating navigation")
         startNavigationInternal(confirmTrip)
@@ -1512,6 +1598,7 @@ class AutoModeHeadlessForegroundService : Service() {
         Logging.d(TAG, "SERVICE: User cancelled late trip")
         currentTrip = null
         confirmationTripData = null
+        clearPersistedState() // Clear persisted state immediately
         
         // Return to waiting state
         withContext(Dispatchers.Main) {
@@ -1547,10 +1634,11 @@ class AutoModeHeadlessForegroundService : Service() {
             // Check if navigation is active before clearing state
             val wasNavigating = isNavigating.get()
             
-            // Clear current trip FIRST so listener checks fail immediately
-            currentTrip = null
-            confirmationTripData = null
-            isNavigating.set(false)
+        // Clear current trip FIRST so listener checks fail immediately
+        currentTrip = null
+        confirmationTripData = null
+        isNavigating.set(false)
+        clearPersistedState() // Clear persisted state immediately
             
             // Stop navigation if active (this will clear listeners and reset validator)
             if (wasNavigating) {
@@ -1681,7 +1769,7 @@ class AutoModeHeadlessForegroundService : Service() {
         
         isNavigating.set(false)
         currentTrip = null
-        clearPersistedState() // Clear persisted state
+        clearPersistedState() // Clear persisted state immediately
         
         // Fetch settings on trip completion
         val vehicleId = vehicleSecurityManager.getVehicleId()
