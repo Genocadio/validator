@@ -65,7 +65,7 @@ class NavigationHandler(
 ) {
     private var previousManeuverIndex = -1
     private var lastMapMatchedLocation: MapMatchedLocation? = null
-    private var currentSpeedInMetersPerSecond: Double = 0.0
+    internal var currentSpeedInMetersPerSecond: Double = 0.0
 
     private val timeUtils = TimeUtils()
     private val routingEngine: RoutingEngine

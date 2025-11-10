@@ -17,15 +17,6 @@ import com.gocavgo.validator.MainActivity
 import com.gocavgo.validator.R
 import com.gocavgo.validator.navigator.NavigActivity
 import com.gocavgo.validator.network.NetworkMonitor
-import com.here.sdk.core.Location
-import com.here.sdk.core.LocationListener
-import com.here.sdk.location.LocationAccuracy
-import com.here.sdk.location.LocationEngine
-import com.here.sdk.location.LocationEngineStatus
-import com.here.sdk.location.LocationFeature
-import com.here.sdk.core.engine.SDKNativeEngine
-import kotlinx.coroutines.delay
-import com.here.sdk.location.LocationStatusListener
 import com.gocavgo.validator.database.DatabaseManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -66,164 +57,7 @@ class MqttForegroundService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var networkMonitor: NetworkMonitor? = null
     private val serviceScope = CoroutineScope(Dispatchers.IO)
-    
-    // Location tracking
-    private var locationEngine: LocationEngine? = null
-    private var isLocationTrackingActive = AtomicBoolean(false)
     private var databaseManager: DatabaseManager? = null
-    
-    private val locationListener = LocationListener { location: com.here.sdk.core.Location ->
-        handleLocationUpdate(location)
-    }
-    
-    private val locationStatusListener = object : LocationStatusListener {
-        override fun onStatusChanged(status: LocationEngineStatus) {
-            Log.d(TAG, "🌍 LocationEngine status changed: ${status.name}")
-            when (status) {
-                LocationEngineStatus.ENGINE_STOPPED -> {
-                    isLocationTrackingActive.set(false)
-                    Log.d(TAG, "🌍 Location tracking STOPPED")
-                }
-                LocationEngineStatus.ENGINE_STARTED,
-                LocationEngineStatus.ALREADY_STARTED,
-                LocationEngineStatus.OK -> {
-                    isLocationTrackingActive.set(true)
-                    Log.d(TAG, "🌍 Location tracking STARTED successfully")
-                }
-                else -> {
-                    Log.w(TAG, "🌍 LocationEngine status: ${status.name}")
-                }
-            }
-        }
-        
-        override fun onFeaturesNotAvailable(features: List<LocationFeature>) {
-            features.forEach { feature ->
-                Log.d(TAG, "🌍 Location feature not available: ${feature.name}")
-            }
-        }
-    }
-    
-    private fun handleLocationUpdate(location: com.here.sdk.core.Location) {
-        Log.d(TAG, "🌍 === BACKGROUND LOCATION UPDATE ===")
-        Log.d(TAG, "🌍 Latitude: ${location.coordinates.latitude}")
-        Log.d(TAG, "🌍 Longitude: ${location.coordinates.longitude}")
-        Log.d(TAG, "🌍 Speed: ${location.speedInMetersPerSecond ?: 0.0} m/s")
-        Log.d(TAG, "🌍 Bearing: ${location.bearingInDegrees} degrees")
-        Log.d(TAG, "🌍 Accuracy: ${location.horizontalAccuracyInMeters ?: 0.0} meters")
-        Log.d(TAG, "🌍 Timestamp: ${System.currentTimeMillis()}")
-        Log.d(TAG, "🌍 ==================================")
-        
-        serviceScope.launch {
-            try {
-                // Get vehicle ID from SharedPreferences
-                val prefs = getSharedPreferences("vehicle_prefs", Context.MODE_PRIVATE)
-                val vehicleId = prefs.getLong("vehicle_id", -1L)
-                
-                if (vehicleId > 0) {
-                    databaseManager?.updateVehicleCurrentLocation(
-                        vehicleId = vehicleId.toInt(),
-                        latitude = location.coordinates.latitude,
-                        longitude = location.coordinates.longitude,
-                        speed = location.speedInMetersPerSecond ?: 0.0,
-                        accuracy = location.horizontalAccuracyInMeters ?: 0.0,
-                        bearing = location.bearingInDegrees
-                    )
-                    
-                    Log.d(TAG, "🌍✅ Background location SAVED to VehicleLocationEntity (vehicleId=$vehicleId)")
-                } else {
-                    Log.w(TAG, "🌍❌ Vehicle not registered, skipping location save")
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "🌍❌ Failed to save background location: ${e.message}", e)
-            }
-        }
-    }
-    
-    private fun startBackgroundLocationTracking() {
-        if (isLocationTrackingActive.get()) {
-            Log.d(TAG, "🌍 Background location tracking already active")
-            return
-        }
-        
-        try {
-            // Check if HERE SDK is initialized before starting LocationEngine
-            val sdkNativeEngine = SDKNativeEngine.getSharedInstance()
-            if (sdkNativeEngine == null) {
-                Log.w(TAG, "🌍⚠️ HERE SDK not initialized yet, deferring location tracking")
-                // Schedule to retry after a delay
-                serviceScope.launch {
-                    delay(5000) // Wait 5 seconds for SDK to initialize
-                    if (SDKNativeEngine.getSharedInstance() != null) {
-                        tryStartBackgroundLocationTracking()
-                    } else {
-                        Log.e(TAG, "🌍❌ HERE SDK still not initialized after delay, giving up on location tracking")
-                    }
-                }
-                return
-            }
-            
-            tryStartBackgroundLocationTracking()
-        } catch (e: Exception) {
-            Log.e(TAG, "🌍❌ Failed to start background location tracking: ${e.message}", e)
-        }
-    }
-    
-    private fun tryStartBackgroundLocationTracking() {
-        try {
-            if (locationEngine == null) {
-                locationEngine = LocationEngine()
-                Log.d(TAG, "🌍 LocationEngine created")
-            }
-            
-            locationEngine?.addLocationStatusListener(locationStatusListener)
-            locationEngine?.addLocationListener(locationListener)
-            locationEngine?.confirmHEREPrivacyNoticeInclusion()
-            
-            // Use BEST_AVAILABLE for background tracking
-            val status = locationEngine?.start(LocationAccuracy.BEST_AVAILABLE)
-            Log.d(TAG, "🌍 Background location tracking start status: ${status}")
-            Log.d(TAG, "🌍 Using BEST_AVAILABLE accuracy")
-        } catch (e: Exception) {
-            Log.e(TAG, "🌍❌ Failed to start location tracking: ${e.message}", e)
-        }
-    }
-    
-    private fun stopBackgroundLocationTracking() {
-        try {
-            Log.d(TAG, "🌍 Stopping background location tracking...")
-            Log.d(TAG, "🌍 Location tracking active: ${isLocationTrackingActive.get()}")
-            Log.d(TAG, "🌍 Location engine: ${locationEngine != null}")
-            
-            // Remove listeners first
-            locationEngine?.let { engine ->
-                try {
-                    engine.removeLocationListener(locationListener)
-                    Log.d(TAG, "🌍 Removed location listener")
-                } catch (e: Exception) {
-                    Log.e(TAG, "🌍❌ Error removing location listener: ${e.message}", e)
-                }
-                
-                try {
-                    engine.removeLocationStatusListener(locationStatusListener)
-                    Log.d(TAG, "🌍 Removed location status listener")
-                } catch (e: Exception) {
-                    Log.e(TAG, "🌍❌ Error removing location status listener: ${e.message}", e)
-                }
-                
-                try {
-                    engine.stop()
-                    Log.d(TAG, "🌍 Location engine stopped")
-                } catch (e: Exception) {
-                    Log.e(TAG, "🌍❌ Error stopping location engine: ${e.message}", e)
-                }
-            }
-            
-            isLocationTrackingActive.set(false)
-            Log.d(TAG, "🌍 Background location tracking stopped successfully")
-        } catch (e: Exception) {
-            Log.e(TAG, "🌍❌ Failed to stop background location tracking: ${e.message}", e)
-        }
-    }
     
     inner class MqttServiceBinder : Binder() {
         fun getService(): MqttForegroundService = this@MqttForegroundService
@@ -254,9 +88,6 @@ class MqttForegroundService : Service() {
         // Initialize network monitoring for background operation
         initializeNetworkMonitoring()
         
-        // Start background location tracking
-        startBackgroundLocationTracking()
-        
         INSTANCE = this
         isServiceRunning.set(true)
     }
@@ -284,22 +115,6 @@ class MqttForegroundService : Service() {
     
     override fun onDestroy() {
         Log.d(TAG, "=== MqttForegroundService DESTROY STARTED ===")
-        
-        // Stop background location tracking FIRST
-        // This is critical to prevent service connection leaks
-        try {
-            Log.d(TAG, "Stopping background location tracking before service destruction...")
-            stopBackgroundLocationTracking()
-            
-            // Wait a bit for LocationEngine to fully stop
-            Thread.sleep(200)
-            
-            // Null out the reference
-            locationEngine = null
-            Log.d(TAG, "LocationEngine stopped and nulled")
-        } catch (e: Exception) {
-            Log.e(TAG, "Error stopping LocationEngine during service destruction: ${e.message}", e)
-        }
         
         // Release wake lock
         releaseWakeLock()
@@ -358,15 +173,6 @@ class MqttForegroundService : Service() {
      */
     private fun stopForegroundService() {
         Log.d(TAG, "Stopping foreground service")
-        
-        // Stop background location tracking FIRST
-        try {
-            stopBackgroundLocationTracking()
-            locationEngine = null
-            Log.d(TAG, "Background location tracking stopped")
-        } catch (e: Exception) {
-            Log.e(TAG, "Error stopping location tracking: ${e.message}", e)
-        }
         
         // Release wake lock
         releaseWakeLock()

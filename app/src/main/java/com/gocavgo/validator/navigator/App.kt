@@ -626,7 +626,19 @@ class App(
 
 //        Log.d("App", "Starting navigation automatically...")
         messageView.updateText("Starting navigation...")
-        navigationExample.startNavigation(route, isSimulated, isCameraTrackingEnabled)
+        
+        // Detect headless mode (when mapView is null) and use appropriate navigation method
+        if (mapView == null) {
+            // Headless mode: use Navigator instead of VisualNavigator
+            Log.d("App", "Starting headless navigation (mapView is null)")
+            navigationExample.startHeadlessNavigation(route, isSimulated)
+            
+            // Setup headless listeners after navigation starts
+            setupHeadlessListeners()
+        } else {
+            // Visual mode: use VisualNavigator
+            navigationExample.startNavigation(route, isSimulated, isCameraTrackingEnabled)
+        }
         
         // Notify that route is calculated
         onRouteCalculatedCallback?.invoke()
@@ -776,6 +788,28 @@ class App(
             }
         } catch (e: Exception) {
             Log.e("App", "Failed to initialize MQTT service in TripSectionValidator: ${e.message}", e)
+        }
+    }
+    
+    /**
+     * Setup headless navigation listeners
+     */
+    private fun setupHeadlessListeners() {
+        try {
+            val handler = navigationExample.getNavigationHandler()
+            val dynamicEngine = navigationExample.getDynamicRoutingEngine()
+            
+            if (dynamicEngine != null) {
+                handler.setupHeadlessListeners(
+                    navigationExample.getHeadlessNavigator(),
+                    dynamicEngine
+                )
+                Log.d("App", "Headless navigation listeners set up successfully")
+            } else {
+                Log.w("App", "DynamicRoutingEngine is null, cannot set up headless listeners")
+            }
+        } catch (e: Exception) {
+            Log.e("App", "Failed to set up headless listeners: ${e.message}", e)
         }
     }
 

@@ -26,6 +26,12 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.gocavgo.validator.dataclass.SavePlaceResponse
+import com.gocavgo.validator.booking.BookingNfcManager
+import com.gocavgo.validator.ui.components.NetworkStatusIndicator
+import com.gocavgo.validator.ui.components.TripConfirmationData
+import com.gocavgo.validator.ui.components.TripConfirmationDialog
+import com.gocavgo.validator.ui.components.WaypointProgressOverlay
+import com.gocavgo.validator.navigator.TripSectionValidator
 
 /**
  * Custom numeric keyboard composable for ticket verification
@@ -732,3 +738,351 @@ data class AvailableDestination(
     val order: Int,
     val isFinalDestination: Boolean
 )
+
+/**
+ * Main screen composable for Auto Mode Headless Activity
+ */
+@Composable
+fun AutoModeHeadlessScreen(
+    messageText: String,
+    countdownText: String,
+    currentInput: String,
+    isValidationInProgress: Boolean,
+    nextWaypointName: String,
+    pickupCount: Int,
+    dropoffCount: Int,
+    onDigitClick: (String) -> Unit,
+    onDeleteClick: () -> Unit,
+    onClearClick: () -> Unit,
+    showBookingSuccess: Boolean,
+    showBookingFailure: Boolean,
+    showValidationSuccess: Boolean,
+    showValidationFailure: Boolean,
+    showMqttNotification: Boolean,
+    bookingSuccessData: BookingNfcManager.BookingSuccessData,
+    bookingFailureMessage: String,
+    validationSuccessTicket: String,
+    validationFailureMessage: String,
+    mqttNotificationData: BookingNfcManager.MqttNotificationData,
+    showPassengerListDialog: Boolean,
+    passengerListType: BookingNfcManager.PassengerListType,
+    passengerList: List<com.gocavgo.validator.service.BookingService.PassengerInfo>,
+    onPickupCountClick: () -> Unit,
+    onDropoffCountClick: () -> Unit,
+    onPassengerClick: (String) -> Unit,
+    onPassengerListDismiss: () -> Unit,
+    onBookingSuccessDismiss: () -> Unit,
+    onBookingFailureDismiss: () -> Unit,
+    onValidationSuccessDismiss: () -> Unit,
+    onValidationFailureDismiss: () -> Unit,
+    onMqttNotificationDismiss: () -> Unit,
+    showDestinationSelectionDialog: Boolean,
+    availableDestinations: List<AvailableDestination>,
+    currentLocationForDialog: String,
+    onDestinationSelected: (AvailableDestination) -> Unit,
+    onDestinationSelectionDismiss: () -> Unit,
+    showConfirmationDialog: Boolean,
+    confirmationTripData: TripConfirmationData?,
+    onConfirmStart: () -> Unit,
+    onConfirmCancel: () -> Unit,
+    isConnected: Boolean,
+    connectionType: String,
+    isMetered: Boolean,
+    showMapDownloadDialog: Boolean,
+    mapDownloadProgress: Int,
+    mapDownloadTotalSize: Int,
+    mapDownloadMessage: String,
+    mapDownloadStatus: String,
+    onMapDownloadCancel: () -> Unit,
+    showWaypointOverlay: Boolean = false,
+    waypointProgressData: List<TripSectionValidator.WaypointProgressInfo> = emptyList(),
+    onToggleWaypointOverlay: () -> Unit = {},
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(Color.White),
+        contentAlignment = Alignment.Center
+    ) {
+        // Network status indicator overlay
+        NetworkStatusIndicator(
+            isConnected = isConnected,
+            connectionType = connectionType,
+            isMetered = isMetered
+        )
+
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+            modifier = Modifier.padding(16.dp)
+        ) {
+            // Countdown display (if active)
+            if (countdownText.isNotEmpty()) {
+                Text(
+                    text = countdownText,
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
+            }
+
+            // Passenger count display
+            if (pickupCount > 0 || dropoffCount > 0 || nextWaypointName.isNotEmpty()) {
+                Row(
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                ) {
+                    Card(
+                        modifier = Modifier
+                            .padding(end = 8.dp)
+                            .clickable(enabled = pickupCount > 0) { onPickupCountClick() },
+                        colors = CardDefaults.cardColors(
+                            containerColor = Color(0xFF4CAF50).copy(alpha = 0.2f)
+                        )
+                    ) {
+                        Text(
+                            text = "+$pickupCount",
+                            fontSize = 28.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF4CAF50),
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                        )
+                    }
+
+                    Card(
+                        modifier = Modifier
+                            .padding(start = 8.dp)
+                            .clickable(enabled = dropoffCount > 0) { onDropoffCountClick() },
+                        colors = CardDefaults.cardColors(
+                            containerColor = Color(0xFFF44336).copy(alpha = 0.2f)
+                        )
+                    ) {
+                        Text(
+                            text = "-$dropoffCount",
+                            fontSize = 28.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFFF44336),
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                        )
+                    }
+                }
+            }
+
+            // Next waypoint name - hidden only when waiting for trip
+            if (nextWaypointName.isNotEmpty() && !messageText.contains("Waiting for trip")) {
+                Text(
+                    text = nextWaypointName,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color.Black,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
+            }
+
+            Text(
+                text = messageText,
+                fontSize = 16.sp,
+                color = Color.Gray,
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .padding(bottom = 32.dp)
+                    .then(
+                        if (messageText.contains("Next:") || messageText.contains("km/h")) {
+                            Modifier.clickable { onToggleWaypointOverlay() }
+                        } else {
+                            Modifier
+                        }
+                    )
+            )
+
+            // Ticket input display
+            TicketInputDisplay(
+                currentInput = currentInput,
+                isValidationInProgress = isValidationInProgress,
+                modifier = Modifier.padding(bottom = 16.dp)
+            )
+
+            // Numeric keyboard
+            NumericKeyboard(
+                onDigitClick = onDigitClick,
+                onDeleteClick = onDeleteClick,
+                onClearClick = onClearClick,
+                modifier = Modifier.padding(bottom = 16.dp)
+            )
+        }
+
+        // Success/Failure prompts (reuse from HeadlessNavigActivity)
+        BookingSuccessPrompt(
+            ticketNumber = bookingSuccessData.ticketNumber,
+            fromLocation = bookingSuccessData.fromLocation,
+            toLocation = bookingSuccessData.toLocation,
+            price = bookingSuccessData.price,
+            isVisible = showBookingSuccess,
+            onDismiss = onBookingSuccessDismiss
+        )
+
+        BookingFailurePrompt(
+            errorMessage = bookingFailureMessage,
+            isVisible = showBookingFailure,
+            onDismiss = onBookingFailureDismiss
+        )
+
+        ValidationSuccessPrompt(
+            ticketNumber = validationSuccessTicket,
+            isVisible = showValidationSuccess,
+            onDismiss = onValidationSuccessDismiss
+        )
+
+        ValidationFailurePrompt(
+            errorMessage = validationFailureMessage,
+            isVisible = showValidationFailure,
+            onDismiss = onValidationFailureDismiss
+        )
+
+        MqttBookingNotification(
+            passengerName = mqttNotificationData.passengerName,
+            pickup = mqttNotificationData.pickup,
+            dropoff = mqttNotificationData.dropoff,
+            numTickets = mqttNotificationData.numTickets,
+            isPaid = mqttNotificationData.isPaid,
+            isVisible = showMqttNotification,
+            onDismiss = onMqttNotificationDismiss
+        )
+
+        PassengerListDialog(
+            passengers = passengerList,
+            listType = when(passengerListType) {
+                BookingNfcManager.PassengerListType.PICKUP -> HeadlessNavigActivity.PassengerListType.PICKUP
+                BookingNfcManager.PassengerListType.DROPOFF -> HeadlessNavigActivity.PassengerListType.DROPOFF
+            },
+            isVisible = showPassengerListDialog,
+            onPassengerClick = onPassengerClick,
+            onDismiss = onPassengerListDismiss
+        )
+
+        // Destination selection dialog (conditionally rendered)
+        if (showDestinationSelectionDialog) {
+            DestinationSelectionDialog(
+                destinations = availableDestinations,
+                currentLocation = currentLocationForDialog,
+                onDestinationSelected = onDestinationSelected,
+                onDismiss = onDestinationSelectionDismiss
+            )
+        }
+
+        // Trip confirmation dialog (conditionally rendered)
+        if (showConfirmationDialog && confirmationTripData != null) {
+            TripConfirmationDialog(
+                data = confirmationTripData,
+                onConfirm = onConfirmStart,
+                onCancel = onConfirmCancel
+            )
+        }
+
+        // Map download dialog overlay
+        if (showMapDownloadDialog) {
+            MapDownloadDialog(
+                progress = mapDownloadProgress,
+                totalSize = mapDownloadTotalSize,
+                message = mapDownloadMessage,
+                status = mapDownloadStatus,
+                onCancel = onMapDownloadCancel
+            )
+        }
+        
+        // Waypoint progress overlay (floating top center with close button for AutoMode)
+        // Rendered last to ensure it appears on top of all other content
+        if (showWaypointOverlay) {
+            WaypointProgressOverlay(
+                progressData = waypointProgressData,
+                onClose = onToggleWaypointOverlay,
+                isTopCenter = true
+            )
+        }
+    }
+}
+
+/**
+ * Dialog for displaying map download progress
+ */
+@Composable
+fun MapDownloadDialog(
+    progress: Int,
+    totalSize: Int,
+    message: String,
+    status: String,
+    onCancel: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = { /* Dialog cannot be dismissed during download */ },
+        title = {
+            Text(
+                text = "Downloading Map Data",
+                style = MaterialTheme.typography.headlineSmall
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                // Status message
+                Text(
+                    text = status.ifEmpty { "Preparing download..." },
+                    style = MaterialTheme.typography.bodyMedium
+                )
+
+                // Progress bar
+                LinearProgressIndicator(
+                    progress = { progress / 100f },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = ProgressIndicatorDefaults.linearColor,
+                    trackColor = ProgressIndicatorDefaults.linearTrackColor,
+                    strokeCap = ProgressIndicatorDefaults.LinearStrokeCap,
+                )
+
+                // Progress text
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "$progress%",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    if (totalSize > 0) {
+                        Text(
+                            text = "${totalSize}MB",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+
+                // Detailed message
+                if (message.isNotEmpty()) {
+                    Text(
+                        text = message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                Text(
+                    text = "This may take several minutes depending on your internet connection. The app will work normally once complete.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onCancel) {
+                Text("Cancel")
+            }
+        }
+    )
+}

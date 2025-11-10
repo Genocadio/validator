@@ -19,9 +19,8 @@ import com.gocavgo.validator.R
 import com.gocavgo.validator.dataclass.TripResponse
 import com.gocavgo.validator.database.DatabaseManager
 import com.gocavgo.validator.navigator.AutoModeHeadlessActivity
+import com.gocavgo.validator.navigator.App
 import com.gocavgo.validator.navigator.MessageViewUpdater
-import com.gocavgo.validator.navigator.NavigationExample
-import com.gocavgo.validator.navigator.RouteCalculator
 import com.gocavgo.validator.navigator.TripSectionValidator
 import com.gocavgo.validator.receiver.TripConfirmationReceiver
 import com.gocavgo.validator.security.VehicleSecurityManager
@@ -29,6 +28,8 @@ import com.gocavgo.validator.security.VehicleSettingsManager
 import com.gocavgo.validator.sync.SyncCoordinator
 import com.gocavgo.validator.util.Logging
 import com.gocavgo.validator.util.TripDataConverter
+import com.gocavgo.validator.trip.ActiveTripListener
+import com.gocavgo.validator.trip.ActiveTripCallback
 import com.here.sdk.core.engine.AuthenticationMode
 import com.here.sdk.core.engine.SDKNativeEngine
 import com.here.sdk.core.engine.SDKOptions
@@ -80,31 +81,50 @@ class AutoModeHeadlessForegroundService : Service() {
      */
     fun getCurrentNavigationTextForSync(): String = notificationMessage
     
+    /**
+     * Sync cache from Activity to Service
+     * Called by Activity to share cache state so Service can use it when Activity goes to background
+     */
+    fun syncCacheFromActivity(distance: Double?, time: Long?, waypointName: String?) {
+        lastKnownDistance = distance
+        lastKnownTime = time
+        lastKnownWaypointName = waypointName
+        Logging.d(TAG, "SERVICE: Cache synced from Activity: distance=$distance, time=$time, waypoint=$waypointName")
+    }
+    
+    /**
+     * Get cache state for sync
+     * Returns current cache values
+     */
+    fun getCacheForSync(): Triple<Double?, Long?, String?> {
+        return Triple(lastKnownDistance, lastKnownTime, lastKnownWaypointName)
+    }
+    
     // Service state (separate from Activity state)
     private var currentTrip: TripResponse? = null
     private val isNavigating = AtomicBoolean(false)
-    private var countdownJob: Job? = null
     private var countdownText = ""
-    private val isAwaitingConfirmation = AtomicBoolean(false)
-    private var confirmationTimeoutJob: Job? = null
-    private var confirmationTripData: TripConfirmationData? = null
     
-    // HERE SDK components for service
-    private var navigationExample: NavigationExample? = null
+    // Route calculation state (track if route is calculated)
+    private var isRouteCalculated = false
+    
+    // Cache for notification persistence (prevent flickering when data is temporarily null)
+    private var lastKnownDistance: Double? = null
+    private var lastKnownTime: Long? = null
+    private var lastKnownWaypointName: String? = null
+    
+    // Active trip listener
+    private var activeTripListener: ActiveTripListener? = null
+    
+    // HERE SDK components for service - using App class like HeadlessNavigActivity
+    private var app: App? = null
     private var messageViewUpdater: MessageViewUpdater? = null
-    private var routeCalculator: RouteCalculator? = null
-    private var currentRoute: Route? = null
-    private var currentUserLocation: Location? = null
-    private var isNavigationStarted = false
-    private var currentSpeedInMetersPerSecond: Double = 0.0
-    private var tripSectionValidator: TripSectionValidator? = null
     
     // Database and managers
     private lateinit var databaseManager: DatabaseManager
     private lateinit var vehicleSecurityManager: VehicleSecurityManager
     private lateinit var settingsManager: VehicleSettingsManager
     private var mqttService: MqttService? = null
-    private var isMqttServiceCallbackRegistered = false
     private var currentSettings: com.gocavgo.validator.dataclass.VehicleSettings? = null
     
     // Background coroutines
@@ -137,7 +157,6 @@ class AutoModeHeadlessForegroundService : Service() {
         fun getCurrentTrip(): TripResponse? = currentTrip
         fun isNavigating(): Boolean = isNavigating.get()
         fun getCountdownText(): String = countdownText
-        fun isAwaitingConfirmation(): Boolean = isAwaitingConfirmation.get()
     }
     
     override fun onBind(intent: Intent?): IBinder {
@@ -159,10 +178,115 @@ class AutoModeHeadlessForegroundService : Service() {
         // Initialize MQTT service if not already initialized
         initializeMqttService()
         
-        // Register Service MQTT callback immediately (not in coroutine) to ensure it's set before Activity
-        registerMqttTripCallback()
+        // Initialize ActiveTripListener
+        activeTripListener = ActiveTripListener(this)
+        activeTripListener?.start(
+            scope = serviceScope,
+            callback = object : ActiveTripCallback {
+                override fun onActiveTripFound(trip: TripResponse) {
+                    Logging.d(TAG, "Active trip found: ${trip.id}")
+                    serviceScope.launch {
+                        handleTripReceived(trip)
+                    }
+                }
+                
+                override fun onActiveTripChanged(newTrip: TripResponse, oldTrip: TripResponse?) {
+                    Logging.d(TAG, "Active trip changed: ${oldTrip?.id} → ${newTrip.id}")
+                    serviceScope.launch {
+                        handleTripReceived(newTrip)
+                    }
+                }
+                
+                override fun onTripCancelled(tripId: Int) {
+                    Logging.d(TAG, "Trip cancelled: $tripId")
+                    serviceScope.launch {
+                        handleTripCancellation(tripId)
+                    }
+                }
+                
+                override fun onError(error: String) {
+                    Logging.e(TAG, "Error from ActiveTripListener: $error")
+                    updateNotification("Error: $error")
+                }
+                
+                override fun onCountdownTextUpdate(countdownText: String) {
+                    this@AutoModeHeadlessForegroundService.countdownText = countdownText
+                    if (countdownText.isNotEmpty()) {
+                        val trip = currentTrip
+                        if (trip != null) {
+                            handler.post {
+                                updateNotification("$countdownText - ${trip.route.origin.google_place_name}")
+                            }
+                        }
+                    }
+                }
+                
+                override fun onCountdownComplete(trip: TripResponse) {
+                    Logging.d(TAG, "Countdown complete, starting navigation")
+                    countdownText = ""
+                    handler.post {
+                        updateNotification("Starting navigation...")
+                    }
+                    serviceScope.launch {
+                        startNavigationInternal(trip)
+                    }
+                }
+                
+                override fun onNavigationStartRequested(trip: TripResponse, allowResume: Boolean) {
+                    Logging.d(TAG, "Navigation start requested (allowResume=$allowResume)")
+                    if (trip.status.equals("IN_PROGRESS", ignoreCase = true)) {
+                        val origin = trip.route.origin.custom_name ?: trip.route.origin.google_place_name
+                        val destination = trip.route.destination.custom_name ?: trip.route.destination.google_place_name
+                        handler.post {
+                            updateNotification("Resuming navigation: $origin → $destination")
+                        }
+                    } else {
+                        val origin = trip.route.origin.custom_name ?: trip.route.origin.google_place_name
+                        val destination = trip.route.destination.custom_name ?: trip.route.destination.google_place_name
+                        handler.post {
+                            updateNotification("Starting navigation: $origin → $destination")
+                        }
+                    }
+                    serviceScope.launch {
+                        startNavigationInternal(trip, allowResume)
+                    }
+                }
+                
+                override fun onTripScheduled(trip: TripResponse, departureTimeMillis: Long) {
+                    Logging.d(TAG, "Trip scheduled: ${trip.id}, departure time: $departureTimeMillis")
+                    // Format departure time for display
+                    val departureDate = java.util.Date(departureTimeMillis)
+                    val timeFormat = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
+                    val formattedTime = timeFormat.format(departureDate)
+                    
+                    val origin = trip.route.origin.custom_name ?: trip.route.origin.google_place_name
+                    val departureMessage = "Trip will depart at $formattedTime - $origin"
+                    
+                    handler.post {
+                        updateNotification(departureMessage)
+                    }
+                }
+                
+                override fun onSettingsSynced(settings: com.gocavgo.validator.dataclass.VehicleSettings, isNavigating: Boolean): Boolean {
+                    // Settings sync not implemented in service
+                    return false
+                }
+                
+                override fun onTripStateVerificationNeeded(trip: TripResponse) {
+                    // Not used in service
+                }
+                
+                override fun onImmediateBackendFetchComplete(trip: TripResponse?) {
+                    // Not used in service
+                }
+                
+                override fun onSilentBackendFetchFoundTrip(trip: TripResponse) {
+                    // Not used in service
+                }
+            }
+        )
         
-        // Set up connection state monitoring to re-register callback on reconnect
+        // Set up connection state monitoring (for MQTT health checks)
         setupMqttConnectionMonitoring()
         
         // Fetch settings
@@ -263,9 +387,11 @@ class AutoModeHeadlessForegroundService : Service() {
         
         Logging.d(TAG, "=== AutoModeHeadlessForegroundService DESTROY STARTED ===")
         
-        // Cancel all jobs
-        countdownJob?.cancel()
-        confirmationTimeoutJob?.cancel()
+        // Stop ActiveTripListener
+        activeTripListener?.stop()
+        activeTripListener = null
+        
+        // Cancel periodic fetch job
         periodicFetchJob?.cancel()
         
         // Unregister receivers
@@ -291,58 +417,9 @@ class AutoModeHeadlessForegroundService : Service() {
         try {
             Logging.d(TAG, "Stopping navigation and location services...")
             
-            navigationExample?.let { navExample ->
-                // Set shutdown flag to prevent starting services during cleanup
-                navExample.setShuttingDown(true)
-                
-                // Clear Navigator listeners FIRST to prevent accessing disposed Navigator
-                try {
-                    val navigator = navExample.getHeadlessNavigator()
-                    navigator.routeProgressListener = null
-                    navigator.navigableLocationListener = null
-                    navigator.routeDeviationListener = null
-                    navigator.milestoneStatusListener = null
-                    navigator.destinationReachedListener = null
-                    Logging.d(TAG, "SERVICE: Navigator listeners cleared")
-                } catch (e: Exception) {
-                    Logging.e(TAG, "SERVICE: Error clearing Navigator listeners: ${e.message}", e)
-                }
-                
-                // Stop headless navigation
-                try {
-                    navExample.stopHeadlessNavigation()
-                    Logging.d(TAG, "SERVICE: Headless navigation stopped")
-                } catch (e: Exception) {
-                    Logging.e(TAG, "SERVICE: Error stopping headless navigation: ${e.message}", e)
-                }
-                
-                // Stop location services
-                try {
-                    navExample.stopLocating()
-                    Logging.d(TAG, "SERVICE: Location services stopped")
-                } catch (e: Exception) {
-                    Logging.e(TAG, "SERVICE: Error stopping location services: ${e.message}", e)
-                }
-                
-                // Force disconnect HERE SDK location services to prevent leaks
-                try {
-                    navExample.getHerePositioningProvider().forceDisconnect()
-                    Logging.d(TAG, "SERVICE: HERE SDK location services force disconnected")
-                } catch (e: Exception) {
-                    Logging.e(TAG, "SERVICE: Error force disconnecting location services: ${e.message}", e)
-                }
-                
-                // Stop rendering (if any)
-                try {
-                    navExample.stopRendering()
-                    Logging.d(TAG, "SERVICE: Rendering stopped")
-                } catch (e: Exception) {
-                    Logging.e(TAG, "SERVICE: Error stopping rendering: ${e.message}", e)
-                }
-            }
-            
-            // Reset trip section validator
-            tripSectionValidator?.reset()
+            // Use App.detach() to clean up (same as HeadlessNavigActivity)
+            app?.detach()
+            app = null
             
             Logging.d(TAG, "SERVICE: Navigation and location services stopped")
         } catch (e: Exception) {
@@ -482,55 +559,41 @@ class AutoModeHeadlessForegroundService : Service() {
             // Verify SDK is initialized
             val sdkNativeEngine = SDKNativeEngine.getSharedInstance()
             if (sdkNativeEngine == null) {
-                Logging.e(TAG, "HERE SDK not initialized, cannot create NavigationExample")
+                Logging.e(TAG, "HERE SDK not initialized, cannot create App")
                 return
-            }
-            
-            // Initialize trip section validator
-            tripSectionValidator = TripSectionValidator(applicationContext)
-            
-            // Initialize MQTT service in trip section validator
-            mqttService?.let {
-                tripSectionValidator?.initializeMqttService(it)
-                Logging.d(TAG, "MQTT service initialized in trip section validator")
-            }
-            
-            // Set callback for trip deletion - when trip is not found in DB, transition to waiting state
-            tripSectionValidator?.setTripDeletedCallback { deletedTripId ->
-                Logging.w(TAG, "SERVICE: Trip $deletedTripId deleted during navigation - transitioning to waiting state")
-                serviceScope.launch {
-                    handleTripDeletedDuringNavigation(deletedTripId)
-                }
             }
             
             // Create MessageViewUpdater for navigation updates
             messageViewUpdater = MessageViewUpdater()
             
-            // Create RouteCalculator for route calculation
-            routeCalculator = RouteCalculator()
+            // Create App with null mapView for headless mode (same as HeadlessNavigActivity)
+            app = App(applicationContext, null, messageViewUpdater!!, null)
+            Logging.d(TAG, "App instance created in service (headless mode): $app")
             
-            // Create NavigationExample with Application context (separate from Activity instance)
-            navigationExample = NavigationExample(
-                context = applicationContext,
-                mapView = null, // Headless mode - no map view
-                messageView = messageViewUpdater!!,
-                tripSectionValidator = tripSectionValidator!!
-            )
+            // Set up route calculation callback
+            app?.setOnRouteCalculatedCallback {
+                isRouteCalculated = true
+                Logging.d(TAG, "SERVICE: Route calculation status updated: true")
+                // Start progress updates only after route is calculated
+                if (isNavigating.get()) {
+                    startNavigationProgressUpdates()
+                }
+            }
             
-            // Start location provider
-            navigationExample?.startLocationProvider()
-            
-            // Setup headless listeners
-            navigationExample?.let { navExample ->
-                val navigator = navExample.getHeadlessNavigator()
-                val dynamicRoutingEngine = navExample.getDynamicRoutingEngine()
-                val navigationHandler = navExample.getNavigationHandler()
+            // Set up MQTT service and callbacks on App's TripSectionValidator
+            app?.getTripSectionValidator()?.let { validator: TripSectionValidator ->
+                // Initialize MQTT service in trip section validator
+                mqttService?.let { mqtt: com.gocavgo.validator.service.MqttService ->
+                    validator.initializeMqttService(mqtt)
+                    Logging.d(TAG, "MQTT service initialized in App's trip section validator")
+                }
                 
-                if (dynamicRoutingEngine != null) {
-                    navigationHandler.setupHeadlessListeners(navigator, dynamicRoutingEngine)
-                    Logging.d(TAG, "NavigationExample initialized successfully with headless listeners")
-                } else {
-                    Logging.e(TAG, "DynamicRoutingEngine is null, cannot setup headless listeners")
+                // Set callback for trip deletion - when trip is not found in DB, transition to waiting state
+                validator.setTripDeletedCallback { deletedTripId: Int ->
+                    Logging.w(TAG, "SERVICE: Trip $deletedTripId deleted during navigation - transitioning to waiting state")
+                    serviceScope.launch {
+                        handleTripDeletedDuringNavigation(deletedTripId)
+                    }
                 }
             }
             
@@ -540,129 +603,13 @@ class AutoModeHeadlessForegroundService : Service() {
         }
     }
     
-    private fun registerMqttTripCallback() {
-        if (mqttService == null) {
-            Logging.w(TAG, "MQTT service is null, cannot register callback")
-            return
-        }
-        
-        // Prevent duplicate registration
-        if (isMqttServiceCallbackRegistered) {
-            Logging.d(TAG, "Service MQTT trip callback already registered, skipping")
-            return
-        }
-        
-        Logging.d(TAG, "=== REGISTERING SERVICE MQTT TRIP CALLBACK ===")
-        isMqttServiceCallbackRegistered = true
-        
-        mqttService?.setServiceTripEventCallback { tripEvent ->
-            // Router will automatically delegate to Activity if active, so we only get here if Activity is inactive
-            // But double-check anyway to be safe
-            if (isActivityActive()) {
-                Logging.d(TAG, "Activity is active, this callback should not be called (router should have delegated to Activity)")
-                return@setServiceTripEventCallback
-            }
-            
-            Logging.d(TAG, "=== MQTT TRIP EVENT RECEIVED IN SERVICE ===")
-            Logging.d(TAG, "Event: ${tripEvent.event}")
-            Logging.d(TAG, "Trip ID: ${tripEvent.data.id}")
-            
-            // Check if trip is for this vehicle
-            val vehicleId = vehicleSecurityManager.getVehicleId()
-            if (tripEvent.data.vehicle_id != vehicleId.toInt()) {
-                Logging.d(TAG, "Trip is for different vehicle, ignoring")
-                return@setServiceTripEventCallback
-            }
-            
-            // Handle cancellation event
-            if (tripEvent.event == "TRIP_CANCELLED") {
-                Logging.d(TAG, "Processing TRIP_CANCELLED event in service")
-                serviceScope.launch {
-                    handleTripCancellation(tripEvent.data.id)
-                }
-                return@setServiceTripEventCallback
-            }
-            
-            // Check if this is the same trip we're already handling
-            val tripId = tripEvent.data.id
-            val isSameTrip = currentTrip?.id == tripId
-            
-            // Ignore new trips if already navigating a different trip
-            if (isNavigating.get() && !isSameTrip) {
-                Logging.w(TAG, "Navigation active for different trip, ignoring new trip")
-                return@setServiceTripEventCallback
-            }
-            
-            serviceScope.launch {
-                try {
-                    val trip = convertBackendTripToAndroid(tripEvent.data)
-                    
-                    // MQTT service saves trip to database asynchronously, so there might be a small delay
-                    // Wait a bit for database save to complete, then verify
-                    var tripInDb: TripResponse? = null
-                    var retries = 0
-                    while (tripInDb == null && retries < 5) {
-                        delay(100) // Wait 100ms between retries
-                        tripInDb = try {
-                            databaseManager.getTripById(trip.id)
-                        } catch (e: Exception) {
-                            null
-                        }
-                        retries++
-                    }
-                    
-                    // If trip still not in DB after retries, it might have been cancelled or save failed
-                    // But we'll still process it since MQTT is authoritative
-                    if (tripInDb == null) {
-                        Logging.w(TAG, "SERVICE: Trip ${trip.id} not in database after retries, but processing from MQTT data (MQTT is authoritative)")
-                    }
-                    
-                    // If trip is IN_PROGRESS and we're awaiting confirmation, clear confirmation immediately
-                    if (trip.status.equals("IN_PROGRESS", ignoreCase = true) && isAwaitingConfirmation.get()) {
-                        Logging.d(TAG, "MQTT trip is IN_PROGRESS - clearing confirmation state")
-                        isAwaitingConfirmation.set(false)
-                        confirmationTimeoutJob?.cancel()
-                        cancelConfirmationNotification()
-                    }
-                    
-                    // Process trip - this will start countdown/navigation automatically
-                    handleTripReceived(trip)
-                    
-                    // Record MQTT update for sync coordination
-                    SyncCoordinator.recordMqttUpdate(this@AutoModeHeadlessForegroundService)
-                    Logging.d(TAG, "Recorded MQTT update for sync coordination")
-                } catch (e: Exception) {
-                    Logging.e(TAG, "Error handling MQTT trip: ${e.message}", e)
-                }
-            }
-        }
-        
-        Logging.d(TAG, "=== SERVICE MQTT TRIP CALLBACK REGISTERED ===")
-        Logging.d(TAG, "Service callback will handle trips when Activity is inactive")
-    }
-    
     /**
-     * Verify MQTT callback is registered, re-register if missing
+     * Verify MQTT callback is registered (now handled by ActiveTripListener)
      */
     private fun verifyMqttCallbackRegistration() {
-        // Check if callback is still registered by checking if we can get MQTT service
-        // Note: We can't directly check if callback is set, so we re-register to be safe
-        if (mqttService == null) {
-            Logging.w(TAG, "MQTT service is null, attempting to initialize...")
-            initializeMqttService()
-        }
-        
-        if (mqttService != null) {
-            // Only register if not already registered
-            if (!isMqttServiceCallbackRegistered) {
-                Logging.d(TAG, "Verifying MQTT callback registration...")
-                registerMqttTripCallback()
-            } else {
-                Logging.d(TAG, "MQTT callback already registered, skipping verification")
-            }
-        } else {
-            Logging.e(TAG, "MQTT service is still null after initialization attempt")
-        }
+        // MQTT trip callbacks are now handled by ActiveTripListener
+        // This method is kept for compatibility but does nothing
+        Logging.d(TAG, "MQTT trip callbacks are handled by ActiveTripListener")
     }
     
     /**
@@ -754,16 +701,10 @@ class AutoModeHeadlessForegroundService : Service() {
                     
                     when (intent?.action) {
                         TripConfirmationReceiver.ACTION_START_CONFIRMED -> {
-                            Logging.d(TAG, "Processing START_CONFIRMED action in service")
-                            serviceScope.launch {
-                                handleConfirmStart()
-                            }
+                            Logging.d(TAG, "Processing START_CONFIRMED action in service (confirmation removed, ignoring)")
                         }
                         TripConfirmationReceiver.ACTION_CANCEL_CONFIRMED -> {
-                            Logging.d(TAG, "Processing CANCEL_CONFIRMED action in service")
-                            serviceScope.launch {
-                                handleConfirmCancel()
-                            }
+                            Logging.d(TAG, "Processing CANCEL_CONFIRMED action in service (confirmation removed, ignoring)")
                         }
                     }
                 }
@@ -834,7 +775,6 @@ class AutoModeHeadlessForegroundService : Service() {
             editor.putInt("current_trip_id", currentTrip?.id ?: -1)
             editor.putBoolean("is_navigating", isNavigating.get())
             editor.putString("countdown_text", countdownText)
-            editor.putBoolean("is_awaiting_confirmation", isAwaitingConfirmation.get())
             editor.putLong("state_timestamp", currentTime)
             
             // Add navigation timestamp if navigating
@@ -851,15 +791,8 @@ class AutoModeHeadlessForegroundService : Service() {
                 editor.remove("countdown_start_timestamp")
             }
             
-            // Add confirmation timestamp if awaiting confirmation
-            if (isAwaitingConfirmation.get()) {
-                editor.putLong("confirmation_start_timestamp", currentTime)
-            } else {
-                editor.remove("confirmation_start_timestamp")
-            }
-            
             editor.apply()
-            Logging.d(TAG, "SERVICE: State saved to persistence (trip=${currentTrip?.id}, navigating=${isNavigating.get()}, countdown=${countdownText.isNotEmpty()}, confirmation=${isAwaitingConfirmation.get()})")
+            Logging.d(TAG, "SERVICE: State saved to persistence (trip=${currentTrip?.id}, navigating=${isNavigating.get()}, countdown=${countdownText.isNotEmpty()})")
         } catch (e: Exception) {
             Logging.e(TAG, "SERVICE: Failed to save state to persistence: ${e.message}", e)
         }
@@ -873,7 +806,6 @@ class AutoModeHeadlessForegroundService : Service() {
             val tripId = prefs.getInt("current_trip_id", -1)
             val wasNavigating = prefs.getBoolean("is_navigating", false)
             val savedCountdownText = prefs.getString("countdown_text", "") ?: ""
-            val wasAwaitingConfirmation = prefs.getBoolean("is_awaiting_confirmation", false)
             val stateTimestamp = prefs.getLong("state_timestamp", 0)
             
             // Only restore if state is recent (within last hour)
@@ -894,7 +826,6 @@ class AutoModeHeadlessForegroundService : Service() {
                     currentTrip = trip
                     isNavigating.set(wasNavigating)
                     countdownText = savedCountdownText
-                    isAwaitingConfirmation.set(wasAwaitingConfirmation)
                     
                     Logging.d(TAG, "SERVICE: State restored from persistence")
                 } else {
@@ -927,223 +858,15 @@ class AutoModeHeadlessForegroundService : Service() {
         Logging.d(TAG, "Status: ${trip.status}")
         Logging.d(TAG, "Departure time: ${trip.departure_time}")
         
-        // For MQTT trips, we process them directly (MQTT is authoritative)
-        // Only verify database if this was from periodic fetch (not MQTT)
-        // For now, we'll process all trips but do a quick check
-        val tripInDb = try {
-            databaseManager.getTripById(trip.id)
-        } catch (e: Exception) {
-            Logging.e(TAG, "SERVICE: Error checking trip in database: ${e.message}", e)
-            null
-        }
-        
-        // If trip not in DB and it's not our current trip, it might have been cancelled
-        // But if it's a new trip (different ID), process it anyway (might be from MQTT before DB save)
-        if (tripInDb == null && currentTrip?.id == trip.id) {
-            Logging.w(TAG, "SERVICE: Trip ${trip.id} not found in database and matches current trip (likely cancelled), ignoring")
-            currentTrip = null
-            countdownJob?.cancel()
-            countdownJob = null
-            countdownText = ""
-            clearPersistedState() // Clear persisted state immediately
-            withContext(Dispatchers.Main) {
-                updateNotification("Trip cancelled - Waiting for next trip...")
-            }
-            return
-        }
-        
-        // If trip not in DB but it's a new trip, log warning but continue (MQTT might be faster than DB)
-        // MQTT is authoritative - process the trip even if not in DB yet
-        if (tripInDb == null && currentTrip?.id != trip.id) {
-            Logging.w(TAG, "SERVICE: Trip ${trip.id} not in database yet (might be from MQTT before DB save), processing anyway - MQTT is authoritative")
-        }
-        
-        // Cancel any existing countdown
-        countdownJob?.cancel()
-        countdownJob = null // Clear reference
-        
         // Save as current trip
         currentTrip = trip
         saveStateToPersistence() // Persist state change immediately
         
-        Logging.d(TAG, "SERVICE: Processing trip ${trip.id} - will start countdown/navigation automatically based on departure time")
-        
-        // CHECK FOR IN_PROGRESS STATUS FIRST - Skip all confirmation logic
-        if (trip.status.equals("IN_PROGRESS", ignoreCase = true)) {
-            Logging.d(TAG, "=== SERVICE: TRIP IS IN_PROGRESS - RESUMING NAVIGATION ===")
-            val passedCount = trip.waypoints.count { it.is_passed }
-            val totalCount = trip.waypoints.size
-            Logging.d(TAG, "Waypoints passed: $passedCount / $totalCount")
-            
-            val origin = trip.route.origin.custom_name ?: trip.route.origin.google_place_name
-            val destination = trip.route.destination.custom_name ?: trip.route.destination.google_place_name
-            updateNotification("Resuming navigation: $origin → $destination")
-            
-            // Reset navigation flags to allow resuming
-            isNavigationStarted = false
-            currentRoute = null
-            
-            // Start navigation immediately, bypassing all countdown/confirmation logic
-            startNavigationInternal(trip, allowResume = true)
-            return
-        }
-        
-        // Original logic for SCHEDULED trips
-        val departureTimeMillis = trip.departure_time * 1000
-        val currentTime = System.currentTimeMillis()
-        val twoMinutesInMs = 2 * 60 * 1000
-        
-        Logging.d(TAG, "Departure: $departureTimeMillis")
-        Logging.d(TAG, "Current time: $currentTime")
-        
-        if (currentTime >= departureTimeMillis) {
-            // LATE: Actual departure time has passed - show confirmation
-            if (trip.status.equals("IN_PROGRESS", ignoreCase = true)) {
-                Logging.d(TAG, "Trip is IN_PROGRESS even though departure time passed - starting navigation directly")
-                startNavigationInternal(trip, allowResume = true)
-                return
-            }
-            
-            val delayMinutes = ((currentTime - departureTimeMillis) / (60 * 1000)).toInt()
-            Logging.d(TAG, "Trip is late by $delayMinutes minutes, requesting confirmation")
-            showTripConfirmation(trip, delayMinutes)
-        } else {
-            val timeUntilDeparture = departureTimeMillis - currentTime
-            
-            if (timeUntilDeparture <= twoMinutesInMs) {
-                // Within 2-minute window - start immediately (no countdown)
-                Logging.d(TAG, "Within 2-minute window (${timeUntilDeparture}ms until departure), starting navigation immediately")
-                val origin = trip.route.origin.custom_name ?: trip.route.origin.google_place_name
-                val destination = trip.route.destination.custom_name ?: trip.route.destination.google_place_name
-                updateNotification("Starting navigation: $origin → $destination")
-                startNavigationInternal(trip)
-            } else {
-                // More than 2 minutes before departure - schedule countdown
-                val delayUntilCountdownStart = timeUntilDeparture - twoMinutesInMs
-                Logging.d(TAG, "Scheduling countdown to start in ${delayUntilCountdownStart}ms (${delayUntilCountdownStart / 60000} minutes)")
-                val origin = trip.route.origin.custom_name ?: trip.route.origin.google_place_name
-                val destination = trip.route.destination.custom_name ?: trip.route.destination.google_place_name
-                updateNotification("Trip scheduled: $origin → $destination")
-                
-                startCountdown(delayUntilCountdownStart, trip)
-            }
-        }
-    }
-    
-    private fun startCountdown(delayMs: Long, trip: TripResponse) {
-        countdownJob?.cancel()
-        countdownJob = null // Clear reference immediately
-        
-        // Store trip ID for validation
-        val tripId = trip.id
-        
-        Logging.d(TAG, "SERVICE: Starting countdown for trip $tripId, delay: ${delayMs}ms")
-        
-        countdownJob = serviceScope.launch {
-            var remainingMs = delayMs
-            
-            while (remainingMs > 0 && coroutineContext.isActive) {
-                // FIRST: Check if job was cancelled (highest priority check)
-                if (!coroutineContext.isActive) {
-                    Logging.d(TAG, "SERVICE: Countdown job cancelled, stopping immediately")
-                    countdownText = ""
-                    break
-                }
-                
-                // SECOND: Check if trip is still valid (not cancelled and still current trip)
-                // Check BEFORE any delay to catch cancellation immediately
-                val currentTripId = currentTrip?.id
-                if (currentTripId != tripId) {
-                    Logging.d(TAG, "SERVICE: Trip $tripId is no longer current (current: $currentTripId), stopping countdown immediately")
-                    countdownText = ""
-                    withContext(Dispatchers.Main) {
-                        updateNotification("Auto Mode: Waiting for trip...")
-                    }
-                    break
-                }
-                
-                // Verify trip still exists in database (might have been cancelled)
-                val tripInDb = try {
-                    databaseManager.getTripById(tripId)
-                } catch (e: Exception) {
-                    null
-                }
-                
-                if (tripInDb == null) {
-                    Logging.d(TAG, "SERVICE: Trip $tripId no longer exists in database (cancelled), stopping countdown")
-                    countdownText = ""
-                    currentTrip = null
-                    withContext(Dispatchers.Main) {
-                        updateNotification("Trip cancelled - Waiting for next trip...")
-                    }
-                    break
-                }
-                
-                val minutes = TimeUnit.MILLISECONDS.toMinutes(remainingMs)
-                val seconds = TimeUnit.MILLISECONDS.toSeconds(remainingMs) % 60
-                
-                // Check cancellation again before updating UI (after delay might have completed)
-                if (!coroutineContext.isActive) {
-                    Logging.d(TAG, "SERVICE: Countdown job cancelled during delay, stopping")
-                    countdownText = ""
-                    break
-                }
-                
-                val countdown = "Depart in: %02d:%02d".format(minutes, seconds)
-                countdownText = countdown
-                // Save state periodically during countdown (every 10 seconds to avoid excessive writes)
-                if (remainingMs % 10000 < 1000) {
-                    saveStateToPersistence()
-                }
-                
-                // Final check before updating notification - ensure job is still active and trip is valid
-                if (coroutineContext.isActive && currentTrip?.id == tripId && tripInDb != null) {
-                    withContext(Dispatchers.Main) {
-                        // Double-check cancellation hasn't happened during context switch
-                        if (coroutineContext.isActive && currentTrip?.id == tripId) {
-                            updateNotification("$countdown - ${trip.route.origin.google_place_name}")
-                        }
-                    }
-                } else {
-                    Logging.d(TAG, "SERVICE: Trip invalid or job cancelled during countdown update, stopping")
-                    countdownText = ""
-                    break
-                }
-                
-                // Use ensureActive() before delay to check cancellation immediately
-                ensureActive()
-                delay(1000)
-                remainingMs -= 1000
-            }
-            
-            // Countdown complete - launch navigation only if trip is still valid
-            if (coroutineContext.isActive && remainingMs <= 0) {
-                // Final validation before starting navigation
-                val finalTripId = currentTrip?.id
-                val finalTripInDb = try {
-                    databaseManager.getTripById(tripId)
-                } catch (e: Exception) {
-                    null
-                }
-                
-                if (finalTripId == tripId && finalTripInDb != null) {
-                    withContext(Dispatchers.Main) {
-                        Logging.d(TAG, "SERVICE: Countdown complete, launching navigation")
-                        countdownText = ""
-                        updateNotification("Starting navigation...")
-                        startNavigationInternal(trip)
-                    }
-                } else {
-                    Logging.d(TAG, "SERVICE: Countdown completed but trip $tripId is no longer valid (current: $finalTripId, in DB: ${finalTripInDb != null}), not starting navigation")
-                    countdownText = ""
-                    withContext(Dispatchers.Main) {
-                        updateNotification("Auto Mode: Waiting for trip...")
-                    }
-                }
-            } else {
-                countdownText = ""
-            }
-        }
+        // Sync with Activity (Service takes precedence when Activity is paused, but keep Activity in sync)
+        // Note: State syncing is now handled by ActiveTripListener
+
+        // Countdown and navigation start logic is now handled by ActiveTripListener
+        // This method just updates local state and syncs with Activity
     }
     
     private suspend fun startNavigationInternal(trip: TripResponse, allowResume: Boolean = false) {
@@ -1153,27 +876,22 @@ class AutoModeHeadlessForegroundService : Service() {
             return
         }
         
+        // Clear cache when navigation starts
+        lastKnownDistance = null
+        lastKnownTime = null
+        lastKnownWaypointName = null
+        
+        // Reset route calculation status
+        isRouteCalculated = false
+        
         Logging.d(TAG, "=== SERVICE: STARTING NAVIGATION INTERNALLY ===")
         Logging.d(TAG, "Trip ID: ${trip.id}")
         Logging.d(TAG, "Allow resume: $allowResume")
         Logging.d(TAG, "IsNavigating BEFORE: ${isNavigating.get()}")
         Logging.d(TAG, "HasActiveRoute BEFORE: ${hasActiveRouteForSync()}")
         
-        // Clear any confirmation state (safety check)
-        if (isAwaitingConfirmation.get()) {
-            Logging.d(TAG, "SERVICE: Clearing confirmation state before starting navigation")
-            isAwaitingConfirmation.set(false)
-            confirmationTimeoutJob?.cancel()
-            cancelConfirmationNotification()
-            saveStateToPersistence() // Persist state change immediately
-        }
         
-        // Reset navigation started flag to allow route calculation
-        if (allowResume) {
-            Logging.d(TAG, "SERVICE: Resuming navigation - resetting navigation flags")
-            isNavigationStarted = false
-            currentRoute = null
-        }
+        // App handles navigation state internally - no need to track flags
         
         // Set isNavigating flag EARLY - before route calculation starts
         // This ensures Activity can detect navigation state even during route calculation
@@ -1237,409 +955,156 @@ class AutoModeHeadlessForegroundService : Service() {
         // Get simulate value from settings
         val simulate = currentSettings?.simulate ?: false
         
-        if (!simulate) {
-            startLocationEngineAndWaitForLocation(trip)
+        // Use App.updateTripData() to start navigation (same as HeadlessNavigActivity)
+        // App handles route calculation and navigation start internally
+        if (app != null) {
+            Logging.d(TAG, "SERVICE: Starting navigation via App.updateTripData()")
+            withContext(Dispatchers.Main) {
+                app?.updateTripData(newTripResponse = trip, isSimulated = simulate)
+            }
+            
+            // Progress updates will start automatically when route calculation callback is invoked
+            // (see initializeNavigationComponents() route calculation callback)
         } else {
-            isNavigationStarted = true
-            calculateRouteAndStartNavigation(trip)
+            Logging.e(TAG, "SERVICE: App not initialized, cannot start navigation")
         }
     }
     
-    private suspend fun startLocationEngineAndWaitForLocation(trip: TripResponse) {
-        navigationExample?.let { navExample ->
-            Logging.d(TAG, "SERVICE: Waiting for location from NavigationExample location provider...")
-            
-            // Check if we already have a valid location
-            if (navExample.hasValidLocation()) {
-                currentUserLocation = navExample.getLastKnownLocation()
-                if (currentUserLocation != null) {
-                    Logging.d(TAG, "SERVICE: Location already available, starting navigation...")
-                    isNavigationStarted = true
-                    calculateRouteAndStartNavigation(trip)
-                    return
-                }
-            }
-            
-            // Wait for location with timeout
-            var attempts = 0
-            val maxAttempts = 10 // 10 seconds total
-            
-            while (attempts < maxAttempts) {
-                delay(1000)
-                attempts++
-                
-                if (navExample.hasValidLocation()) {
-                    currentUserLocation = navExample.getLastKnownLocation()
-                    if (currentUserLocation != null && !isNavigationStarted) {
-                        Logging.d(TAG, "SERVICE: Location acquired after $attempts attempts, starting navigation...")
-                        isNavigationStarted = true
-                        calculateRouteAndStartNavigation(trip)
-                        return
-                    }
-                }
-            }
-            
-            Logging.w(TAG, "SERVICE: No location received within timeout, falling back to simulated navigation")
-            isNavigationStarted = true
-            calculateRouteAndStartNavigation(trip)
-        } ?: run {
-            Logging.w(TAG, "SERVICE: NavigationExample not available, falling back to simulated navigation")
-            isNavigationStarted = true
-            calculateRouteAndStartNavigation(trip)
-        }
+    // Route calculation and navigation start code removed - App handles this internally
+    // App.updateTripData() handles:
+    // - Location waiting (if not simulated)
+    // - Route calculation
+    // - Waypoint creation
+    // - Navigation start
+    // - Listener setup
+    
+    // Get progress from App's TripSectionValidator (same as HeadlessNavigActivity)
+    private fun getProgressFromApp(): List<TripSectionValidator.WaypointProgressInfo> {
+        return app?.getTripSectionValidator()?.getCurrentWaypointProgress() ?: emptyList()
     }
     
-    private suspend fun calculateRouteAndStartNavigation(trip: TripResponse) {
-        // Get simulate value from settings
-        val simulate = currentSettings?.simulate ?: false
+    // Update navigation display using App's progress data (same pattern as HeadlessNavigActivity)
+    private fun updateNavigationDisplay() {
+        if (!isNavigating.get()) return
         
-        var origin: Waypoint? = null
-        if (currentUserLocation == null && !simulate) {
-            Logging.w(TAG, "SERVICE: No current user location available, falling back to simulated navigation")
-        } else {
-            currentUserLocation?.let {
-                origin = Waypoint(it.coordinates)
-                origin!!.headingInDegrees = it.bearingInDegrees
-            }
-        }
-        val waypoints = createWaypointsFromTrip(trip, origin)
+        val waypointProgress = getProgressFromApp()
+        val trip = currentTrip ?: return
         
-        Logging.d(TAG, "SERVICE: Calculating route")
-        Logging.d(TAG, "Trip ID: ${trip.id}")
-        Logging.d(TAG, "Waypoints: ${waypoints.size}")
+        Logging.d(TAG, "SERVICE: updateNavigationDisplay: waypointProgress size=${waypointProgress.size}")
         
-        // Use RouteCalculator for route calculation
-        withContext(Dispatchers.Main) {
-            routeCalculator?.calculateRouteWithWaypoints(waypoints) { routingError, routes ->
-                if (routingError == null && routes != null && routes.isNotEmpty()) {
-                    val route = routes[0]
-                    currentRoute = route
-                    
-                    Logging.d(TAG, "SERVICE: Route calculated successfully")
-                    serviceScope.launch {
-                        startHeadlessGuidance(route, trip)
-                    }
-                } else {
-                    Logging.e(TAG, "SERVICE: Route calculation failed: ${routingError?.name}")
-                }
-            }
-        }
-    }
-    
-    private fun createWaypointsFromTrip(trip: TripResponse, origin: Waypoint? = null): List<Waypoint> {
-        val waypoints = mutableListOf<Waypoint>()
+        // Get next waypoint info from progress - try multiple strategies
+        var nextWaypoint = waypointProgress.find { it.isNext }
         
-        if (origin != null) {
-            waypoints.add(origin)
+        // Fallback: if no waypoint has isNext=true, find first unpassed waypoint
+        if (nextWaypoint == null && waypointProgress.isNotEmpty()) {
+            nextWaypoint = waypointProgress.firstOrNull { !it.isPassed }
+            Logging.d(TAG, "SERVICE: No waypoint with isNext=true, using first unpassed waypoint: ${nextWaypoint?.waypointName}")
         }
         
-        // Add origin if not using device location
-        if (origin == null) {
-            val useSavedLocation = trip.status.equals("IN_PROGRESS", ignoreCase = true) &&
-                                   trip.vehicle.current_latitude != null &&
-                                   trip.vehicle.current_longitude != null
+        val speedInKmh = getCurrentSpeedFromApp() * 3.6
+        
+        if (nextWaypoint != null) {
+            val name = extractWaypointName(nextWaypoint.waypointName)
             
-            val originWaypoint = if (useSavedLocation) {
-                Logging.d(TAG, "SERVICE: Using saved vehicle location for IN_PROGRESS trip (simulated mode)")
-                Waypoint(
-                    GeoCoordinates(
-                        trip.vehicle.current_latitude!!,
-                        trip.vehicle.current_longitude!!
-                    )
-                )
+            // Update cache when valid data is available
+            val distance = nextWaypoint.remainingDistanceInMeters
+            val time = nextWaypoint.remainingTimeInSeconds
+            
+            if (distance != null && distance != Double.MAX_VALUE && distance > 0) {
+                lastKnownDistance = distance
+                lastKnownTime = time
+                lastKnownWaypointName = name
+            } else if (lastKnownWaypointName == name && lastKnownDistance != null) {
+                // Use cached values if waypoint hasn't changed
+                Logging.d(TAG, "SERVICE: Using cached distance for waypoint: $name")
             } else {
-                Waypoint(
-                    GeoCoordinates(
-                        trip.route.origin.latitude,
-                        trip.route.origin.longitude
-                    )
-                )
+                // Waypoint changed or no cache - clear cache
+                lastKnownDistance = null
+                lastKnownTime = null
+                lastKnownWaypointName = null
             }
             
-            originWaypoint.apply {
-                type = WaypointType.STOPOVER
+            // Use current data if available, otherwise use cached data
+            val displayDistance = distance ?: lastKnownDistance
+            val displayTime = time ?: lastKnownTime
+            
+            Logging.d(TAG, "SERVICE: Next waypoint: $name, distance=$displayDistance, isNext=${nextWaypoint.isNext}")
+            
+            // Format navigation text - use displayDistance (current or cached)
+            val navigationText = if (displayDistance != null && displayDistance != Double.MAX_VALUE && displayDistance > 0) {
+                val distanceKm = displayDistance / 1000.0
+                if (distanceKm < 0.01) {
+                    "Speed: ${String.format("%.1f", speedInKmh)} km/h"
+                } else {
+                    "Next: ${String.format("%.1f", distanceKm)} km | Speed: ${String.format("%.1f", speedInKmh)} km/h"
+                }
+            } else {
+                // Distance not available yet - show only speed
+                "Speed: ${String.format("%.1f", speedInKmh)} km/h"
             }
-            waypoints.add(originWaypoint)
+            
+            // Only update notification if Activity is NOT active
+            // When Activity is active, Activity will update notification
+            if (!isActivityActive()) {
+                handler.post {
+                    updateNotification(navigationText)
+                }
+            } else {
+                Logging.d(TAG, "SERVICE: Activity is active, skipping notification update (Activity will update)")
+            }
+        } else {
+            // No waypoint data available - show only speed
+            val navigationText = "Speed: ${String.format("%.1f", speedInKmh)} km/h"
+            
+            // Only update notification if Activity is NOT active
+            if (!isActivityActive()) {
+                handler.post {
+                    updateNotification(navigationText)
+                }
+            } else {
+                Logging.d(TAG, "SERVICE: Activity is active, skipping notification update (Activity will update)")
+            }
+            Logging.d(TAG, "SERVICE: No waypoint progress data available, showing speed only")
         }
         
-        // Filter out passed waypoints - only include unpassed waypoints
-        val sortedWaypoints = trip.waypoints.sortedBy { it.order }
-        val unpassedWaypoints = sortedWaypoints.filter { !it.is_passed }
-        
-        // Add only unpassed intermediate waypoints
-        unpassedWaypoints.forEach { tripWaypoint ->
-            val waypoint = Waypoint(
-                GeoCoordinates(
-                    tripWaypoint.location.latitude,
-                    tripWaypoint.location.longitude
-                )
-            ).apply {
-                type = WaypointType.STOPOVER
-            }
-            waypoints.add(waypoint)
-        }
-        
-        // Add destination
-        val destination = Waypoint(
-            GeoCoordinates(
-                trip.route.destination.latitude,
-                trip.route.destination.longitude
-            )
-        ).apply {
-            type = WaypointType.STOPOVER
-        }
-        waypoints.add(destination)
-        
-        return waypoints
-    }
-    
-    private suspend fun startHeadlessGuidance(route: Route, trip: TripResponse) {
-        navigationExample?.let { navExample ->
-            // Verify route sections with trip section validator
-            val skippedCount = trip.waypoints.count { it.is_passed }
+        // Check for completion - only if route is calculated and we have waypoint progress data
+        if (isRouteCalculated && waypointProgress.isNotEmpty()) {
+            val allWaypointsPassed = trip.waypoints.all { it.is_passed }
+            val lastProgress = waypointProgress.lastOrNull()
+            val remainingDistance = lastProgress?.remainingDistanceInMeters ?: 0.0
             
-            val simulate = currentSettings?.simulate ?: false
-            
-            val isVerified = tripSectionValidator?.verifyRouteSections(
-                tripResponse = trip,
-                route = route,
-                isSimulated = simulate,
-                deviceLocation = currentUserLocation?.coordinates,
-                skippedWaypointCount = skippedCount
-            ) ?: false
-            Logging.d(TAG, "SERVICE: Route verification result: $isVerified")
-            
-            // Start headless navigation using NavigationExample
-            navExample.startHeadlessNavigation(route, simulate)
-            
-            // Setup navigation listeners for service
-            val navigator = navExample.getHeadlessNavigator()
-            
-            // Wrap navigable location listener to update currentSpeedInMetersPerSecond
-            val originalNavigableLocationListener = navigator.navigableLocationListener
-            navigator.navigableLocationListener = NavigableLocationListener { currentNavigableLocation ->
-                // Call original listener if it exists
-                originalNavigableLocationListener?.let { listener ->
-                    listener.onNavigableLocationUpdated(currentNavigableLocation)
-                }
-                
-                // Update current speed for navigation display
-                try {
-                    val speed = currentNavigableLocation.originalLocation.speedInMetersPerSecond ?: 0.0
-                    currentSpeedInMetersPerSecond = speed
-                } catch (e: Exception) {
-                    Logging.e(TAG, "SERVICE: Error updating speed: ${e.message}", e)
-                }
-            }
-            
-            // Wrap destination reached listener
-            val originalDestinationReachedListener = navigator.destinationReachedListener
-            navigator.destinationReachedListener = DestinationReachedListener {
-                // Call original listener if it exists
-                originalDestinationReachedListener?.let {
-                    it.onDestinationReached()
-                }
-                
-                // Immediately stop navigation and update notification to prevent further updates
+            if (allWaypointsPassed && remainingDistance <= 10.0) {
                 isNavigating.set(false)
                 handler.post {
                     updateNotification("Auto Mode: Waiting for trip...")
                 }
-                
-                // Handle navigation complete
                 serviceScope.launch {
                     onNavigationComplete()
                 }
             }
-            
-            // Wrap route progress listener
-            val originalRouteProgressListener = navigator.routeProgressListener
-            // Capture trip ID for validation
-            val tripIdForListener = trip.id
-            navigator.routeProgressListener = RouteProgressListener { routeProgress ->
-                // FIRST: Check if trip is still valid before processing anything
-                if (currentTrip?.id != tripIdForListener) {
-                    Logging.d(TAG, "SERVICE: Trip $tripIdForListener no longer current (current: ${currentTrip?.id}), ignoring route progress update")
-                    return@RouteProgressListener
-                }
-                
-                // SECOND: Check if navigation is still active
-                if (!isNavigating.get()) {
-                    Logging.d(TAG, "SERVICE: Navigation no longer active, ignoring route progress update")
-                    return@RouteProgressListener
-                }
-                
-                // Call original listener if it exists
-                originalRouteProgressListener?.let { listener ->
-                    listener.onRouteProgressUpdated(routeProgress)
-                }
-                
-                // Process section progress
-                try {
-                    val sectionProgressList = routeProgress.sectionProgress
-                    val totalSections = sectionProgressList.size
-                    tripSectionValidator?.processSectionProgress(sectionProgressList, totalSections)
-                    
-                    // Get next waypoint info
-                    var nextWaypointInfo = getNextWaypointInfo(trip)
-                    
-                    // If waypoint info is null but we have route progress, use first section data
-                    if (nextWaypointInfo == null && sectionProgressList.isNotEmpty()) {
-                        val firstSection = sectionProgressList.firstOrNull()
-                        if (firstSection != null) {
-                            val remainingDistance = firstSection.remainingDistanceInMeters?.toDouble() ?: 0.0
-                            if (remainingDistance > 0) {
-                                // Get waypoint name from trip data
-                                val nextWaypoint = trip.waypoints.firstOrNull { !it.is_passed }
-                                val waypointName = if (nextWaypoint != null) {
-                                    nextWaypoint.location.custom_name ?: nextWaypoint.location.google_place_name
-                                } else {
-                                    trip.route.destination.custom_name ?: trip.route.destination.google_place_name
-                                }
-                                nextWaypointInfo = NextWaypointInfo(waypointName, remainingDistance)
-                                Logging.d(TAG, "SERVICE: Using route progress data directly (waypoint progress not available yet)")
-                            }
-                        }
-                    }
-                    
-                    // Get current speed
-                    val speedInKmh = currentSpeedInMetersPerSecond * 3.6
-                    
-                    // Check if trip is completed
-                    val allWaypointsPassed = trip.waypoints.all { it.is_passed }
-                    val lastSection = sectionProgressList.lastOrNull()
-                    val remainingDistanceToDestination = lastSection?.remainingDistanceInMeters?.toDouble() ?: 0.0
-                    
-                    if (nextWaypointInfo == null || (allWaypointsPassed && remainingDistanceToDestination <= 10.0)) {
-                        Logging.d(TAG, "SERVICE: Trip completed - remaining distance: ${remainingDistanceToDestination}m")
-                        
-                        // Immediately stop navigation and update notification to prevent further updates
-                        isNavigating.set(false)
-                        handler.post {
-                            updateNotification("Auto Mode: Waiting for trip...")
-                        }
-                        
-                        serviceScope.launch {
-                            onNavigationComplete()
-                        }
-                        return@RouteProgressListener
-                    }
-                    
-                    // Format navigation text
-                    val navigationText = if (nextWaypointInfo.remainingDistanceInMeters == Double.MAX_VALUE) {
-                        // Under timer or no distance data - show waypoint name and speed
-                        "${nextWaypointInfo.name} | ${String.format("%.1f", speedInKmh)} km/h"
-                    } else {
-                        val remainingDistanceKm = nextWaypointInfo.remainingDistanceInMeters / 1000.0
-                        if (remainingDistanceKm < 0.01) {
-                            // Very close to waypoint - show just speed
-                            "Next: ${String.format("%.1f", speedInKmh)} km/h"
-                        } else {
-                            // Normal navigation - show distance and speed
-                            "Next: ${String.format("%.1f", remainingDistanceKm)} km | Speed: ${String.format("%.1f", speedInKmh)} km/h"
-                        }
-                    }
-                    
-                    // Update notification
-                    handler.post {
-                        updateNotification(navigationText)
-                    }
-                } catch (e: Exception) {
-                    Logging.e(TAG, "SERVICE: Error extracting navigation info: ${e.message}", e)
+        } else if (!isRouteCalculated && waypointProgress.isEmpty()) {
+            // Route not calculated yet - show calculating message
+            if (!isActivityActive()) {
+                handler.post {
+                    updateNotification("Calculating route...")
                 }
             }
-            
-            // Update current route reference
-            currentRoute = route
-            
-            // Don't set notification here - RouteProgressListener will update it with navigation info
-            // (distance, speed, waypoint name) as soon as route progress starts
-            Logging.d(TAG, "SERVICE: Navigation started - RouteProgressListener will update notification with navigation info")
         }
     }
     
-    private fun getNextWaypointInfo(trip: TripResponse): NextWaypointInfo? {
-        try {
-            // PRIORITY 1: Get waypoint progress from TripSectionValidator (most accurate, real-time data)
-            // This should be available as soon as route progress starts
-            val waypointProgress = tripSectionValidator?.getCurrentWaypointProgress() ?: emptyList()
-            
-            if (waypointProgress.isNotEmpty()) {
-                // We have waypoint progress data - use it (even if departure time hasn't passed)
-                // Find the waypoint with isNext = true
-                val nextWaypoint = waypointProgress.find { it.isNext }
-                if (nextWaypoint != null) {
-                    val cleanName = extractWaypointName(nextWaypoint.waypointName)
-                    val remainingDistance = nextWaypoint.remainingDistanceInMeters
-                    
-                    // If we have valid distance data, use it
-                    if (remainingDistance != null && remainingDistance != Double.MAX_VALUE && remainingDistance > 0) {
-                        return NextWaypointInfo(cleanName, remainingDistance)
-                    }
-                    // If distance is MAX_VALUE or null, check if trip is completed
-                    val allWaypointsPassed = trip.waypoints.all { it.is_passed }
-                    if (allWaypointsPassed) {
-                        // Check destination progress
-                        val destinationProgress = waypointProgress.find { it.waypointName.startsWith("Destination: ") }
-                        if (destinationProgress != null) {
-                            val destDistance = destinationProgress.remainingDistanceInMeters
-                            if (destDistance != null && destDistance > 10.0) {
-                                val cleanDestName = extractWaypointName(destinationProgress.waypointName)
-                                return NextWaypointInfo(cleanDestName, destDistance)
-                            } else {
-                                return null // Trip completed
-                            }
-                        } else {
-                            return null // Trip completed
-                        }
-                    }
-                }
+    // Get current speed from App's NavigationExample (same as HeadlessNavigActivity)
+    private fun getCurrentSpeedFromApp(): Double {
+        return app?.getNavigationExample()?.let { navExample: com.gocavgo.validator.navigator.NavigationExample ->
+            try {
+                // Get speed from NavigationHandler's continuously updated speed (updated via NavigableLocationListener)
+                navExample.getNavigationHandler()?.currentSpeedInMetersPerSecond ?: 0.0
+            } catch (e: Exception) {
+                0.0
             }
-            
-            // PRIORITY 2: Check if trip is under timer (departure time not started)
-            // Only use this if we don't have waypoint progress data yet
-            val departureTimeMillis = trip.departure_time * 1000
-            val currentTime = System.currentTimeMillis()
-            if (currentTime < departureTimeMillis && waypointProgress.isEmpty()) {
-                val originName = trip.route.origin.custom_name ?: trip.route.origin.google_place_name
-                return NextWaypointInfo(originName, Double.MAX_VALUE)
-            }
-            
-            // PRIORITY 3: Check if trip is completed (fallback)
-            val allWaypointsPassed = trip.waypoints.all { it.is_passed }
-            if (allWaypointsPassed) {
-                if (waypointProgress.isNotEmpty()) {
-                    val destinationProgress = waypointProgress.find { it.waypointName.startsWith("Destination: ") }
-                    if (destinationProgress != null) {
-                        val remainingDistance = destinationProgress.remainingDistanceInMeters
-                        if (remainingDistance == null || remainingDistance <= 10.0) {
-                            return null // Trip completed
-                        }
-                        val cleanName = extractWaypointName(destinationProgress.waypointName)
-                        return NextWaypointInfo(cleanName, remainingDistance)
-                    }
-                }
-                return null // Trip completed
-            }
-            
-            // If we have waypoint progress but no "next" waypoint, try to get first unpassed waypoint
-            if (waypointProgress.isNotEmpty()) {
-                val firstUnpassed = waypointProgress.firstOrNull()
-                if (firstUnpassed != null) {
-                    val cleanName = extractWaypointName(firstUnpassed.waypointName)
-                    val remainingDistance = firstUnpassed.remainingDistanceInMeters ?: Double.MAX_VALUE
-                    return NextWaypointInfo(cleanName, remainingDistance)
-                }
-            }
-            
-            // No waypoint progress available yet - return null to avoid showing stale data
-            return null
-        } catch (e: Exception) {
-            Logging.e(TAG, "SERVICE: Error getting next waypoint info: ${e.message}", e)
-            return null
-        }
+        } ?: 0.0
     }
     
+    // Extract waypoint name (same as HeadlessNavigActivity)
     private fun extractWaypointName(waypointName: String): String {
         return when {
             waypointName.startsWith("Origin: ") -> waypointName.removePrefix("Origin: ")
@@ -1656,144 +1121,28 @@ class AutoModeHeadlessForegroundService : Service() {
         }
     }
     
-    private data class NextWaypointInfo(
-        val name: String,
-        val remainingDistanceInMeters: Double
-    )
-    
-    private suspend fun showTripConfirmation(trip: TripResponse, delayMinutes: Int) {
-        // Safety check: Never show confirmation for IN_PROGRESS trips
-        if (trip.status.equals("IN_PROGRESS", ignoreCase = true)) {
-            Logging.d(TAG, "SERVICE: Trip is IN_PROGRESS - skipping confirmation and starting navigation directly")
-            startNavigationInternal(trip, allowResume = true)
-            return
-        }
-        
-        isAwaitingConfirmation.set(true)
-        saveStateToPersistence() // Persist confirmation state immediately
-        
-        // Format times
-        val expectedTime = formatTime(trip.departure_time * 1000)
-        val currentTime = formatTime(System.currentTimeMillis())
-        
-        // Create confirmation data
-        confirmationTripData = TripConfirmationData(
-            trip = trip,
-            expectedDepartureTime = expectedTime,
-            currentTime = currentTime,
-            delayMinutes = delayMinutes
-        )
-        
-        // Show notification for background confirmation
-        withContext(Dispatchers.Main) {
-            showConfirmationNotification(trip, delayMinutes)
-        }
-        
-        // Start 3-minute auto-start timeout
-        startConfirmationTimeout(trip)
-        
-        withContext(Dispatchers.Main) {
-            updateNotification("Trip confirmation required - ${delayMinutes}min late")
-        }
-    }
-    
-    private fun startConfirmationTimeout(trip: TripResponse) {
-        confirmationTimeoutJob?.cancel()
-        
-        confirmationTimeoutJob = serviceScope.launch {
-            delay(3 * 60 * 1000) // 3 minutes
-            
-            if (isAwaitingConfirmation.get()) {
-                // Double-check trip status before auto-starting
-                val currentTripStatus = currentTrip?.status ?: trip.status
-                if (currentTripStatus.equals("IN_PROGRESS", ignoreCase = true)) {
-                    Logging.d(TAG, "SERVICE: Trip became IN_PROGRESS during confirmation timeout - starting navigation directly")
-                    startNavigationInternal(trip, allowResume = true)
-                } else {
-                    Logging.d(TAG, "SERVICE: Confirmation timeout - auto-starting navigation")
-                    handleConfirmStart()
-                }
+    // Set up periodic progress updates (same pattern as HeadlessNavigActivity waypoint overlay)
+    private fun startNavigationProgressUpdates() {
+        // Start periodic updates to read progress from App's TripSectionValidator
+        serviceScope.launch {
+            while (isActive && isNavigating.get()) {
+                updateNavigationDisplay()
+                delay(2000) // Update every 2 seconds (same as HeadlessNavigActivity)
             }
         }
     }
     
-    private suspend fun handleConfirmStart() {
-        Logging.d(TAG, "=== SERVICE: HANDLE CONFIRM START ===")
-        
-        // Safety check: If trip is IN_PROGRESS, skip confirmation and start navigation directly
-        val trip = confirmationTripData?.trip ?: currentTrip
-        if (trip != null && trip.status.equals("IN_PROGRESS", ignoreCase = true)) {
-            Logging.d(TAG, "SERVICE: Trip is IN_PROGRESS - skipping confirmation and starting navigation directly")
-            isAwaitingConfirmation.set(false)
-            confirmationTimeoutJob?.cancel()
-            cancelConfirmationNotification()
-            startNavigationInternal(trip, allowResume = true)
-            return
-        }
-        
-        // If already navigating, just clear confirmation state
-        if (isNavigating.get()) {
-            Logging.d(TAG, "SERVICE: Already navigating, just clearing confirmation state")
-            isAwaitingConfirmation.set(false)
-            confirmationTimeoutJob?.cancel()
-            cancelConfirmationNotification()
-            return
-        }
-        
-        val confirmTrip = confirmationTripData?.trip
-        if (confirmTrip == null) {
-            Logging.e(TAG, "SERVICE: No trip data available for confirmation")
-            return
-        }
-        
-        // Clear confirmation state
-        isAwaitingConfirmation.set(false)
-        confirmationTimeoutJob?.cancel()
-        cancelConfirmationNotification()
-        saveStateToPersistence() // Persist state change immediately
-        
-        Logging.d(TAG, "SERVICE: User confirmed trip start, initiating navigation")
-        startNavigationInternal(confirmTrip)
-    }
+    // Navigation is handled by App internally - no listener wrapping needed
+    // Progress updates are done via periodic polling (same as HeadlessNavigActivity waypoint overlay)
     
-    private suspend fun handleConfirmCancel() {
-        Logging.d(TAG, "=== SERVICE: HANDLE CONFIRM CANCEL ===")
-        
-        isAwaitingConfirmation.set(false)
-        confirmationTimeoutJob?.cancel()
-        cancelConfirmationNotification()
-        
-        Logging.d(TAG, "SERVICE: User cancelled late trip")
-        currentTrip = null
-        confirmationTripData = null
-        clearPersistedState() // Clear persisted state immediately
-        
-        // Return to waiting state
-        withContext(Dispatchers.Main) {
-            updateNotification("Auto Mode: Waiting for trip...")
-        }
-    }
     
     private suspend fun handleTripCancellation(cancelledTripId: Int) {
         Logging.d(TAG, "=== SERVICE: HANDLING TRIP CANCELLATION ===")
         Logging.d(TAG, "Cancelled Trip ID: $cancelledTripId")
         Logging.d(TAG, "Current Trip ID: ${currentTrip?.id}")
         
-        // ALWAYS cancel countdown if it exists - don't check currentTrip first
-        // The countdown might be running even if currentTrip is null (race condition)
-        val shouldCancelCountdown = countdownJob != null && countdownJob!!.isActive
-        if (shouldCancelCountdown) {
-            Logging.d(TAG, "SERVICE: Countdown job exists and is active, cancelling it")
-            countdownJob?.cancel()
-            countdownJob = null // Clear reference immediately
-            countdownText = ""
-            Logging.d(TAG, "SERVICE: Countdown job cancelled")
-            
-            // Update notification immediately to stop countdown display
-            handler.post {
-                updateNotification("Trip cancelled - Waiting for next trip...")
-            }
-        }
+        // Clear countdown text
+        countdownText = ""
         
         // Check if the cancelled trip is our current trip
         if (currentTrip?.id == cancelledTripId) {
@@ -1802,11 +1151,10 @@ class AutoModeHeadlessForegroundService : Service() {
             // Check if navigation is active before clearing state
             val wasNavigating = isNavigating.get()
             
-        // Clear current trip FIRST so listener checks fail immediately
-        currentTrip = null
-        confirmationTripData = null
-        isNavigating.set(false)
-        clearPersistedState() // Clear persisted state immediately
+            // Clear current trip FIRST so listener checks fail immediately
+            currentTrip = null
+            isNavigating.set(false)
+            clearPersistedState() // Clear persisted state immediately
             
             // Stop navigation if active (this will clear listeners and reset validator)
             if (wasNavigating) {
@@ -1814,29 +1162,18 @@ class AutoModeHeadlessForegroundService : Service() {
                 stopNavigationAndCleanup()
             } else {
                 // Even if not navigating, still reset validator if it exists
-                tripSectionValidator?.reset()
+                // App handles trip section validator cleanup internally
             }
             
-            // Cancel confirmation if awaiting
-            if (isAwaitingConfirmation.get()) {
-                Logging.d(TAG, "SERVICE: Cancelling confirmation prompt")
-                isAwaitingConfirmation.set(false)
-                confirmationTimeoutJob?.cancel()
-                cancelConfirmationNotification()
-            }
-            
-            clearPersistedState() // Clear persisted state
-            
-            // Update notification immediately to clear countdown display
+            // Update notification immediately
             handler.post {
                 updateNotification("Trip cancelled - Waiting for next trip...")
             }
             
             Logging.d(TAG, "SERVICE: Returned to waiting state after cancellation")
-        } else if (shouldCancelCountdown) {
-            // Even if currentTrip doesn't match, if countdown was running, clear it
-            // This handles race conditions where countdown is running but currentTrip was cleared
-            Logging.d(TAG, "SERVICE: Current trip doesn't match cancelled trip, but countdown was running - clearing state")
+        } else {
+            // Even if currentTrip doesn't match, clear countdown if it was running
+            Logging.d(TAG, "SERVICE: Current trip doesn't match cancelled trip, clearing countdown state")
             currentTrip = null
             countdownText = ""
             handler.post {
@@ -1872,7 +1209,6 @@ class AutoModeHeadlessForegroundService : Service() {
                 
                 // Clear current trip
                 currentTrip = null
-                confirmationTripData = null
                 isNavigating.set(false)
                 
                 // Stop navigation if active
@@ -1902,29 +1238,25 @@ class AutoModeHeadlessForegroundService : Service() {
         try {
             Logging.d(TAG, "SERVICE: Stopping navigation and cleaning up...")
             
-            // Clear navigator listeners FIRST to prevent callbacks from firing during cleanup
-            navigationExample?.let { navExample ->
-                try {
-                    val navigator = navExample.getHeadlessNavigator()
-                    navigator.routeProgressListener = null
-                    navigator.navigableLocationListener = null
-                    navigator.routeDeviationListener = null
-                    navigator.milestoneStatusListener = null
-                    navigator.destinationReachedListener = null
-                    Logging.d(TAG, "SERVICE: Navigator listeners cleared")
-                } catch (e: Exception) {
-                    Logging.e(TAG, "SERVICE: Error clearing Navigator listeners: ${e.message}", e)
-                }
+            // Clear cache when navigation stops
+            lastKnownDistance = null
+            lastKnownTime = null
+            lastKnownWaypointName = null
+            
+            // Reset route calculation status
+            isRouteCalculated = false
+            
+            // Stop navigation using App (same as HeadlessNavigActivity)
+            app?.getNavigationExample()?.let { navExample: com.gocavgo.validator.navigator.NavigationExample ->
+                navExample.stopHeadlessNavigation()
             }
             
-            // Stop headless navigation
-            navigationExample?.stopHeadlessNavigation()
+            Logging.d(TAG, "SERVICE: Navigation stopped")
             
             // Reset trip section validator (stops processing)
-            tripSectionValidator?.reset()
+            // App handles trip section validator cleanup internally
             
-            // Clear current route reference
-            currentRoute = null
+            // App handles route state internally
             
             Logging.d(TAG, "SERVICE: Navigation stopped and cleaned up")
         } catch (e: Exception) {
@@ -1934,6 +1266,14 @@ class AutoModeHeadlessForegroundService : Service() {
     
     private suspend fun onNavigationComplete() {
         Logging.d(TAG, "=== SERVICE: NAVIGATION COMPLETE ===")
+        
+        // Clear cache when navigation completes
+        lastKnownDistance = null
+        lastKnownTime = null
+        lastKnownWaypointName = null
+        
+        // Reset route calculation status
+        isRouteCalculated = false
         
         isNavigating.set(false)
         currentTrip = null
@@ -2080,11 +1420,6 @@ class AutoModeHeadlessForegroundService : Service() {
     fun getCurrentTripForSync(): TripResponse? = currentTrip
     fun isNavigatingForSync(): Boolean = isNavigating.get()
     fun getCountdownTextForSync(): String = countdownText
-    fun isAwaitingConfirmationForSync(): Boolean = isAwaitingConfirmation.get()
-    fun getConfirmationTripIdForSync(): Int? = confirmationTripData?.trip?.id
-    fun getConfirmationExpectedTimeForSync(): String? = confirmationTripData?.expectedDepartureTime
-    fun getConfirmationCurrentTimeForSync(): String? = confirmationTripData?.currentTime
-    fun getConfirmationDelayMinutesForSync(): Int? = confirmationTripData?.delayMinutes
     
     /**
      * Sync countdown from Activity state
@@ -2109,17 +1444,9 @@ class AutoModeHeadlessForegroundService : Service() {
                 }
             }
             
-            // If Service already has an active countdown for the same trip, don't restart it
-            if (countdownJob != null && countdownJob!!.isActive && this.countdownText.isNotEmpty() && currentTrip?.id == trip.id) {
-                Logging.d(TAG, "SERVICE: Already has active countdown for trip ${trip.id}, not restarting")
-                return
-            }
-            
-            // Start Service's countdown based on Activity's state
-            // This ensures Service continues countdown when Activity goes to background
-            // Activity calls this from onPause(), so we should always accept it
-            Logging.d(TAG, "SERVICE: Starting countdown from Activity state (Activity going to background)")
-            startCountdown(remainingMs, trip)
+            // Countdown is now handled by ActiveTripListener, so this method is no longer needed
+            // Keeping it for compatibility but it does nothing
+            Logging.d(TAG, "SERVICE: Countdown syncing is now handled by ActiveTripListener")
         } catch (e: Exception) {
             Logging.e(TAG, "SERVICE: Error syncing countdown from Activity: ${e.message}", e)
         }
@@ -2132,7 +1459,9 @@ class AutoModeHeadlessForegroundService : Service() {
      */
     fun hasActiveRouteForSync(): Boolean {
         return try {
-            val route = navigationExample?.getHeadlessNavigator()?.route
+            val route = app?.getNavigationExample()?.let { navExample: com.gocavgo.validator.navigator.NavigationExample ->
+                navExample.getHeadlessNavigator()?.route
+            }
             val hasRoute = route != null
             Logging.d(TAG, "SERVICE: hasActiveRouteForSync() = $hasRoute (route is ${if (hasRoute) "not null" else "null"})")
             hasRoute
@@ -2212,106 +1541,6 @@ class AutoModeHeadlessForegroundService : Service() {
         return builder.build()
     }
     
-    /**
-     * Show confirmation notification for late trip
-     */
-    fun showConfirmationNotification(trip: TripResponse, delayMinutes: Int) {
-        try {
-            val origin = trip.route.origin.custom_name ?: trip.route.origin.google_place_name
-            val destination = trip.route.destination.custom_name ?: trip.route.destination.google_place_name
-            
-            // Format times
-            val expectedTime = formatTime(trip.departure_time * 1000)
-            val currentTime = formatTime(System.currentTimeMillis())
-            
-            // Build big text with detailed information
-            val delayText = if (delayMinutes >= 60) {
-                "${delayMinutes / 60}h ${delayMinutes % 60}min late"
-            } else {
-                "$delayMinutes minutes late"
-            }
-            
-            val bigText = """
-                Route: $origin → $destination
-                
-                Expected Departure: $expectedTime
-                Current Time: $currentTime
-                Delay: $delayText
-                
-                Navigation will auto-start in 3 minutes if no action is taken.
-            """.trimIndent()
-            
-            // Create "Start Navigation" action
-            val startIntent = Intent(this, TripConfirmationReceiver::class.java).apply {
-                action = TripConfirmationReceiver.ACTION_START_NAVIGATION
-            }
-            val startPendingIntent = PendingIntent.getBroadcast(
-                this, 0, startIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-            
-            // Create "Cancel Trip" action
-            val cancelIntent = Intent(this, TripConfirmationReceiver::class.java).apply {
-                action = TripConfirmationReceiver.ACTION_CANCEL_TRIP
-            }
-            val cancelPendingIntent = PendingIntent.getBroadcast(
-                this, 1, cancelIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-            
-            // Create intent to open AutoModeHeadlessActivity when notification is tapped
-            val activityIntent = Intent(this, AutoModeHeadlessActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            }
-            val activityPendingIntent = PendingIntent.getActivity(
-                this, 2, activityIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-            
-            val notification = NotificationCompat.Builder(this, CONFIRMATION_CHANNEL_ID)
-                .setContentTitle("Trip Departure Time Passed")
-                .setContentText("$origin → $destination")
-                .setStyle(NotificationCompat.BigTextStyle().bigText(bigText))
-                .setSmallIcon(R.drawable.ic_launcher_foreground)
-                .setContentIntent(activityPendingIntent)
-                .addAction(
-                    R.drawable.ic_launcher_foreground,
-                    "Start Navigation",
-                    startPendingIntent
-                )
-                .addAction(
-                    R.drawable.ic_launcher_foreground,
-                    "Cancel Trip",
-                    cancelPendingIntent
-                )
-                .setOngoing(true)
-                .setAutoCancel(false)
-                .setPriority(NotificationCompat.PRIORITY_HIGH)
-                .setCategory(NotificationCompat.CATEGORY_ALARM)
-                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-                .build()
-            
-            val manager = getSystemService(NotificationManager::class.java)
-            manager?.notify(CONFIRMATION_NOTIFICATION_ID, notification)
-            
-            Logging.d(TAG, "Confirmation notification shown for trip ${trip.id}, delay: $delayMinutes min")
-        } catch (e: Exception) {
-            Logging.e(TAG, "Failed to show confirmation notification: ${e.message}", e)
-        }
-    }
-    
-    /**
-     * Cancel confirmation notification
-     */
-    fun cancelConfirmationNotification() {
-        try {
-            val manager = getSystemService(NotificationManager::class.java)
-            manager?.cancel(CONFIRMATION_NOTIFICATION_ID)
-            Logging.d(TAG, "Confirmation notification cancelled")
-        } catch (e: Exception) {
-            Logging.e(TAG, "Failed to cancel confirmation notification: ${e.message}", e)
-        }
-    }
     
     private fun formatTime(millis: Long): String {
         val sdf = SimpleDateFormat("HH:mm", Locale.getDefault())
