@@ -116,7 +116,10 @@ class NavigationExample(
         // Set navigator as listener to receive locations from HERE Positioning
         // and choose a suitable accuracy for the tbt navigation use case.
         // Start immediately to begin GPS acquisition
-        Log.d(TAG, "Starting location provider for GPS acquisition...")
+        Log.d(TAG, "=== STARTING LOCATION PROVIDER ===")
+        Log.d(TAG, "Headless mode: $isHeadlessMode")
+        Log.d(TAG, "Location provider already running: ${herePositioningProvider.isLocating()}")
+        
         // Use navigator for headless mode, visualNavigator for visual mode
         if (isHeadlessMode) {
             herePositioningProvider.startLocating(navigator, LocationAccuracy.NAVIGATION)
@@ -125,6 +128,9 @@ class NavigationExample(
             herePositioningProvider.startLocating(visualNavigator, LocationAccuracy.NAVIGATION)
             Log.d(TAG, "Location provider started with visual navigator")
         }
+        
+        Log.d(TAG, "Location provider status after start: ${herePositioningProvider.isLocating()}")
+        Log.d(TAG, "================================")
     }
 
     private fun prefetchMapData(currentGeoCoordinates: GeoCoordinates) {
@@ -288,19 +294,76 @@ class NavigationExample(
         val startGeoCoordinates = route.geometry.vertices[0]
         prefetchMapData(startGeoCoordinates)
 
-        // Set the route for headless navigation only
-        navigator.route = route
-        Logging.d(TAG, "Starting headless navigation.")
+        Logging.d(TAG, "=== STARTING HEADLESS NAVIGATION ===")
+        Logging.d(TAG, "Simulated: $isSimulated")
+        
+        // CRITICAL FIX: For non-simulation, ensure location provider is active BEFORE setting route
+        // RouteProgressListener requires Navigator to receive location updates to fire
+        // If route is set before location provider is active, RouteProgressListener won't fire until GPS provides updates
+        if (!isSimulated) {
+            Logging.d(TAG, "Non-simulation mode - verifying location provider before setting route")
+            
+            // Check if location provider is already active
+            val isProviderActive = herePositioningProvider.isLocating()
+            val hasLocation = hasValidLocation()
+            
+            Logging.d(TAG, "Location provider status: active=$isProviderActive, has location=$hasLocation")
+            
+            if (!isProviderActive) {
+                Logging.w(TAG, "⚠️ Location provider not active - starting now before setting route")
+                enableDevicePositioning()
+                
+                // Wait briefly for location provider to initialize and provide first update
+                // This ensures Navigator receives location updates when route is set
+                try {
+                    Thread.sleep(300) // 300ms for location provider to start
+                    Logging.d(TAG, "Location provider started, waiting for initialization")
+                } catch (e: InterruptedException) {
+                    Logging.w(TAG, "Interrupted while waiting for location provider: ${e.message}")
+                }
+            } else {
+                Logging.d(TAG, "✅ Location provider already active")
+                if (hasLocation) {
+                    val location = getLastKnownLocation()
+                    Logging.d(TAG, "✅ Navigator has location: lat=${location?.coordinates?.latitude}, lng=${location?.coordinates?.longitude}")
+                } else {
+                    Logging.w(TAG, "⚠️ Location provider active but no location available yet")
+                }
+            }
+        }
 
+        // Set the route for headless navigation only
+        // NOW Navigator will have location updates ready (if non-simulation)
+        navigator.route = route
+        Logging.d(TAG, "Route set on Navigator")
+        
         if (isSimulated) {
             enableRoutePlayback(route)
             messageView.updateText("Starting simulated headless navigation.")
         } else {
-            enableDevicePositioning()
+            // Location provider should already be active (checked above)
+            // But ensure it's still active after route is set
+            val isProviderStillActive = herePositioningProvider.isLocating()
+            val hasLocationAfterRoute = hasValidLocation()
+            
+            Logging.d(TAG, "After route set - provider active: $isProviderStillActive, has location: $hasLocationAfterRoute")
+            
+            if (!isProviderStillActive) {
+                Logging.w(TAG, "⚠️ Location provider stopped unexpectedly, restarting...")
+                enableDevicePositioning()
+            } else if (!hasLocationAfterRoute) {
+                Logging.w(TAG, "⚠️ Location provider active but Navigator has no location yet")
+                Logging.w(TAG, "RouteProgressListener will fire once Navigator receives map-matched location")
+            } else {
+                Logging.d(TAG, "✅ Navigator ready: route set ✅, location provider active ✅, has location ✅")
+                Logging.d(TAG, "RouteProgressListener should fire once location is map-matched to route")
+            }
+            
             messageView.updateText("Starting headless navigation.")
         }
 
         startDynamicSearchForBetterRoutes(route)
+        Logging.d(TAG, "=== HEADLESS NAVIGATION STARTED ===")
     }
 
     private fun startDynamicSearchForBetterRoutes(route: Route) {
@@ -438,7 +501,11 @@ class NavigationExample(
 
     // Provides location updates based on the device's GPS sensor.
     private fun enableDevicePositioning() {
-        Log.d(TAG, "Enabling device positioning...")
+        Log.d(TAG, "=== ENABLING DEVICE POSITIONING ===")
+        Log.d(TAG, "Headless mode: $isHeadlessMode")
+        Log.d(TAG, "Shutting down: $isShuttingDown")
+        Log.d(TAG, "Location provider running: ${herePositioningProvider.isLocating()}")
+        Log.d(TAG, "Has valid location: ${hasValidLocation()}")
         
         // Don't start location services if we're shutting down
         if (isShuttingDown) {
@@ -446,16 +513,55 @@ class NavigationExample(
             return
         }
         
-        herePositioningSimulator.stopLocating()
-        // Don't stop and restart if already running - this can cause location loss
-        if (isHeadlessMode) {
-            Log.d(TAG, "Headless started")
-            herePositioningProvider.startLocating(navigator, LocationAccuracy.NAVIGATION)
-        } else {
-            Log.d(TAG, "Visual started")
-            herePositioningProvider.startLocating(visualNavigator, LocationAccuracy.NAVIGATION)
+        // CRITICAL FIX: Check if location provider is already running
+        // This prevents double starts that cause GPS instability and delays
+        if (herePositioningProvider.isLocating()) {
+            val lastLocation = getLastKnownLocation()
+            Log.d(TAG, "✅ Location provider already running, skipping restart to prevent GPS instability")
+            if (lastLocation != null) {
+                Log.d(TAG, "Current location: lat=${lastLocation.coordinates.latitude}, lng=${lastLocation.coordinates.longitude}, speed=${lastLocation.speedInMetersPerSecond ?: 0.0} m/s")
+            } else {
+                Log.d(TAG, "Location provider running but no location available yet")
+            }
+            Log.d(TAG, "================================")
+            return
         }
-        Log.d(TAG, "Device positioning started")
+        
+        // Stop simulator if running (only if we're actually starting real GPS)
+        herePositioningSimulator.stopLocating()
+        Log.d(TAG, "Simulator stopped (if was running)")
+        
+        // IMPROVE LOCATION PROVIDER CONNECTION: Verify Navigator is properly connected
+        // Navigator must be set as listener to receive location updates for RouteProgressListener to fire
+        if (isHeadlessMode) {
+            Log.d(TAG, "Starting headless device positioning with Navigator")
+            Log.d(TAG, "Connecting Navigator to location provider...")
+            herePositioningProvider.startLocating(navigator, LocationAccuracy.NAVIGATION)
+            
+            // Verify connection: Navigator should now receive location updates
+            Log.d(TAG, "Navigator connected to location provider")
+            Log.d(TAG, "Navigator will receive location updates → NavigableLocationListener → RouteProgressListener")
+        } else {
+            Log.d(TAG, "Starting visual device positioning with VisualNavigator")
+            Log.d(TAG, "Connecting VisualNavigator to location provider...")
+            herePositioningProvider.startLocating(visualNavigator, LocationAccuracy.NAVIGATION)
+            
+            // Verify connection: VisualNavigator should now receive location updates
+            Log.d(TAG, "VisualNavigator connected to location provider")
+        }
+        
+        // Verify location provider is actually running
+        val isProviderActive = herePositioningProvider.isLocating()
+        Log.d(TAG, "Device positioning started - provider active: $isProviderActive")
+        
+        if (!isProviderActive) {
+            Log.e(TAG, "❌ CRITICAL: Location provider failed to start!")
+            Log.e(TAG, "RouteProgressListener will NOT fire until location provider is active")
+        } else {
+            Log.d(TAG, "✅ Location provider active - Navigator should receive updates")
+        }
+        
+        Log.d(TAG, "================================")
     }
 
     fun startCameraTracking() {

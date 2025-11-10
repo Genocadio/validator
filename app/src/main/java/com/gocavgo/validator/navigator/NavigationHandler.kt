@@ -312,15 +312,26 @@ class NavigationHandler(
                     )
                 }
                 
+                // GPS STATUS LOGGING: Track RouteProgress updates for headless navigation
+                Log.d(TAG, "=== HEADLESS ROUTE PROGRESS UPDATE ===")
+                Log.d(TAG, "Section index: ${routeProgress.sectionIndex}")
+                Log.d(TAG, "Current speed: ${currentSpeedInMetersPerSecond} m/s (${currentSpeedInMetersPerSecond * 3.6} km/h)")
+                
                 // CRITICAL: Process section progress FIRST, before checking maneuver progress
                 // Section progress is always available and needed for TripSectionValidator tracking
                 // This ensures progress tracking works even when maneuver progress isn't available yet (e.g., real GPS before movement)
                 val sectionProgressList = routeProgress.sectionProgress
                 if (sectionProgressList.isNotEmpty()) {
                     val totalSections = sectionProgressList.size
+                    val lastSection = sectionProgressList.lastOrNull()
+                    val remainingDistance = lastSection?.remainingDistanceInMeters ?: 0
+                    val remainingDuration = lastSection?.remainingDuration?.toSeconds() ?: 0
+                    Log.d(TAG, "Section progress: ${sectionProgressList.size} sections, remaining: ${remainingDistance}m, ETA: ${remainingDuration}s")
                     tripSectionValidator.processSectionProgress(sectionProgressList, totalSections)
-                    Log.d(TAG, "Processed section progress: ${sectionProgressList.size} sections")
+                } else {
+                    Log.w(TAG, "⚠️ No section progress available in headless navigation")
                 }
+                Log.d(TAG, "======================================")
                 
                 // Contains the progress for the next maneuver ahead and the next-next maneuvers, if any.
                 val nextManeuverList = routeProgress.maneuverProgress
@@ -386,30 +397,38 @@ class NavigationHandler(
         // Notifies on the current map-matched location and other useful information while driving or walking.
         navigator.navigableLocationListener =
             NavigableLocationListener { currentNavigableLocation: NavigableLocation ->
-                Log.d(TAG, "Received navigable location update")
+                // GPS STATUS LOGGING: Track location updates and speed
+                val originalLocation = currentNavigableLocation.originalLocation
+                val speed = originalLocation.speedInMetersPerSecond ?: 0.0
+                val accuracy = originalLocation.speedAccuracyInMetersPerSecond ?: 0.0
+                val mapMatched = currentNavigableLocation.mapMatchedLocation
+                
+                Log.d(TAG, "=== GPS LOCATION UPDATE ===")
+                Log.d(TAG, "Speed: ${speed} m/s (${speed * 3.6} km/h), Accuracy: ±${accuracy} m/s")
+                if (mapMatched != null) {
+                    Log.d(TAG, "Map-matched: lat=${mapMatched.coordinates.latitude}, lng=${mapMatched.coordinates.longitude}")
+                    Log.d(TAG, "Bearing: ${mapMatched.bearingInDegrees}°, Wrong way: ${mapMatched.isDrivingInTheWrongWay}")
+                } else {
+                    Log.w(TAG, "⚠️ Location not map-matched - may be off-road or GPS issue")
+                }
+                Log.d(TAG, "==========================")
+                
+                // Update stored location and speed
                 lastMapMatchedLocation = currentNavigableLocation.mapMatchedLocation
+                currentSpeedInMetersPerSecond = speed
+                
                 if (lastMapMatchedLocation == null) {
-                    Log.d(TAG, "The currentNavigableLocation could not be map-matched. Are you off-road?")
+                    Log.w(TAG, "⚠️ Location could not be map-matched - may be off-road or GPS issue")
                     return@NavigableLocationListener
                 }
-                Log.d(TAG, "Location successfully map-matched")
 
                 if (lastMapMatchedLocation!!.isDrivingInTheWrongWay) {
                     // For two-way streets, this value is always false. This feature is supported in tracking mode and when deviating from a route.
-                    Log.d(
+                    Log.w(
                         TAG,
-                        "This is a one way road. User is driving against the allowed traffic direction."
+                        "⚠️ Driving against traffic direction on one-way road"
                     )
                 }
-
-                val speed = currentNavigableLocation.originalLocation.speedInMetersPerSecond
-                val accuracy =
-                    currentNavigableLocation.originalLocation.speedAccuracyInMetersPerSecond
-                currentSpeedInMetersPerSecond = speed ?: 0.0
-                Log.d(
-                    TAG,
-                    "Driving speed (m/s): " + speed + "plus/minus an accuracy of: " + accuracy
-                )
             }
 
         // Notifies on route deviation events for headless navigation

@@ -298,11 +298,6 @@ class MqttService private constructor(
             return
         }
         
-        if (isConnecting.get()) {
-            Log.d(TAG, "Connection already in progress, skipping")
-            return
-        }
-        
         // If we're disconnecting, wait for it to complete
         if (isDisconnecting.get()) {
             Log.d(TAG, "Service is disconnecting, scheduling reconnection after delay")
@@ -310,8 +305,25 @@ class MqttService private constructor(
             return
         }
         
+        // Check if connection is already in progress and if it's been too long (timeout)
+        if (isConnecting.get()) {
+            val connectionStartTime = lastConnectionTime.get()
+            val timeSinceConnectionStart = System.currentTimeMillis() - connectionStartTime
+            val connectionTimeout = CONNECTION_TIMEOUT_MS + 5000 // Add 5s buffer
+            
+            if (timeSinceConnectionStart > connectionTimeout && connectionStartTime > 0) {
+                Log.w(TAG, "Connection attempt timed out (${timeSinceConnectionStart}ms), resetting connection state")
+                isConnecting.set(false)
+                // Continue to attempt new connection
+            } else {
+                Log.d(TAG, "Connection already in progress (${timeSinceConnectionStart}ms), skipping")
+                return
+            }
+        }
+        
         isConnecting.set(true)
         reconnectAttempts.set(0)
+        lastConnectionTime.set(System.currentTimeMillis()) // Set before connection attempt
         
         try {
             performConnection()
@@ -559,6 +571,20 @@ class MqttService private constructor(
             // Reset waiting state
             isWaitingForNetwork.set(false)
             
+            // Store previous connection callback
+            val previousCallback = connectionCallback
+            
+            // Set temporary callback to notify when connection is restored
+            connectionCallback = { connected ->
+                // Call previous callback if it exists
+                previousCallback?.invoke(connected)
+                
+                if (connected) {
+                    Log.d(TAG, "MQTT reconnected after network restore - connection callback notified")
+                    // Connection callback will be handled by Activity/Service to send trip status/heartbeat
+                }
+            }
+            
             // Restart with preserved credentials
             connect(username, password)
             
@@ -576,9 +602,19 @@ class MqttService private constructor(
         Log.d(TAG, "App moved to foreground")
         isAppInForeground.set(true)
         
-        if (isServiceActive.get() && !isConnected()) {
-            Log.d(TAG, "App in foreground but MQTT disconnected, reconnecting...")
-            scheduleReconnection()
+        // Always check connection and reconnect if needed
+        if (isServiceActive.get()) {
+            if (!isConnected()) {
+                Log.d(TAG, "App in foreground but MQTT disconnected, reconnecting...")
+                // Reset connection state to allow reconnection
+                isConnecting.set(false)
+                reconnectAttempts.set(0)
+                scheduleReconnection()
+            } else {
+                Log.d(TAG, "MQTT is connected, no reconnection needed")
+            }
+        } else {
+            Log.d(TAG, "MQTT service is not active, will connect when service starts")
         }
     }
     

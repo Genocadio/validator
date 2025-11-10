@@ -74,6 +74,12 @@ class AutoModeHeadlessForegroundService : Service() {
     private val binder = LocalBinder()
     private var notificationMessage = "Auto Mode Active"
     
+    /**
+     * Get current navigation text from notification message
+     * This contains the latest navigation state (distance, speed) that Service is displaying
+     */
+    fun getCurrentNavigationTextForSync(): String = notificationMessage
+    
     // Service state (separate from Activity state)
     private var currentTrip: TripResponse? = null
     private val isNavigating = AtomicBoolean(false)
@@ -98,6 +104,7 @@ class AutoModeHeadlessForegroundService : Service() {
     private lateinit var vehicleSecurityManager: VehicleSecurityManager
     private lateinit var settingsManager: VehicleSettingsManager
     private var mqttService: MqttService? = null
+    private var isMqttServiceCallbackRegistered = false
     private var currentSettings: com.gocavgo.validator.dataclass.VehicleSettings? = null
     
     // Background coroutines
@@ -215,6 +222,33 @@ class AutoModeHeadlessForegroundService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Logging.d(TAG, "Service started")
         
+        // Ensure MQTT is initialized and connected
+        if (mqttService == null) {
+            Logging.d(TAG, "MQTT service is null in onStartCommand, initializing...")
+            initializeMqttService()
+        } else {
+            // Verify MQTT connection
+            val isConnected = mqttService!!.isConnected()
+            val isActive = mqttService!!.isServiceActive()
+            
+            Logging.d(TAG, "MQTT status in onStartCommand: connected=$isConnected, active=$isActive")
+            
+            if (!isConnected) {
+                if (!isActive) {
+                    // Service is not active, connect it
+                    Logging.d(TAG, "MQTT service is not active, connecting...")
+                    mqttService?.connect(
+                        username = "cavgocars",
+                        password = "Cadio*11."
+                    )
+                } else {
+                    // Service is active but not connected, trigger reconnection
+                    Logging.d(TAG, "MQTT service is active but not connected, triggering reconnection...")
+                    mqttService?.onAppForeground() // This will trigger reconnection if needed
+                }
+            }
+        }
+        
         // Re-register MQTT callback to ensure it's always set (Activity may have unregistered)
         verifyMqttCallbackRegistration()
         
@@ -252,13 +286,76 @@ class AutoModeHeadlessForegroundService : Service() {
             Logging.w(TAG, "Error during callback cleanup: ${e.message}")
         }
         
-        // Stop navigation
+        // CRITICAL: Stop navigation and location services FIRST to prevent service connection leaks
+        // This ensures HERE SDK's internal service connections are properly released
         try {
-            navigationExample?.stopHeadlessNavigation()
-            navigationExample?.stopLocating()
+            Logging.d(TAG, "Stopping navigation and location services...")
+            
+            navigationExample?.let { navExample ->
+                // Set shutdown flag to prevent starting services during cleanup
+                navExample.setShuttingDown(true)
+                
+                // Clear Navigator listeners FIRST to prevent accessing disposed Navigator
+                try {
+                    val navigator = navExample.getHeadlessNavigator()
+                    navigator.routeProgressListener = null
+                    navigator.navigableLocationListener = null
+                    navigator.routeDeviationListener = null
+                    navigator.milestoneStatusListener = null
+                    navigator.destinationReachedListener = null
+                    Logging.d(TAG, "SERVICE: Navigator listeners cleared")
+                } catch (e: Exception) {
+                    Logging.e(TAG, "SERVICE: Error clearing Navigator listeners: ${e.message}", e)
+                }
+                
+                // Stop headless navigation
+                try {
+                    navExample.stopHeadlessNavigation()
+                    Logging.d(TAG, "SERVICE: Headless navigation stopped")
+                } catch (e: Exception) {
+                    Logging.e(TAG, "SERVICE: Error stopping headless navigation: ${e.message}", e)
+                }
+                
+                // Stop location services
+                try {
+                    navExample.stopLocating()
+                    Logging.d(TAG, "SERVICE: Location services stopped")
+                } catch (e: Exception) {
+                    Logging.e(TAG, "SERVICE: Error stopping location services: ${e.message}", e)
+                }
+                
+                // Force disconnect HERE SDK location services to prevent leaks
+                try {
+                    navExample.getHerePositioningProvider().forceDisconnect()
+                    Logging.d(TAG, "SERVICE: HERE SDK location services force disconnected")
+                } catch (e: Exception) {
+                    Logging.e(TAG, "SERVICE: Error force disconnecting location services: ${e.message}", e)
+                }
+                
+                // Stop rendering (if any)
+                try {
+                    navExample.stopRendering()
+                    Logging.d(TAG, "SERVICE: Rendering stopped")
+                } catch (e: Exception) {
+                    Logging.e(TAG, "SERVICE: Error stopping rendering: ${e.message}", e)
+                }
+            }
+            
+            // Reset trip section validator
             tripSectionValidator?.reset()
+            
+            Logging.d(TAG, "SERVICE: Navigation and location services stopped")
         } catch (e: Exception) {
-            Logging.e(TAG, "Error stopping navigation: ${e.message}", e)
+            Logging.e(TAG, "SERVICE: Error stopping navigation: ${e.message}", e)
+        }
+        
+        // Wait for HERE SDK service connections to unbind before completing destruction
+        try {
+            Logging.d(TAG, "SERVICE: Waiting for HERE SDK service connections to unbind...")
+            Thread.sleep(300) // 300ms grace period for service connections to unbind
+            Logging.d(TAG, "SERVICE: Grace period completed")
+        } catch (e: InterruptedException) {
+            Logging.w(TAG, "SERVICE: Interrupted while waiting for service cleanup: ${e.message}")
         }
         
         // Cancel service scope
@@ -329,6 +426,26 @@ class AutoModeHeadlessForegroundService : Service() {
             Logging.d(TAG, "MQTT connection initiated")
         } else {
             Logging.d(TAG, "MQTT service already initialized")
+            
+            // Service instance exists - ensure it's connected
+            if (!mqttService!!.isConnected()) {
+                Logging.d(TAG, "MQTT service exists but not connected, ensuring connection...")
+                val isActive = mqttService!!.isServiceActive()
+                if (!isActive) {
+                    // Service is not active, connect it
+                    mqttService?.connect(
+                        username = "cavgocars",
+                        password = "Cadio*11."
+                    )
+                    Logging.d(TAG, "MQTT connection initiated (service was inactive)")
+                } else {
+                    // Service is active but not connected, trigger reconnection
+                    Logging.d(TAG, "MQTT service is active but not connected, triggering reconnection...")
+                    mqttService?.onAppForeground() // This will trigger reconnection if needed
+                }
+            } else {
+                Logging.d(TAG, "MQTT service is already connected")
+            }
         }
     }
     
@@ -429,7 +546,14 @@ class AutoModeHeadlessForegroundService : Service() {
             return
         }
         
+        // Prevent duplicate registration
+        if (isMqttServiceCallbackRegistered) {
+            Logging.d(TAG, "Service MQTT trip callback already registered, skipping")
+            return
+        }
+        
         Logging.d(TAG, "=== REGISTERING SERVICE MQTT TRIP CALLBACK ===")
+        isMqttServiceCallbackRegistered = true
         
         mqttService?.setServiceTripEventCallback { tripEvent ->
             // Router will automatically delegate to Activity if active, so we only get here if Activity is inactive
@@ -529,8 +653,13 @@ class AutoModeHeadlessForegroundService : Service() {
         }
         
         if (mqttService != null) {
-            Logging.d(TAG, "Verifying MQTT callback registration...")
-            registerMqttTripCallback()
+            // Only register if not already registered
+            if (!isMqttServiceCallbackRegistered) {
+                Logging.d(TAG, "Verifying MQTT callback registration...")
+                registerMqttTripCallback()
+            } else {
+                Logging.d(TAG, "MQTT callback already registered, skipping verification")
+            }
         } else {
             Logging.e(TAG, "MQTT service is still null after initialization attempt")
         }
@@ -1027,7 +1156,8 @@ class AutoModeHeadlessForegroundService : Service() {
         Logging.d(TAG, "=== SERVICE: STARTING NAVIGATION INTERNALLY ===")
         Logging.d(TAG, "Trip ID: ${trip.id}")
         Logging.d(TAG, "Allow resume: $allowResume")
-        Logging.d(TAG, "IsNavigating: ${isNavigating.get()}")
+        Logging.d(TAG, "IsNavigating BEFORE: ${isNavigating.get()}")
+        Logging.d(TAG, "HasActiveRoute BEFORE: ${hasActiveRouteForSync()}")
         
         // Clear any confirmation state (safety check)
         if (isAwaitingConfirmation.get()) {
@@ -1045,19 +1175,26 @@ class AutoModeHeadlessForegroundService : Service() {
             currentRoute = null
         }
         
+        // Set isNavigating flag EARLY - before route calculation starts
+        // This ensures Activity can detect navigation state even during route calculation
         isNavigating.set(true)
         currentTrip = trip
         saveStateToPersistence() // Persist state change immediately
+        Logging.d(TAG, "SERVICE: isNavigating set to true EARLY (before route calculation)")
+        Logging.d(TAG, "SERVICE: Current trip set to ${trip.id}, status: ${trip.status}")
         
-        // Update trip status to IN_PROGRESS when navigation starts
+        // Update trip status to IN_PROGRESS when navigation starts or resumes
+        // This ensures database always has correct status when navigation is active
         try {
             val currentStatus = trip.status
             if (!currentStatus.equals("IN_PROGRESS", ignoreCase = true)) {
                 databaseManager.updateTripStatus(trip.id, "IN_PROGRESS")
-                Logging.d(TAG, "SERVICE: Trip ${trip.id} status updated from $currentStatus to IN_PROGRESS")
+                Logging.d(TAG, "SERVICE: Trip ${trip.id} status updated from $currentStatus to IN_PROGRESS (navigation ${if (allowResume) "resumed" else "started"})")
                 
                 // Update local trip status
                 currentTrip = trip.copy(status = "IN_PROGRESS")
+            } else {
+                Logging.d(TAG, "SERVICE: Trip ${trip.id} already IN_PROGRESS (navigation ${if (allowResume) "resumed" else "started"})")
             }
         } catch (e: Exception) {
             Logging.e(TAG, "SERVICE: Failed to update trip status to IN_PROGRESS: ${e.message}", e)
@@ -1070,9 +1207,27 @@ class AutoModeHeadlessForegroundService : Service() {
         }
         Logging.d(TAG, "SERVICE: Navigation state set, notification updated")
         
-        // Start navigation
-        Logging.d(TAG, "SERVICE: Calling startNavigation()...")
+        // Read settings from DB before starting navigation (not from memory)
+        // This ensures we use the latest simulate value even if settings changed while Service was running
+        try {
+            val vehicleId = vehicleSecurityManager.getVehicleId()
+            val dbSettings = settingsManager.getSettings(vehicleId.toInt())
+            if (dbSettings != null) {
+                currentSettings = dbSettings
+                Logging.d(TAG, "SERVICE: Settings read from DB before navigation start: simulate=${dbSettings.simulate}, devmode=${dbSettings.devmode}")
+            } else {
+                Logging.w(TAG, "SERVICE: No settings found in DB before navigation start, using current settings")
+            }
+        } catch (e: Exception) {
+            Logging.e(TAG, "SERVICE: Failed to read settings from DB before navigation start: ${e.message}", e)
+        }
+        
+        // Start navigation (route calculation happens inside startNavigation)
+        Logging.d(TAG, "SERVICE: Calling startNavigation()... (isNavigating=${isNavigating.get()})")
         startNavigation(trip)
+        
+        // Verify state after navigation start
+        Logging.d(TAG, "SERVICE: After startNavigation() - isNavigating=${isNavigating.get()}, hasActiveRoute=${hasActiveRouteForSync()}")
         
         // Don't overwrite notification here - RouteProgressListener will update it immediately
         // with navigation info (distance, speed, waypoint name) as soon as route progress starts
@@ -1285,6 +1440,12 @@ class AutoModeHeadlessForegroundService : Service() {
                     it.onDestinationReached()
                 }
                 
+                // Immediately stop navigation and update notification to prevent further updates
+                isNavigating.set(false)
+                handler.post {
+                    updateNotification("Auto Mode: Waiting for trip...")
+                }
+                
                 // Handle navigation complete
                 serviceScope.launch {
                     onNavigationComplete()
@@ -1351,6 +1512,13 @@ class AutoModeHeadlessForegroundService : Service() {
                     
                     if (nextWaypointInfo == null || (allWaypointsPassed && remainingDistanceToDestination <= 10.0)) {
                         Logging.d(TAG, "SERVICE: Trip completed - remaining distance: ${remainingDistanceToDestination}m")
+                        
+                        // Immediately stop navigation and update notification to prevent further updates
+                        isNavigating.set(false)
+                        handler.post {
+                            updateNotification("Auto Mode: Waiting for trip...")
+                        }
+                        
                         serviceScope.launch {
                             onNavigationComplete()
                         }
@@ -1771,20 +1939,36 @@ class AutoModeHeadlessForegroundService : Service() {
         currentTrip = null
         clearPersistedState() // Clear persisted state immediately
         
-        // Fetch settings on trip completion
+        // Read settings from DB on navigation completion (not from API)
+        // Check devmode/deactivate/logout - Service doesn't route, but updates settings
         val vehicleId = vehicleSecurityManager.getVehicleId()
+        try {
+            val dbSettings = settingsManager.getSettings(vehicleId.toInt())
+            if (dbSettings != null) {
+                currentSettings = dbSettings
+                Logging.d(TAG, "SERVICE: Settings read from DB after navigation: simulate=${dbSettings.simulate}, devmode=${dbSettings.devmode}, deactivate=${dbSettings.deactivate}, logout=${dbSettings.logout}")
+                
+                // Apply settings (Service doesn't route - Activity will handle routing)
+                settingsManager.applySettings(this@AutoModeHeadlessForegroundService, dbSettings)
+            } else {
+                Logging.w(TAG, "SERVICE: No settings found in DB after navigation completion")
+                // Optionally fetch from API in background to update DB
+                serviceScope.launch {
         try {
             val result = settingsManager.fetchSettingsFromApi(vehicleId.toInt())
             result.onSuccess { settings ->
                 currentSettings = settings
                 settingsManager.applySettings(this@AutoModeHeadlessForegroundService, settings)
             }.onFailure { error ->
-                Logging.e(TAG, "SERVICE: Failed to fetch settings on trip completion: ${error.message}")
-                val savedSettings = settingsManager.getSettings(vehicleId.toInt())
-                savedSettings?.let { currentSettings = it }
+                            Logging.e(TAG, "SERVICE: Failed to fetch settings from API after navigation: ${error.message}")
             }
         } catch (e: Exception) {
-            Logging.e(TAG, "SERVICE: Exception fetching settings on trip completion: ${e.message}", e)
+                        Logging.e(TAG, "SERVICE: Exception fetching settings from API after navigation: ${e.message}", e)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Logging.e(TAG, "SERVICE: Exception reading settings from DB on trip completion: ${e.message}", e)
         }
         
         // Reset to listening state
@@ -1901,6 +2085,62 @@ class AutoModeHeadlessForegroundService : Service() {
     fun getConfirmationExpectedTimeForSync(): String? = confirmationTripData?.expectedDepartureTime
     fun getConfirmationCurrentTimeForSync(): String? = confirmationTripData?.currentTime
     fun getConfirmationDelayMinutesForSync(): Int? = confirmationTripData?.delayMinutes
+    
+    /**
+     * Sync countdown from Activity state
+     * Called when Activity goes to background to ensure Service continues countdown
+     * @param trip The trip for which countdown is active
+     * @param countdownText The current countdown text from Activity
+     * @param remainingMs The remaining milliseconds until countdown completes
+     */
+    fun syncCountdownFromActivity(trip: TripResponse, countdownText: String, remainingMs: Long) {
+        try {
+            Logging.d(TAG, "SERVICE: Syncing countdown from Activity: trip=${trip.id}, remaining=${remainingMs}ms, text=$countdownText")
+            
+            // Validate trip matches (or set it if Service doesn't have one)
+            if (currentTrip?.id != trip.id) {
+                if (currentTrip == null) {
+                    // Service doesn't have a trip yet - set it from Activity
+                    Logging.d(TAG, "SERVICE: Setting trip from Activity: ${trip.id}")
+                    currentTrip = trip
+                } else {
+                    Logging.d(TAG, "SERVICE: Trip mismatch - Activity trip ${trip.id} doesn't match Service trip ${currentTrip?.id}, not syncing")
+                    return
+                }
+            }
+            
+            // If Service already has an active countdown for the same trip, don't restart it
+            if (countdownJob != null && countdownJob!!.isActive && this.countdownText.isNotEmpty() && currentTrip?.id == trip.id) {
+                Logging.d(TAG, "SERVICE: Already has active countdown for trip ${trip.id}, not restarting")
+                return
+            }
+            
+            // Start Service's countdown based on Activity's state
+            // This ensures Service continues countdown when Activity goes to background
+            // Activity calls this from onPause(), so we should always accept it
+            Logging.d(TAG, "SERVICE: Starting countdown from Activity state (Activity going to background)")
+            startCountdown(remainingMs, trip)
+        } catch (e: Exception) {
+            Logging.e(TAG, "SERVICE: Error syncing countdown from Activity: ${e.message}", e)
+        }
+    }
+    
+    /**
+     * Check if Service's Navigator has an active route
+     * This is used by Activity to verify if Service is actually navigating
+     * (not just has isNavigating flag set)
+     */
+    fun hasActiveRouteForSync(): Boolean {
+        return try {
+            val route = navigationExample?.getHeadlessNavigator()?.route
+            val hasRoute = route != null
+            Logging.d(TAG, "SERVICE: hasActiveRouteForSync() = $hasRoute (route is ${if (hasRoute) "not null" else "null"})")
+            hasRoute
+        } catch (e: Exception) {
+            Logging.e(TAG, "SERVICE: Error checking active route: ${e.message}", e)
+            false
+        }
+    }
     
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

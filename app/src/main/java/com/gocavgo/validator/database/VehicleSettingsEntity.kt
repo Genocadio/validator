@@ -50,3 +50,9 @@ data class VehicleSettingsEntity(
 
 
 
+
+
+
+
+
+

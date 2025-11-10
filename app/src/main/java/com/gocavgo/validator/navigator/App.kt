@@ -41,6 +41,12 @@ import com.here.sdk.routing.Waypoint
 import com.here.sdk.routing.WaypointType
 import com.gocavgo.validator.network.NetworkMonitor
 import com.gocavgo.validator.network.NetworkUtils
+import com.gocavgo.validator.database.DatabaseManager
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 
 
 // An app that allows to calculate a route and start navigation, using either platform positioning or
@@ -68,6 +74,12 @@ class App(
     
     // Trip section validator for route validation and waypoint tracking (now includes MQTT functionality)
     private val tripSectionValidator: TripSectionValidator = TripSectionValidator(context)
+    
+    // Database manager for trip status updates
+    private val databaseManager: DatabaseManager = DatabaseManager.getInstance(context)
+    
+    // Coroutine scope for database operations
+    private val dbScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     init {
         mapView?.let {
@@ -591,6 +603,23 @@ class App(
 //        }
 
 
+        // Update trip status to IN_PROGRESS when navigation starts
+        tripResponse?.let { trip ->
+            dbScope.launch {
+                try {
+                    val currentStatus = trip.status
+                    if (!currentStatus.equals("IN_PROGRESS", ignoreCase = true)) {
+                        databaseManager.updateTripStatus(trip.id, "IN_PROGRESS")
+                        Log.d("App", "Trip ${trip.id} status updated from $currentStatus to IN_PROGRESS")
+                    } else {
+                        Log.d("App", "Trip ${trip.id} already IN_PROGRESS, no update needed")
+                    }
+                } catch (e: Exception) {
+                    Log.e("App", "Failed to update trip status to IN_PROGRESS: ${e.message}", e)
+                }
+            }
+        }
+        
         // Automatically start navigation without confirmation
 //        Log.d("App", "Route Details: $routeDetails")
         messageView.updateText("Route: ${timeUtils.formatTime(estimatedTravelTimeInSeconds)}, ${timeUtils.formatLength(lengthInMeters)}")
@@ -684,6 +713,9 @@ class App(
         
         // Cleanup network monitoring
         cleanupNetworkMonitoring()
+        
+        // Cleanup database coroutine scope
+        dbScope.cancel()
         
         Log.d("App", "App detached successfully")
     }

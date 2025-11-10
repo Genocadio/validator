@@ -322,9 +322,10 @@ class VehicleAuthActivity : AppCompatActivity() {
                 override fun onFailure(call: Call, e: IOException) {
                     Log.e(TAG, "API call failed", e)
                     runOnUiThread {
+                        val errorMessage = "Login failed: ${e.message ?: "Network error"}"
                         Toast.makeText(
                             this@VehicleAuthActivity,
-                            "Login failed: ${e.message}",
+                            errorMessage,
                             Toast.LENGTH_LONG
                         ).show()
                         btnLoginVehicle?.isEnabled = true
@@ -372,9 +373,11 @@ class VehicleAuthActivity : AppCompatActivity() {
                                 ).show()
                             }
                         } else {
+                            // Extract user-friendly error message from JSON response
+                            val errorMessage = extractErrorMessage(responseBody)
                             Toast.makeText(
                                 this@VehicleAuthActivity,
-                                "Login failed: ${response.code} - $responseBody",
+                                errorMessage,
                                 Toast.LENGTH_LONG
                             ).show()
                         }
@@ -496,9 +499,10 @@ class VehicleAuthActivity : AppCompatActivity() {
                 override fun onFailure(call: Call, e: IOException) {
                     Log.e(TAG, "API call failed", e)
                     runOnUiThread {
+                        val errorMessage = "Registration failed: ${e.message ?: "Network error"}"
                         Toast.makeText(
                             this@VehicleAuthActivity,
-                            "Registration failed: ${e.message}",
+                            errorMessage,
                             Toast.LENGTH_LONG
                         ).show()
                         btnRegisterVehicle?.isEnabled = true
@@ -549,9 +553,11 @@ class VehicleAuthActivity : AppCompatActivity() {
                                 ).show()
                             }
                         } else {
+                            // Extract user-friendly error message from JSON response
+                            val errorMessage = extractErrorMessage(responseBody)
                             Toast.makeText(
                                 this@VehicleAuthActivity,
-                                "Registration failed: ${response.code} - $responseBody",
+                                errorMessage,
                                 Toast.LENGTH_LONG
                             ).show()
                         }
@@ -659,6 +665,45 @@ class VehicleAuthActivity : AppCompatActivity() {
         val password: String,
         val pubKey: String
     )
+
+    // Data class for error response
+    private data class ErrorResponseDto(
+        val timestamp: String? = null,
+        val status: Int? = null,
+        val message: String? = null,
+        val path: String? = null,
+        val errors: List<ErrorDetail>? = null
+    )
+
+    private data class ErrorDetail(
+        val field: String? = null,
+        val message: String? = null
+    )
+
+    /**
+     * Extract user-friendly error message from error response JSON
+     */
+    private fun extractErrorMessage(responseBody: String?): String {
+        if (responseBody.isNullOrBlank()) {
+            return "Unknown error occurred"
+        }
+        
+        return try {
+            val errorResponse = gson.fromJson(responseBody, ErrorResponseDto::class.java)
+            
+            // First try to get message from errors array (field-specific errors)
+            errorResponse.errors?.firstOrNull()?.message?.let { 
+                return it
+            }
+            
+            // Fall back to main message field
+            errorResponse.message ?: "Unknown error occurred"
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to parse error response", e)
+            // If parsing fails, return the raw response or a generic message
+            responseBody.takeIf { it.length < 200 } ?: "An error occurred. Please try again."
+        }
+    }
 
     /**
      * Fetch settings from API and apply them after successful authentication
