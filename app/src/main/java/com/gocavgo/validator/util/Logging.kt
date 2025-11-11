@@ -1,9 +1,11 @@
 package com.gocavgo.validator.util
 
-import android.app.Activity
 import android.util.Log
 import com.gocavgo.validator.BuildConfig
+import io.sentry.Sentry
+import io.sentry.SentryLevel
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * Enhanced logging system with per-activity state management.
@@ -27,6 +29,26 @@ import java.util.concurrent.ConcurrentHashMap
  * - MainActivity logging remains disabled, NavigActivity logging is automatically disabled
  */
 object Logging {
+    // Centralized logging levels and sinks
+    enum class LogLevel { VERBOSE, DEBUG, INFO, WARN, ERROR }
+    interface LogSink {
+        fun log(level: LogLevel, tag: String, message: String, tr: Throwable? = null)
+    }
+
+    private val sinks: CopyOnWriteArrayList<LogSink> = CopyOnWriteArrayList()
+
+    fun addSink(sink: LogSink) {
+        sinks.addIfAbsent(sink)
+    }
+
+    fun removeSink(sink: LogSink) {
+        sinks.remove(sink)
+    }
+
+    fun clearSinks() {
+        sinks.clear()
+    }
+
     @Volatile
     private var globalEnabled: Boolean = BuildConfig.DEBUG
 
@@ -149,65 +171,112 @@ object Logging {
         return BuildConfig.DEBUG && globalEnabled && effectiveTagEnabled
     }
 
+    private fun dispatch(level: LogLevel, tag: String, message: String, tr: Throwable? = null) {
+        if (!isEnabled(tag)) return
+        if (sinks.isEmpty()) {
+            // Default to Logcat if no sinks have been configured
+            LogcatSink.log(level, tag, message, tr)
+            return
+        }
+        sinks.forEach { sink ->
+            try {
+                sink.log(level, tag, message, tr)
+            } catch (_: Throwable) {
+                // Intentionally swallow to avoid crashing on sink failure
+            }
+        }
+    }
+
+    // Default sink writing to android.util.Log (kept internal to Logging)
+    private object LogcatSink : LogSink {
+        override fun log(level: LogLevel, tag: String, message: String, tr: Throwable?) {
+            when (level) {
+                LogLevel.VERBOSE -> if (tr != null) Log.v(tag, message, tr) else Log.v(tag, message)
+                LogLevel.DEBUG -> if (tr != null) Log.d(tag, message, tr) else Log.d(tag, message)
+                LogLevel.INFO -> if (tr != null) Log.i(tag, message, tr) else Log.i(tag, message)
+                LogLevel.WARN -> if (tr != null) Log.w(tag, message, tr) else Log.w(tag, message)
+                LogLevel.ERROR -> if (tr != null) Log.e(tag, message, tr) else Log.e(tag, message)
+            }
+        }
+    }
+    
+    // Sentry sink
+    class SentrySink : LogSink {
+        override fun log(level: LogLevel, tag: String, message: String, tr: Throwable?) {
+            val sentryLevel = when (level) {
+                LogLevel.VERBOSE, LogLevel.DEBUG -> SentryLevel.DEBUG
+                LogLevel.INFO -> SentryLevel.INFO
+                LogLevel.WARN -> SentryLevel.WARNING
+                LogLevel.ERROR -> SentryLevel.ERROR
+            }
+            val line = "[${level}] ${tag}: ${message}"
+            if (level == LogLevel.ERROR && tr != null) {
+                Sentry.captureException(tr)
+            } else {
+                Sentry.captureMessage(line, sentryLevel)
+            }
+        }
+    }
+
     // Debug
     fun d(tag: String, message: String) {
-        if (isEnabled(tag)) Log.d(tag, message)
+        dispatch(LogLevel.DEBUG, tag, message, null)
     }
 
     fun d(tag: String, message: String, tr: Throwable?) {
-        if (isEnabled(tag)) Log.d(tag, message, tr)
+        dispatch(LogLevel.DEBUG, tag, message, tr)
     }
 
     fun d(tag: String, messageProvider: () -> String) {
-        if (isEnabled(tag)) Log.d(tag, messageProvider())
+        if (isEnabled(tag)) dispatch(LogLevel.DEBUG, tag, messageProvider(), null)
     }
 
     // Info
     fun i(tag: String, message: String) {
-        if (isEnabled(tag)) Log.i(tag, message)
+        dispatch(LogLevel.INFO, tag, message, null)
     }
 
     fun i(tag: String, message: String, tr: Throwable?) {
-        if (isEnabled(tag)) Log.i(tag, message, tr)
+        dispatch(LogLevel.INFO, tag, message, tr)
     }
 
     fun i(tag: String, messageProvider: () -> String) {
-        if (isEnabled(tag)) Log.i(tag, messageProvider())
+        if (isEnabled(tag)) dispatch(LogLevel.INFO, tag, messageProvider(), null)
     }
 
     // Warn
     fun w(tag: String, message: String) {
-        if (isEnabled(tag)) Log.w(tag, message)
+        dispatch(LogLevel.WARN, tag, message, null)
     }
 
     fun w(tag: String, message: String, tr: Throwable?) {
-        if (isEnabled(tag)) Log.w(tag, message, tr)
+        dispatch(LogLevel.WARN, tag, message, tr)
     }
 
     fun w(tag: String, tr: Throwable) {
-        if (isEnabled(tag)) Log.w(tag, tr)
+        if (isEnabled(tag)) dispatch(LogLevel.WARN, tag, tr.message ?: "Warning", tr)
     }
 
     // Error
     fun e(tag: String, message: String) {
-        if (isEnabled(tag)) Log.e(tag, message)
+        dispatch(LogLevel.ERROR, tag, message, null)
     }
 
     fun e(tag: String, message: String, tr: Throwable?) {
-        if (isEnabled(tag)) Log.e(tag, message, tr)
+        dispatch(LogLevel.ERROR, tag, message, tr)
     }
 
     fun e(tag: String, messageProvider: () -> String) {
-        if (isEnabled(tag)) Log.e(tag, messageProvider())
+        if (isEnabled(tag)) dispatch(LogLevel.ERROR, tag, messageProvider(), null)
     }
 
     // Verbose
     fun v(tag: String, message: String) {
-        if (isEnabled(tag)) Log.v(tag, message)
+        dispatch(LogLevel.VERBOSE, tag, message, null)
     }
 
     fun v(tag: String, message: String, tr: Throwable?) {
-        if (isEnabled(tag)) Log.v(tag, message, tr)
+        dispatch(LogLevel.VERBOSE, tag, message, tr)
     }
 }
 

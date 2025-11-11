@@ -7,6 +7,9 @@ plugins {
     id("com.google.devtools.ksp") version "2.0.21-1.0.27"
 
     alias(libs.plugins.secrets)
+    id("io.gitlab.arturbosch.detekt")
+    id("de.thetaphi.forbiddenapis")
+    id("io.sentry.android.gradle") version "4.7.1"
 }
 
 android {
@@ -18,9 +21,12 @@ android {
         minSdk = 24
         targetSdk = 36
         versionCode = 1
-        versionName = "1.0"
+        versionName = "1.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // Optional: Provide Sentry DSN via project property SENTRY_DSN or leave empty to disable.
+        buildConfigField("String", "SENTRY_DSN", "\"${project.findProperty("SENTRY_DSN") ?: ""}\"")
     }
     splits{
         abi {
@@ -57,6 +63,19 @@ android {
         buildConfig = true
         compose = true
     }
+
+    detekt {
+        config.from(files(rootProject.file("config/detekt.yml")))
+        buildUponDefaultConfig = true
+        allRules = false
+    }
+}
+
+forbiddenApis {
+    failOnMissingClasses = false
+    bundledSignatures = setOf()
+    signaturesFiles = files(rootProject.file("config/forbidden-apis/android-log.txt"))
+    suppressAnnotations = setOf("java.lang.SuppressWarnings")
 }
 
 secrets {
@@ -97,6 +116,9 @@ dependencies {
     
     // WorkManager for background tasks
     implementation("androidx.work:work-runtime-ktx:2.9.0")
+
+    // Sentry for error tracking in production
+    implementation("io.sentry:sentry-android:6.34.0")
     
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)

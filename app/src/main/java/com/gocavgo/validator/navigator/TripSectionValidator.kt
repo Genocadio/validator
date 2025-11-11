@@ -225,6 +225,32 @@ class TripSectionValidator(private val context: Context) {
             lastProcessedSectionCount = -1 // Reset section count tracking
             isFirstProgressUpdate = true // Reset first progress update flag
             
+            // Ensure trip status is set to IN_PROGRESS immediately upon navigation start
+            tripResponse?.let { trip ->
+                if (!trip.status.equals("IN_PROGRESS", ignoreCase = true)) {
+                    coroutineScope.launch {
+                        try {
+                            Logging.d(TAG, "Setting trip ${trip.id} status to IN_PROGRESS after route verification")
+                            databaseManager.updateTripStatus(trip.id, "IN_PROGRESS")
+                            
+                            // Refresh in-memory trip data from DB to keep MQTT consistent
+                            val fresh = databaseManager.getTripById(trip.id)
+                            if (fresh != null) {
+                                this@TripSectionValidator.tripResponse = fresh
+                                Logging.d(TAG, "Trip ${trip.id} status refreshed from DB: ${fresh.status}")
+                                
+                                // Trigger an immediate MQTT progress update with fresh DB data
+                                publishTripProgressUpdateImmediate()
+                            } else {
+                                Logging.w(TAG, "Failed to refresh trip ${trip.id} from DB after status update")
+                            }
+                        } catch (e: Exception) {
+                            Logging.e(TAG, "Failed to set trip ${trip.id} status to IN_PROGRESS: ${e.message}", e)
+                        }
+                    }
+                }
+            }
+            
             // Initialize file logging for this trip session
             initializeTripSessionLogging(tripResponse)
             
@@ -1058,6 +1084,15 @@ class TripSectionValidator(private val context: Context) {
      * Gets the current trip data
      */
     fun getCurrentTrip(): TripResponse? = tripResponse
+    
+    /**
+     * Gets trip-level remaining time and distance from the last section progress, if available.
+     * Returns Pair<remainingTimeSeconds, remainingDistanceMeters> or (null, null) if unavailable.
+     */
+    fun getTripLevelRemaining(): Pair<Long?, Double?> {
+        val lastSection = currentSectionProgress.lastOrNull() ?: return Pair(null, null)
+        return Pair(lastSection.remainingDuration.toSeconds(), lastSection.remainingDistanceInMeters.toDouble())
+    }
     
     /**
      * Check if tracker is initialized

@@ -36,6 +36,7 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.Validator"
+        android:name=".ValidatorApp"
         tools:targetApi="31">
         <activity
             android:name=".security.VehicleAuthActivity"

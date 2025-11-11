@@ -1,0 +1,11 @@
+method android.util.Log d(java.lang.String,java.lang.String)
+method android.util.Log i(java.lang.String,java.lang.String)
+method android.util.Log w(java.lang.String,java.lang.String)
+method android.util.Log e(java.lang.String,java.lang.String)
+method android.util.Log v(java.lang.String,java.lang.String)
+method android.util.Log d(java.lang.String,java.lang.String,java.lang.Throwable)
+method android.util.Log i(java.lang.String,java.lang.String,java.lang.Throwable)
+method android.util.Log w(java.lang.String,java.lang.String,java.lang.Throwable)
+method android.util.Log e(java.lang.String,java.lang.String,java.lang.Throwable)
+method android.util.Log v(java.lang.String,java.lang.String,java.lang.Throwable)
+

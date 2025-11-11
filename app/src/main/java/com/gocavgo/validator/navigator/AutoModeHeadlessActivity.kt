@@ -78,11 +78,11 @@ class AutoModeHeadlessActivity : ComponentActivity() {
     private var currentTrip: TripResponse? = null
     private val isNavigating = AtomicBoolean(false)
     private var countdownText by mutableStateOf("")
-    
+
     // Waypoint overlay state
     private var showWaypointOverlay by mutableStateOf(false)
     private var waypointProgressData by mutableStateOf<List<TripSectionValidator.WaypointProgressInfo>>(emptyList())
-    
+
     // Route calculation state
     private var isRouteCalculated by mutableStateOf(false)
     
@@ -961,9 +961,6 @@ class AutoModeHeadlessActivity : ComponentActivity() {
     private fun onNavigationComplete() {
         Logging.d(TAG, "=== NAVIGATION COMPLETE ===")
 
-        // Store trip ID before clearing to update status
-        val completedTripId = currentTrip?.id
-
         // Clear cache when navigation completes
         lastKnownDistance = null
         lastKnownTime = null
@@ -975,22 +972,6 @@ class AutoModeHeadlessActivity : ComponentActivity() {
         isNavigating.set(false)
         currentTrip = null
         tripResponse = null
-
-        // Update trip status to COMPLETED in database BEFORE silent fetch
-        // This prevents silent fetch from finding the trip still "in_progress" and restarting navigation
-        if (completedTripId != null) {
-            lifecycleScope.launch(Dispatchers.IO) {
-                try {
-                    Logging.d(TAG, "Updating trip $completedTripId status to COMPLETED in database")
-                    databaseManager.updateTripStatus(completedTripId, "COMPLETED")
-                    val completionTimestamp = System.currentTimeMillis()
-                    databaseManager.updateTripCompletionTimestamp(completedTripId, completionTimestamp)
-                    Logging.d(TAG, "Trip $completedTripId marked as COMPLETED with timestamp: $completionTimestamp")
-                } catch (e: Exception) {
-                    Logging.e(TAG, "Failed to update trip status to COMPLETED: ${e.message}", e)
-                }
-            }
-        }
 
         // Read settings from DB on navigation completion (not from API)
         // Check devmode/deactivate/logout and route accordingly
@@ -1286,9 +1267,9 @@ class AutoModeHeadlessActivity : ComponentActivity() {
                 // Start progress updates only after route is calculated
                 if (isNavigating.get()) {
                     startNavigationProgressUpdates()
-                }
-            }
-            
+        }
+    }
+
             // Set TripSectionValidator in BookingNfcManager for waypoint name updates
             app?.getTripSectionValidator()?.let { validator ->
                 bookingNfcManager.setTripSectionValidator(validator)
@@ -1299,7 +1280,7 @@ class AutoModeHeadlessActivity : ComponentActivity() {
         } catch (e: Exception) {
             Logging.e(TAG, "Error initializing App: ${e.message}", e)
             messageViewUpdater?.updateText("Error initializing navigation: ${e.message}")
-        }
+            }
     }
     
     private fun updateTripDataWhenReady() {
@@ -1328,10 +1309,10 @@ class AutoModeHeadlessActivity : ComponentActivity() {
             if (app != null) {
                 Logging.d(TAG, "Starting navigation via App.updateTripData()")
                 app?.updateTripData(trip, simulate)
-                
+
                 // Progress updates will start automatically when route calculation callback is invoked
                 // (see initializeApp() route calculation callback)
-            } else {
+                } else {
                 Logging.e(TAG, "App not initialized, cannot start navigation")
             }
         }
@@ -1356,8 +1337,8 @@ class AutoModeHeadlessActivity : ComponentActivity() {
     // Get progress from App's TripSectionValidator (same as HeadlessNavigActivity)
     private fun getProgressFromApp(): List<TripSectionValidator.WaypointProgressInfo> {
         return app?.getTripSectionValidator()?.getCurrentWaypointProgress() ?: emptyList()
-    }
-    
+        }
+
     // Update waypoint progress data from App's TripSectionValidator (match HeadlessNavigActivity pattern)
     private fun updateWaypointProgressData() {
         app?.getTripSectionValidator()?.let { validator ->
@@ -1373,8 +1354,8 @@ class AutoModeHeadlessActivity : ComponentActivity() {
                     waypoint.copy(
                         remainingDistanceInMeters = lastKnownDistance,
                         remainingTimeInSeconds = lastKnownTime
-                    )
-                } else {
+                )
+            } else {
                     waypoint
                 }
             }
@@ -1460,7 +1441,7 @@ class AutoModeHeadlessActivity : ComponentActivity() {
                     lastKnownWaypointName = serviceWaypointName
                     
                     // Don't sync to Service - Service already has this cache
-                } else {
+                    } else {
                     // Both Activity and Service have null/cleared cache - clear Activity's cache
                     Logging.d(TAG, "Both Activity and Service have null cache, clearing Activity cache")
                     lastKnownDistance = null
@@ -1490,39 +1471,29 @@ class AutoModeHeadlessActivity : ComponentActivity() {
                 val distanceKm = displayDistance / 1000.0
                 if (distanceKm < 0.01) {
                     "Speed: ${String.format("%.1f", speedInKmh)} km/h"
-                } else {
+                            } else {
                     "Next: ${String.format("%.1f", distanceKm)} km | Speed: ${String.format("%.1f", speedInKmh)} km/h"
                 }
-            } else {
+                    } else {
                 // Distance not available yet - show only speed
-                "Speed: ${String.format("%.1f", speedInKmh)} km/h"
-            }
-            
-            messageViewText = navigationText
-            
+                            "Speed: ${String.format("%.1f", speedInKmh)} km/h"
+                    }
+
+                            messageViewText = navigationText
+                        
             // Activity always updates notification when active (Service will skip when Activity is active)
-            foregroundService?.updateNotification(navigationText)
-        } else {
+                        foregroundService?.updateNotification(navigationText)
+                } else {
             // No waypoint data available - show only speed
             val navigationText = "Speed: ${String.format("%.1f", speedInKmh)} km/h"
             messageViewText = navigationText
             foregroundService?.updateNotification(navigationText)
             Logging.d(TAG, "No waypoint progress data available, showing speed only")
-        }
-        
-        // Check for completion - only if route is calculated and we have waypoint progress data
-        if (isRouteCalculated && waypointProgress.isNotEmpty()) {
-            val allWaypointsPassed = trip.waypoints.all { it.is_passed }
-            val lastProgress = waypointProgress.lastOrNull()
-            val remainingDistance = lastProgress?.remainingDistanceInMeters ?: 0.0
-            
-            if (allWaypointsPassed && remainingDistance <= 10.0) {
-                isNavigating.set(false)
-                messageViewText = "Auto Mode: Waiting for trip..."
-                foregroundService?.updateNotification("Auto Mode: Waiting for trip...")
-                onNavigationComplete()
             }
-        } else if (!isRouteCalculated && waypointProgress.isEmpty()) {
+
+        // Completion is handled exclusively via DestinationReachedListener (NavigationHandler)
+        // Do not complete based on waypoint/remaining distance heuristics here
+        if (!isRouteCalculated && waypointProgress.isEmpty()) {
             // Route not calculated yet - show calculating message
             messageViewText = "Calculating route..."
             foregroundService?.updateNotification("Calculating route...")
@@ -1535,7 +1506,7 @@ class AutoModeHeadlessActivity : ComponentActivity() {
             try {
                 // Get speed from NavigationHandler's continuously updated speed (updated via NavigableLocationListener)
                 navExample.getNavigationHandler()?.currentSpeedInMetersPerSecond ?: 0.0
-            } catch (e: Exception) {
+        } catch (e: Exception) {
                 0.0
             }
         } ?: 0.0
@@ -1559,9 +1530,9 @@ class AutoModeHeadlessActivity : ComponentActivity() {
         // Start waypoint progress updates if overlay is visible
         if (showWaypointOverlay) {
             startWaypointProgressUpdates()
+            }
         }
-    }
-    
+
     // Navigation is handled by App internally - no listener wrapping needed
     // Progress updates are done via periodic polling (same as HeadlessNavigActivity waypoint overlay)
 
@@ -1853,7 +1824,7 @@ class AutoModeHeadlessActivity : ComponentActivity() {
             return false
         }
     }
-
+    
     
     /**
      * Sync Activity's countdown state to Service
@@ -1940,10 +1911,10 @@ class AutoModeHeadlessActivity : ComponentActivity() {
                         // Activity's Navigator is active - Activity's periodic polling will handle updates
                         // Stop Service sync since Activity is handling navigation
                         Logging.d(TAG, "Activity Navigator is active - stopping Service sync and starting Activity's own updates")
-                        stopServiceNavigationSync()
+                            stopServiceNavigationSync()
                         // Start Activity's own navigation progress updates to ensure UI continues updating
                         startNavigationProgressUpdates()
-                        break
+                            break
                     }
                     
                     // Get current navigation text from Service
@@ -2250,7 +2221,7 @@ class AutoModeHeadlessActivity : ComponentActivity() {
                 // Just sync the countdown text from Service if it's different
                 if (serviceCountdownText.isNotEmpty() && countdownText != serviceCountdownText) {
                     Logging.d(TAG, "Syncing countdown text from Service: $serviceCountdownText")
-                    countdownText = serviceCountdownText
+                            countdownText = serviceCountdownText
                 } else if (countdownText.isEmpty() && serviceCountdownText.isEmpty()) {
                     // Neither Activity nor Service has countdown - trigger countdown check
                     // This ensures countdown starts if trip was created while Activity was paused
@@ -2259,13 +2230,13 @@ class AutoModeHeadlessActivity : ComponentActivity() {
                 } else if (countdownText.isEmpty() && serviceCountdownText.isNotEmpty()) {
                     // Service has countdown but Activity doesn't - sync and ensure Activity's countdown is running
                     Logging.d(TAG, "Service has countdown but Activity doesn't - syncing and triggering countdown check")
-                    countdownText = serviceCountdownText
+                            countdownText = serviceCountdownText
                     activeTripListener?.checkAndStartCountdownForTrip(authoritativeTrip)
                 } else if (countdownText.isNotEmpty() && serviceCountdownText.isEmpty()) {
                     // Activity has countdown but Service doesn't - clear Activity countdown
                     Logging.d(TAG, "Activity has countdown but Service doesn't - clearing Activity countdown")
-                    countdownText = ""
-                }
+                            countdownText = ""
+                        }
             }
             
             // Confirmation logic removed - ActiveTripListener handles countdown and navigation start
@@ -2366,8 +2337,8 @@ class AutoModeHeadlessActivity : ComponentActivity() {
                         Logging.d(TAG, "Activity Navigator not active on resume - starting Service sync")
                         // Update waypoint progress data to populate overlay if navigation was started in background
                         updateWaypointProgressData()
-                        startServiceNavigationSync()
-                    }
+                    startServiceNavigationSync()
+                }
                 } else if (serviceIsNavigating || serviceHasActiveRoute) {
                     // Service is navigating but trip status is not IN_PROGRESS (might be SCHEDULED with countdown)
                     // Still update waypoint progress data if Service has active route

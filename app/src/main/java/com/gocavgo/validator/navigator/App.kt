@@ -20,7 +20,7 @@
 package com.gocavgo.validator.navigator
 
 import android.content.Context
-import android.util.Log
+import com.gocavgo.validator.util.Logging
 import com.gocavgo.validator.R
 import com.gocavgo.validator.dataclass.TripResponse
 import com.here.sdk.core.Color
@@ -110,7 +110,7 @@ class App(
         try {
             // Get initial network state
             isNetworkConnected = NetworkUtils.isConnectedToInternet(context)
-            Log.d("App", "Initial network state: $isNetworkConnected")
+            Logging.d("App", "Initial network state: $isNetworkConnected")
             
             // Set initial network state in route calculator
             routeCalculator.setNetworkState(isNetworkConnected)
@@ -120,9 +120,9 @@ class App(
                 handleNetworkChange(connected, type, metered)
             }
             networkMonitor?.startMonitoring()
-            Log.d("App", "Network monitoring initialized successfully")
+            Logging.d("App", "Network monitoring initialized successfully")
         } catch (e: Exception) {
-            Log.e("App", "Failed to initialize network monitoring: ${e.message}", e)
+            Logging.e("App", "Failed to initialize network monitoring: ${e.message}", e)
         }
     }
 
@@ -133,9 +133,9 @@ class App(
         val previousState = isNetworkConnected
         isNetworkConnected = connected
         
-        Log.d("App", "=== NETWORK STATE CHANGED ===")
-        Log.d("App", "Previous: $previousState, New: $connected")
-        Log.d("App", "Type: $type, Metered: $metered")
+        Logging.d("App", "=== NETWORK STATE CHANGED ===")
+        Logging.d("App", "Previous: $previousState, New: $connected")
+        Logging.d("App", "Type: $type, Metered: $metered")
         
         if (previousState != connected) {
             // Update route calculator with new network state
@@ -144,21 +144,21 @@ class App(
             // Update navigation handler if available
             navigationExample.getNavigationHandler()?.setNetworkState(connected)
             
-            Log.d("App", "Network state updated in all components")
+            Logging.d("App", "Network state updated in all components")
         }
         
-        Log.d("App", "==============================")
+        Logging.d("App", "==============================")
     }
 
     // Update trip data when it becomes available
     fun updateTripData(newTripResponse: TripResponse?, isSimulated: Boolean = true) {
-        Log.d("App", "=== updateTripData called ===")
-        Log.d("App", "newTripResponse: $newTripResponse")
-        Log.d("App", "isSimulated: $isSimulated")
+        Logging.d("App", "=== updateTripData called ===")
+        Logging.d("App", "newTripResponse: $newTripResponse")
+        Logging.d("App", "isSimulated: $isSimulated")
 
         tripResponse = newTripResponse
         if (tripResponse != null) {
-            Log.d("App", "Trip data updated: ${tripResponse?.id}")
+            Logging.d("App", "Trip data updated: ${tripResponse?.id}")
             
             // Initialize MQTT service in TripSectionValidator
             initializeMqttServiceInValidator()
@@ -166,7 +166,7 @@ class App(
             if (!isSimulated) {
                 // For device location mode, ensure GPS is active
                 if (!navigationExample.isLocationProviderActive()) {
-                    Log.d("App", "Starting location provider for device location mode...")
+                    Logging.d("App", "Starting location provider for device location mode...")
                     navigationExample.startLocationProvider()
                 }
                 
@@ -183,7 +183,7 @@ class App(
                 calculateRouteFromTrip(isSimulated)
             }
         } else {
-            Log.e("App", "Trip response is null in updateTripData")
+            Logging.e("App", "Trip response is null in updateTripData")
             messageView.updateText("Error: No trip data available")
         }
     }
@@ -197,14 +197,14 @@ class App(
             override fun run() {
                 attempts++
                 if (navigationExample.hasValidLocation()) {
-                    Log.d("App", "GPS location acquired after $attempts attempts")
+                    Logging.d("App", "GPS location acquired after $attempts attempts")
                     messageView.updateText("GPS location acquired. Calculating route...")
                     calculateRouteFromTrip(isSimulated)
                 } else if (attempts < maxAttempts) {
                     messageView.updateText("Waiting for GPS location... (${attempts}/${maxAttempts})")
                     handler.postDelayed(this, 1000) // Check every second
                 } else {
-                    Log.w("App", "GPS location not acquired after $maxAttempts attempts, proceeding anyway")
+                    Logging.w("App", "GPS location not acquired after $maxAttempts attempts, proceeding anyway")
                     messageView.updateText("GPS timeout. Calculating route with trip waypoints...")
                     calculateRouteFromTrip(isSimulated)
                 }
@@ -227,11 +227,11 @@ class App(
 
 
     private fun calculateRouteFromTrip(isSimulated: Boolean) {
-        Log.d("App", "Starting calculateRouteFromTrip with isSimulated: $isSimulated")
+        Logging.d("App", "Starting calculateRouteFromTrip with isSimulated: $isSimulated")
         clearMap()
 
         if (!determineRouteWaypointsFromTrip(isSimulated)) {
-            Log.e("App", "Failed to determine route waypoints from trip")
+            Logging.e("App", "Failed to determine route waypoints from trip")
             return
         }
 
@@ -239,14 +239,14 @@ class App(
         val waypoints = createWaypointsFromTrip(isSimulated)
 
         if (waypoints.isEmpty()) {
-            Log.e("App", "No valid waypoints found in trip data")
+            Logging.e("App", "No valid waypoints found in trip data")
             showDialog("Error", "No valid waypoints found in trip data")
             return
         }
 
-        Log.d("App", "Calculating route with ${waypoints.size} waypoints")
+        Logging.d("App", "Calculating route with ${waypoints.size} waypoints")
         waypoints.forEachIndexed { index, waypoint ->
-            Log.d("App", "Waypoint $index: ${waypoint.coordinates.latitude}, ${waypoint.coordinates.longitude}")
+            Logging.d("App", "Waypoint $index: ${waypoint.coordinates.latitude}, ${waypoint.coordinates.longitude}")
         }
 
         messageView.updateText("Calculating route with ${waypoints.size} waypoints...")
@@ -257,34 +257,34 @@ class App(
         ) { routingError: RoutingError?, routes: List<Route>? ->
             if (routingError == null) {
                 val route: Route = routes!![0]
-                Log.d(
+                Logging.d(
                     "App",
                     "Route calculated successfully. Length: ${route.lengthInMeters}m, Duration: ${route.duration.seconds}s"
                 )
                 showRouteOnMap(route)
 
                 // Add waypoint markers after route is calculated
-                Log.d("App", "About to add waypoint markers...")
+                Logging.d("App", "About to add waypoint markers...")
                 addWaypointMarkersToMap(isSimulated)
 
                 showRouteDetails(route, isSimulated)
             } else {
-                Log.e("App", "Route calculation failed: $routingError")
+                Logging.e("App", "Route calculation failed: $routingError")
                 showDialog("Error while calculating a route:", routingError.toString())
             }
         }
     }
 
     private fun determineRouteWaypointsFromTrip(isSimulated: Boolean): Boolean {
-        Log.d("App", "=== determineRouteWaypointsFromTrip called ===")
-        Log.d("App", "isSimulated: $isSimulated")
+        Logging.d("App", "=== determineRouteWaypointsFromTrip called ===")
+        Logging.d("App", "isSimulated: $isSimulated")
 
         if (!isSimulated) {
             val location: Location? = navigationExample.getLastKnownLocation()
-            Log.d("App", "Device location: $location")
+            Logging.d("App", "Device location: $location")
             
             if (location == null) {
-                Log.w("App", "No GPS location available yet, but continuing with trip waypoints")
+                Logging.w("App", "No GPS location available yet, but continuing with trip waypoints")
                 // Don't fail immediately - we can still calculate route with trip waypoints
                 // The location will be used when available during navigation
             } else {
@@ -292,15 +292,15 @@ class App(
                 // If a driver is moving, the bearing value can help to improve the route calculation.
                 startWaypoint!!.headingInDegrees = location.bearingInDegrees
                 mapView?.camera?.lookAt(location.coordinates)
-                Log.d("App", "Set start waypoint from device location")
+                Logging.d("App", "Set start waypoint from device location")
             }
         } else {
-            Log.d("App", "Using simulated location mode")
+            Logging.d("App", "Using simulated location mode")
         }
 
         // For trip-based navigation, we don't need to set startWaypoint and destinationWaypoint
         // as they will be determined from the trip data in createWaypointsFromTrip()
-        Log.d("App", "determineRouteWaypointsFromTrip returning true")
+        Logging.d("App", "determineRouteWaypointsFromTrip returning true")
         return true
     }
 
@@ -308,11 +308,11 @@ class App(
         val waypoints = mutableListOf<Waypoint>()
 
         tripResponse?.let { trip ->
-            Log.d("App", "Creating waypoints from trip: ${trip.id}")
-            Log.d("App", "Simulation mode: $isSimulated")
-            Log.d("App", "Origin: ${trip.route.origin.google_place_name} (${trip.route.origin.latitude}, ${trip.route.origin.longitude})")
-            Log.d("App", "Destination: ${trip.route.destination.google_place_name} (${trip.route.destination.latitude}, ${trip.route.destination.longitude})")
-            Log.d("App", "Intermediate waypoints: ${trip.waypoints.size}")
+            Logging.d("App", "Creating waypoints from trip: ${trip.id}")
+            Logging.d("App", "Simulation mode: $isSimulated")
+            Logging.d("App", "Origin: ${trip.route.origin.google_place_name} (${trip.route.origin.latitude}, ${trip.route.origin.longitude})")
+            Logging.d("App", "Destination: ${trip.route.destination.google_place_name} (${trip.route.destination.latitude}, ${trip.route.destination.longitude})")
+            Logging.d("App", "Intermediate waypoints: ${trip.waypoints.size}")
 
             // Add device location or origin based on simulation mode
             if (!isSimulated) {
@@ -324,9 +324,9 @@ class App(
                         headingInDegrees = deviceLocation.bearingInDegrees
                     }
                     waypoints.add(deviceWaypoint)
-                    Log.d("App", "Added device location waypoint (replacing trip origin): ${deviceLocation.coordinates.latitude}, ${deviceLocation.coordinates.longitude}")
+                    Logging.d("App", "Added device location waypoint (replacing trip origin): ${deviceLocation.coordinates.latitude}, ${deviceLocation.coordinates.longitude}")
                 } else {
-                    Log.w("App", "Device location not yet available, starting with trip origin as fallback")
+                    Logging.w("App", "Device location not yet available, starting with trip origin as fallback")
                     // Fallback to trip origin only if device location unavailable
                     val origin = Waypoint(
                         GeoCoordinates(
@@ -337,7 +337,7 @@ class App(
                         type = WaypointType.STOPOVER
                     }
                     waypoints.add(origin)
-                    Log.d("App", "Added origin waypoint (fallback)")
+                    Logging.d("App", "Added origin waypoint (fallback)")
                 }
             } else {
                 // Simulated mode: use saved location for IN_PROGRESS or trip origin
@@ -346,7 +346,7 @@ class App(
                                        trip.vehicle.current_longitude != null
                 
                 val origin = if (useSavedLocation) {
-                    Log.d("App", "Using saved vehicle location for IN_PROGRESS trip (simulated mode)")
+                    Logging.d("App", "Using saved vehicle location for IN_PROGRESS trip (simulated mode)")
                     Waypoint(
                         GeoCoordinates(
                             trip.vehicle.current_latitude!!,
@@ -366,7 +366,7 @@ class App(
                     type = WaypointType.STOPOVER
                 }
                 waypoints.add(origin)
-                Log.d("App", if (useSavedLocation) "Added saved location waypoint" else "Added origin waypoint")
+                Logging.d("App", if (useSavedLocation) "Added saved location waypoint" else "Added origin waypoint")
             }
 
             // Filter out passed waypoints - only include unpassed waypoints
@@ -374,10 +374,10 @@ class App(
             val unpassedWaypoints = sortedWaypoints.filter { !it.is_passed }
             val skippedCount = sortedWaypoints.size - unpassedWaypoints.size
             
-            Log.d("App", "=== WAYPOINT FILTERING ===")
-            Log.d("App", "Total waypoints: ${sortedWaypoints.size}")
-            Log.d("App", "Passed waypoints: $skippedCount")
-            Log.d("App", "Unpassed waypoints: ${unpassedWaypoints.size}")
+            Logging.d("App", "=== WAYPOINT FILTERING ===")
+            Logging.d("App", "Total waypoints: ${sortedWaypoints.size}")
+            Logging.d("App", "Passed waypoints: $skippedCount")
+            Logging.d("App", "Unpassed waypoints: ${unpassedWaypoints.size}")
             
             // Add only unpassed intermediate waypoints
             unpassedWaypoints.forEach { tripWaypoint ->
@@ -390,7 +390,7 @@ class App(
                     type = WaypointType.STOPOVER
                 }
                 waypoints.add(waypoint)
-                Log.d("App", "Added waypoint: ${tripWaypoint.location.google_place_name} (order: ${tripWaypoint.order})")
+                Logging.d("App", "Added waypoint: ${tripWaypoint.location.google_place_name} (order: ${tripWaypoint.order})")
             }
 
             // Add destination
@@ -403,45 +403,45 @@ class App(
                 type = WaypointType.STOPOVER
             }
             waypoints.add(destination)
-            Log.d("App", "Added destination waypoint")
+            Logging.d("App", "Added destination waypoint")
             
-            Log.d("App", "Total waypoints created: ${waypoints.size} (skipped $skippedCount passed waypoints)")
-            Log.d("App", "=========================")
+            Logging.d("App", "Total waypoints created: ${waypoints.size} (skipped $skippedCount passed waypoints)")
+            Logging.d("App", "=========================")
         } ?: run {
-            Log.e("App", "Trip response is null, cannot create waypoints")
+            Logging.e("App", "Trip response is null, cannot create waypoints")
         }
 
-        Log.d("App", "Waypoint structure:")
+        Logging.d("App", "Waypoint structure:")
         waypoints.forEachIndexed { index, waypoint ->
-            Log.d("App", "  Waypoint $index: ${waypoint.coordinates.latitude}, ${waypoint.coordinates.longitude}")
+            Logging.d("App", "  Waypoint $index: ${waypoint.coordinates.latitude}, ${waypoint.coordinates.longitude}")
         }
         return waypoints
     }
 
     private fun addWaypointMarkersToMap(isSimulated: Boolean) {
         mapView?.let { mapView ->
-            Log.d("App", "=== STARTING addWaypointMarkersToMap ===")
-            Log.d("App", "Simulation mode: $isSimulated")
+            Logging.d("App", "=== STARTING addWaypointMarkersToMap ===")
+            Logging.d("App", "Simulation mode: $isSimulated")
 
             // Clear existing waypoint markers
             clearWaypointMarkers()
 
             tripResponse?.let { trip ->
-                Log.d("App", "Trip data available, adding waypoint markers")
-                Log.d("App", "Trip ID: ${trip.id}")
-                Log.d("App", "Origin: ${trip.route.origin.google_place_name}")
-                Log.d("App", "Destination: ${trip.route.destination.google_place_name}")
-                Log.d("App", "Intermediate waypoints: ${trip.waypoints.size}")
+                Logging.d("App", "Trip data available, adding waypoint markers")
+                Logging.d("App", "Trip ID: ${trip.id}")
+                Logging.d("App", "Origin: ${trip.route.origin.google_place_name}")
+                Logging.d("App", "Destination: ${trip.route.destination.google_place_name}")
+                Logging.d("App", "Intermediate waypoints: ${trip.waypoints.size}")
 
                 // Note: Device location is not marked on map when isSimulated = false
                 // The camera will automatically look at the device location
                 if (!isSimulated) {
-                    Log.d("App", "Device location mode: Camera will look at device location, no marker needed")
+                    Logging.d("App", "Device location mode: Camera will look at device location, no marker needed")
                 }
 
                 // Add origin marker only in simulated mode
                 if (isSimulated) {
-                    Log.d("App", "Adding origin marker...")
+                    Logging.d("App", "Adding origin marker...")
                     val originMarker = createWaypointMarker(
                         GeoCoordinates(trip.route.origin.latitude, trip.route.origin.longitude),
                         R.drawable.green_dot,
@@ -450,19 +450,19 @@ class App(
                     if (originMarker != null) {
                         waypointMarkers.add(originMarker)
                         mapView.mapScene.addMapMarker(originMarker)
-                        Log.d("App", "Origin marker added to map")
+                        Logging.d("App", "Origin marker added to map")
                     } else {
-                        Log.e("App", "Failed to create origin marker")
+                        Logging.e("App", "Failed to create origin marker")
                     }
                 } else {
-                    Log.d("App", "Device location mode: Skipping origin marker (device location replaces origin)")
+                    Logging.d("App", "Device location mode: Skipping origin marker (device location replaces origin)")
                 }
 
                 // Add intermediate waypoint markers
                 val sortedWaypoints = trip.waypoints.sortedBy { it.order }
-                Log.d("App", "Adding ${sortedWaypoints.size} intermediate waypoint markers...")
+                Logging.d("App", "Adding ${sortedWaypoints.size} intermediate waypoint markers...")
                 sortedWaypoints.forEachIndexed { index, tripWaypoint ->
-                    Log.d("App", "Adding waypoint $index: ${tripWaypoint.location.google_place_name}")
+                    Logging.d("App", "Adding waypoint $index: ${tripWaypoint.location.google_place_name}")
                     val marker = createWaypointMarker(
                         GeoCoordinates(tripWaypoint.location.latitude, tripWaypoint.location.longitude),
                         R.drawable.green_dot,
@@ -471,14 +471,14 @@ class App(
                     if (marker != null) {
                         waypointMarkers.add(marker)
                         mapView.mapScene.addMapMarker(marker)
-                        Log.d("App", "Waypoint $index marker added to map")
+                        Logging.d("App", "Waypoint $index marker added to map")
                     } else {
-                        Log.e("App", "Failed to create waypoint $index marker")
+                        Logging.e("App", "Failed to create waypoint $index marker")
                     }
                 }
 
                 // Add destination marker
-                Log.d("App", "Adding destination marker...")
+                Logging.d("App", "Adding destination marker...")
                 val destinationMarker = createWaypointMarker(
                     GeoCoordinates(trip.route.destination.latitude, trip.route.destination.longitude),
                     R.drawable.green_dot,
@@ -487,16 +487,16 @@ class App(
                 if (destinationMarker != null) {
                     waypointMarkers.add(destinationMarker)
                     mapView.mapScene.addMapMarker(destinationMarker)
-                    Log.d("App", "Destination marker added to map")
+                    Logging.d("App", "Destination marker added to map")
                 } else {
-                    Log.e("App", "Failed to create destination marker")
+                    Logging.e("App", "Failed to create destination marker")
                 }
 
-                Log.d("App", "=== COMPLETED addWaypointMarkersToMap ===")
-                Log.d("App", "Total waypoint markers added: ${waypointMarkers.size}")
-                Log.d("App", "Marker structure:")
+                Logging.d("App", "=== COMPLETED addWaypointMarkersToMap ===")
+                Logging.d("App", "Total waypoint markers added: ${waypointMarkers.size}")
+                Logging.d("App", "Marker structure:")
                 waypointMarkers.forEachIndexed { index, marker ->
-                    Log.d("App", "  Marker $index: ${marker.coordinates.latitude}, ${marker.coordinates.longitude}")
+                    Logging.d("App", "  Marker $index: ${marker.coordinates.latitude}, ${marker.coordinates.longitude}")
                 }
                 val markerText = if (!isSimulated) {
                     "Added ${waypointMarkers.size} trip waypoint markers to map (device location not marked)"
@@ -505,27 +505,27 @@ class App(
                 }
                 messageView.updateText(markerText)
             } ?: run {
-                Log.e("App", "Trip response is null, cannot add waypoint markers")
+                Logging.e("App", "Trip response is null, cannot add waypoint markers")
                 messageView.updateText("No trip data available for waypoint markers")
             }
         }
     }
 
     private fun createWaypointMarker(geoCoordinates: GeoCoordinates, resourceId: Int, title: String): MapMarker? {
-        Log.d("App", "Creating waypoint marker at: ${geoCoordinates.latitude}, ${geoCoordinates.longitude}")
-        Log.d("App", "Using resource ID: $resourceId $title")
+        Logging.d("App", "Creating waypoint marker at: ${geoCoordinates.latitude}, ${geoCoordinates.longitude}")
+        Logging.d("App", "Using resource ID: $resourceId $title")
 
         return try {
             val mapImage = MapImageFactory.fromResource(context.resources, resourceId)
             if (mapImage == null) {
-                Log.e("App", "Failed to create map image from resource ID: $resourceId")
+                Logging.e("App", "Failed to create map image from resource ID: $resourceId")
                 return null
             }
             val mapMarker = MapMarker(geoCoordinates, mapImage)
-            Log.d("App", "Waypoint marker created successfully")
+            Logging.d("App", "Waypoint marker created successfully")
             mapMarker
         } catch (e: Exception) {
-            Log.e("App", "Error creating waypoint marker: ${e.message}")
+            Logging.e("App", "Error creating waypoint marker: ${e.message}")
             null
         }
     }
@@ -537,7 +537,7 @@ class App(
             }
         }
         waypointMarkers.clear()
-        Log.d("App", "Cleared waypoint markers")
+        Logging.d("App", "Cleared waypoint markers")
     }
 
 
@@ -558,9 +558,9 @@ class App(
             // Calculate skipped waypoint count
             val skippedCount = tripResponse?.waypoints?.count { it.is_passed } ?: 0
             
-            Log.d("App", "=== ROUTE VERIFICATION WITH SKIPPED WAYPOINTS ===")
-            Log.d("App", "Skipped waypoints: $skippedCount")
-            Log.d("App", "Total waypoints: ${tripResponse?.waypoints?.size ?: 0}")
+            Logging.d("App", "=== ROUTE VERIFICATION WITH SKIPPED WAYPOINTS ===")
+            Logging.d("App", "Skipped waypoints: $skippedCount")
+            Logging.d("App", "Total waypoints: ${tripResponse?.waypoints?.size ?: 0}")
             
             val verificationPassed = tripSectionValidator.verifyRouteSections(
                 tripResponse!!, 
@@ -570,18 +570,18 @@ class App(
                 skippedWaypointCount = skippedCount
             )
             if (verificationPassed) {
-                Log.d("App", "Route Verified well")
+                Logging.d("App", "Route Verified well")
             } else {
-                Log.e("App", "❌ Route verification failed - continuing with navigation anyway")
+                Logging.e("App", "❌ Route verification failed - continuing with navigation anyway")
             }
-            Log.d("App", "================================================")
+            Logging.d("App", "================================================")
         } else {
-            Log.d("App", "No trip data available for route verification")
+            Logging.d("App", "No trip data available for route verification")
         }
 
         // Route sections are now mapped to trip waypoints within TripSectionValidator
         if (tripResponse != null && tripSectionValidator.isVerified()) {
-            Log.d("App", "✅ Route validation completed - waypoint mapping handled by TripSectionValidator")
+            Logging.d("App", "✅ Route validation completed - waypoint mapping handled by TripSectionValidator")
         }
 
 //        for (i in route.sections.indices) {
@@ -610,12 +610,12 @@ class App(
                     val currentStatus = trip.status
                     if (!currentStatus.equals("IN_PROGRESS", ignoreCase = true)) {
                         databaseManager.updateTripStatus(trip.id, "IN_PROGRESS")
-                        Log.d("App", "Trip ${trip.id} status updated from $currentStatus to IN_PROGRESS")
+                        Logging.d("App", "Trip ${trip.id} status updated from $currentStatus to IN_PROGRESS")
                     } else {
-                        Log.d("App", "Trip ${trip.id} already IN_PROGRESS, no update needed")
+                        Logging.d("App", "Trip ${trip.id} already IN_PROGRESS, no update needed")
                     }
                 } catch (e: Exception) {
-                    Log.e("App", "Failed to update trip status to IN_PROGRESS: ${e.message}", e)
+                    Logging.e("App", "Failed to update trip status to IN_PROGRESS: ${e.message}", e)
                 }
             }
         }
@@ -630,7 +630,7 @@ class App(
         // Detect headless mode (when mapView is null) and use appropriate navigation method
         if (mapView == null) {
             // Headless mode: use Navigator instead of VisualNavigator
-            Log.d("App", "Starting headless navigation (mapView is null)")
+            Logging.d("App", "Starting headless navigation (mapView is null)")
             navigationExample.startHeadlessNavigation(route, isSimulated)
             
             // Setup headless listeners after navigation starts
@@ -702,7 +702,7 @@ class App(
     }
 
     fun clearMapAndExit() {
-        Log.d("App", "Clearing map and exiting navigation")
+        Logging.d("App", "Clearing map and exiting navigation")
         clearMap()
         messageView.updateText("Navigation stopped. Returning to main screen...")
 
@@ -711,7 +711,7 @@ class App(
     }
 
     fun detach() {
-        Log.d("App", "Detaching app - setting shutdown flag")
+        Logging.d("App", "Detaching app - setting shutdown flag")
         
         // Set shutdown flag to prevent starting services during cleanup
         navigationExample.setShuttingDown(true)
@@ -729,7 +729,7 @@ class App(
         // Cleanup database coroutine scope
         dbScope.cancel()
         
-        Log.d("App", "App detached successfully")
+        Logging.d("App", "App detached successfully")
     }
 
     /**
@@ -739,9 +739,9 @@ class App(
         try {
             networkMonitor?.stopMonitoring()
             networkMonitor = null
-            Log.d("App", "Network monitoring cleaned up successfully")
+            Logging.d("App", "Network monitoring cleaned up successfully")
         } catch (e: Exception) {
-            Log.e("App", "Error cleaning up network monitoring: ${e.message}", e)
+            Logging.e("App", "Error cleaning up network monitoring: ${e.message}", e)
         }
     }
     
@@ -773,7 +773,7 @@ class App(
     private fun initializeMqttServiceInValidator() {
         try {
             tripResponse?.let { trip ->
-                Log.d("App", "Initializing MQTT service in TripSectionValidator for trip: ${trip.id}")
+            Logging.d("App", "Initializing MQTT service in TripSectionValidator for trip: ${trip.id}")
                 
                 // Get MQTT service instance
                 val mqttService = com.gocavgo.validator.service.MqttService.getInstance()
@@ -781,13 +781,13 @@ class App(
                 // Initialize MQTT service in TripSectionValidator if available
                 if (mqttService != null) {
                     tripSectionValidator.initializeMqttService(mqttService)
-                    Log.d("App", "MQTT service initialized successfully in TripSectionValidator")
+                    Logging.d("App", "MQTT service initialized successfully in TripSectionValidator")
                 } else {
-                    Log.e("App", "MQTT service is null - cannot initialize in TripSectionValidator")
+                    Logging.e("App", "MQTT service is null - cannot initialize in TripSectionValidator")
                 }
             }
         } catch (e: Exception) {
-            Log.e("App", "Failed to initialize MQTT service in TripSectionValidator: ${e.message}", e)
+            Logging.e("App", "Failed to initialize MQTT service in TripSectionValidator: ${e.message}", e)
         }
     }
     
@@ -804,12 +804,12 @@ class App(
                     navigationExample.getHeadlessNavigator(),
                     dynamicEngine
                 )
-                Log.d("App", "Headless navigation listeners set up successfully")
+                Logging.d("App", "Headless navigation listeners set up successfully")
             } else {
-                Log.w("App", "DynamicRoutingEngine is null, cannot set up headless listeners")
+                Logging.w("App", "DynamicRoutingEngine is null, cannot set up headless listeners")
             }
         } catch (e: Exception) {
-            Log.e("App", "Failed to set up headless listeners: ${e.message}", e)
+            Logging.e("App", "Failed to set up headless listeners: ${e.message}", e)
         }
     }
 

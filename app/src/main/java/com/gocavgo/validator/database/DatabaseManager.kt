@@ -2,6 +2,7 @@ package com.gocavgo.validator.database
 
 import android.content.Context
 import com.gocavgo.validator.dataclass.TripResponse
+import com.gocavgo.validator.util.Logging
 import com.gocavgo.validator.repository.TripRepository
 import com.gocavgo.validator.service.BookingService
 import com.gocavgo.validator.util.Result
@@ -18,10 +19,10 @@ class DatabaseManager(context: Context) {
     suspend fun saveTripFromMqtt(trip: TripResponse, vehicleId: Int): com.gocavgo.validator.util.Result<Int> {
         return try {
             val result = tripRepository.saveTrip(trip)
-            android.util.Log.d("DatabaseManager", "Trip saved from MQTT: ${trip.id}")
+            Logging.d("DatabaseManager", "Trip saved from MQTT: ${trip.id}")
             com.gocavgo.validator.util.Result.success(1)
         } catch (e: Exception) {
-            android.util.Log.e("DatabaseManager", "Failed to save trip from MQTT: ${e.message}", e)
+            Logging.e("DatabaseManager", "Failed to save trip from MQTT: ${e.message}", e)
             com.gocavgo.validator.util.Result.error(e.message ?: "Unknown error")
         }
     }
@@ -43,10 +44,10 @@ class DatabaseManager(context: Context) {
     suspend fun deleteTripById(tripId: Int): Boolean {
         return try {
             tripRepository.deleteTripById(tripId)
-            android.util.Log.d("DatabaseManager", "Deleted trip $tripId from database")
+            Logging.d("DatabaseManager", "Deleted trip $tripId from database")
             true
         } catch (e: Exception) {
-            android.util.Log.e("DatabaseManager", "Failed to delete trip $tripId: ${e.message}", e)
+            Logging.e("DatabaseManager", "Failed to delete trip $tripId: ${e.message}", e)
             false
         }
     }
@@ -85,12 +86,12 @@ class DatabaseManager(context: Context) {
     ) {
         try {
             tripRepository.updateWaypointRemaining(tripId, waypointId, remainingTimeSeconds, remainingDistanceMeters)
-            android.util.Log.d(
+            Logging.d(
                 "DatabaseManager",
                 "Persisted remaining progress: trip=$tripId, waypoint=$waypointId, time=${remainingTimeSeconds}, distance=${remainingDistanceMeters}"
             )
         } catch (e: Exception) {
-            android.util.Log.e("DatabaseManager", "Failed to persist remaining progress: ${e.message}", e)
+            Logging.e("DatabaseManager", "Failed to persist remaining progress: ${e.message}", e)
             throw e
         }
     }
@@ -104,12 +105,12 @@ class DatabaseManager(context: Context) {
     ) {
         try {
             tripRepository.updateWaypointOriginalData(tripId, waypointId, waypointLengthMeters, waypointTimeSeconds)
-            android.util.Log.d(
+            Logging.d(
                 "DatabaseManager",
                 "Persisted original waypoint data: trip=$tripId, waypoint=$waypointId, length=${waypointLengthMeters}m, time=${waypointTimeSeconds}s"
             )
         } catch (e: Exception) {
-            android.util.Log.e("DatabaseManager", "Failed to persist original waypoint data: ${e.message}", e)
+            Logging.e("DatabaseManager", "Failed to persist original waypoint data: ${e.message}", e)
             throw e
         }
     }
@@ -122,12 +123,12 @@ class DatabaseManager(context: Context) {
     ) {
         try {
             tripRepository.updateWaypointPassedTimestamp(tripId, waypointId, passedTimestamp)
-            android.util.Log.d(
+            Logging.d(
                 "DatabaseManager",
                 "Persisted waypoint passed timestamp: trip=$tripId, waypoint=$waypointId, timestamp=$passedTimestamp"
             )
         } catch (e: Exception) {
-            android.util.Log.e("DatabaseManager", "Failed to persist waypoint passed timestamp: ${e.message}", e)
+            Logging.e("DatabaseManager", "Failed to persist waypoint passed timestamp: ${e.message}", e)
             throw e
         }
     }
@@ -157,12 +158,12 @@ class DatabaseManager(context: Context) {
     ) {
         try {
             tripRepository.updateTripRemaining(tripId, remainingTimeToDestination, remainingDistanceToDestination)
-            android.util.Log.d(
+            Logging.d(
                 "DatabaseManager",
                 "Persisted trip remaining progress: trip=$tripId, time=${remainingTimeToDestination}, distance=${remainingDistanceToDestination}"
             )
         } catch (e: Exception) {
-            android.util.Log.e("DatabaseManager", "Failed to persist trip remaining progress: ${e.message}", e)
+            Logging.e("DatabaseManager", "Failed to persist trip remaining progress: ${e.message}", e)
             throw e
         }
     }

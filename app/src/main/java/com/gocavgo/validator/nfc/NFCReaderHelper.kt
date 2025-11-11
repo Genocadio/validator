@@ -7,6 +7,7 @@ import android.nfc.Tag
 
 
 import android.os.Bundle
+import com.gocavgo.validator.util.Logging
 
 class NFCReaderHelper(
     private val context: Context,
@@ -39,7 +40,7 @@ class NFCReaderHelper(
             nfcAdapter?.disableReaderMode(activity)
         } catch (e: Exception) {
             // Activity might be destroyed, ignore the error
-            android.util.Log.w("NFCReaderHelper", "Error disabling NFC reader: ${e.message}")
+            Logging.w("NFCReaderHelper", "Error disabling NFC reader: ${e.message}")
         }
     }
 }

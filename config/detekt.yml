@@ -1,0 +1,15 @@
+ForbiddenMethodCall:
+  active: true
+  methods:
+    - 'android.util.Log.d'
+    - 'android.util.Log.i'
+    - 'android.util.Log.w'
+    - 'android.util.Log.e'
+    - 'android.util.Log.v'
+    - 'Log.d'
+    - 'Log.i'
+    - 'Log.w'
+    - 'Log.e'
+    - 'Log.v'
+
+

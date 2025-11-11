@@ -1067,22 +1067,9 @@ class AutoModeHeadlessForegroundService : Service() {
             Logging.d(TAG, "SERVICE: No waypoint progress data available, showing speed only")
         }
         
-        // Check for completion - only if route is calculated and we have waypoint progress data
-        if (isRouteCalculated && waypointProgress.isNotEmpty()) {
-            val allWaypointsPassed = trip.waypoints.all { it.is_passed }
-            val lastProgress = waypointProgress.lastOrNull()
-            val remainingDistance = lastProgress?.remainingDistanceInMeters ?: 0.0
-            
-            if (allWaypointsPassed && remainingDistance <= 10.0) {
-                isNavigating.set(false)
-                handler.post {
-                    updateNotification("Auto Mode: Waiting for trip...")
-                }
-                serviceScope.launch {
-                    onNavigationComplete()
-                }
-            }
-        } else if (!isRouteCalculated && waypointProgress.isEmpty()) {
+        // Completion is handled exclusively via DestinationReachedListener (NavigationHandler)
+        // Do not complete based on waypoint/remaining distance heuristics here
+        if (!isRouteCalculated && waypointProgress.isEmpty()) {
             // Route not calculated yet - show calculating message
             if (!isActivityActive()) {
                 handler.post {
