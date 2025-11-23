@@ -22,7 +22,7 @@ package com.gocavgo.validator.navigator
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
-import android.util.Log
+import com.gocavgo.validator.util.Logging
 import java.io.File
 import java.io.FileWriter
 import java.io.IOException
@@ -70,13 +70,13 @@ class TripSessionLogger(private val context: Context) {
      * @param tripName Human-readable trip name for the file
      */
     fun startTripSession(tripId: String, tripName: String) {
-        Log.d(TAG, "Starting trip session logging for trip: $tripId")
+        Logging.d(TAG, "Starting trip session logging for trip: $tripId")
         
         try {
             // Create logs directory if it doesn't exist
             val logsDir = createLogsDirectory()
             if (logsDir == null) {
-                Log.e(TAG, "Failed to create logs directory")
+                Logging.e(TAG, "Failed to create logs directory")
                 return
             }
             
@@ -93,10 +93,10 @@ class TripSessionLogger(private val context: Context) {
             val sessionHeader = buildSessionHeader(tripId, tripName)
             writeToFile(sessionHeader)
             
-            Log.d(TAG, "Trip session logging started: ${currentLogFile?.absolutePath}")
+            Logging.d(TAG, "Trip session logging started: ${currentLogFile?.absolutePath}")
             
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to start trip session logging: ${e.message}", e)
+            Logging.e(TAG, "Failed to start trip session logging: ${e.message}", e)
             isLoggingActive = false
         }
     }
@@ -105,16 +105,16 @@ class TripSessionLogger(private val context: Context) {
      * Stops the current trip session logging
      */
     fun stopTripSession() {
-        Log.d(TAG, "Stopping trip session logging")
+        Logging.d(TAG, "Stopping trip session logging")
         
         if (isLoggingActive && currentLogFile != null) {
             try {
                 val sessionFooter = buildSessionFooter()
                 writeToFile(sessionFooter)
                 
-                Log.d(TAG, "Trip session logging stopped: ${currentLogFile?.absolutePath}")
+                Logging.d(TAG, "Trip session logging stopped: ${currentLogFile?.absolutePath}")
             } catch (e: Exception) {
-                Log.e(TAG, "Error stopping trip session: ${e.message}", e)
+                Logging.e(TAG, "Error stopping trip session: ${e.message}", e)
             }
         }
         
@@ -143,7 +143,7 @@ class TripSessionLogger(private val context: Context) {
             writeToFile(detailedInfo)
         }
         
-        Log.d(TAG, "Logged trip validation")
+        Logging.d(TAG, "Logged trip validation")
     }
     
     /**
@@ -160,7 +160,7 @@ class TripSessionLogger(private val context: Context) {
             writeToFile(detailedStatus)
         }
         
-        Log.d(TAG, "Logged first progress update")
+        Logging.d(TAG, "Logged first progress update")
     }
     
     /**
@@ -208,7 +208,7 @@ class TripSessionLogger(private val context: Context) {
             }
         }, WAYPOINT_LOG_DELAY_10S)
         
-        Log.d(TAG, "Logged waypoint mark and scheduled follow-ups for: $waypointName")
+        Logging.d(TAG, "Logged waypoint mark and scheduled follow-ups for: $waypointName")
     }
     
     /**
@@ -225,7 +225,7 @@ class TripSessionLogger(private val context: Context) {
             writeToFile(detailedStatus)
         }
         
-        Log.d(TAG, "Logged trip completion")
+        Logging.d(TAG, "Logged trip completion")
     }
     
     /**
@@ -236,7 +236,7 @@ class TripSessionLogger(private val context: Context) {
         
         val logEntry = buildLogEntry("CUSTOM_$eventType", message)
         writeToFile(logEntry)
-        Log.d(TAG, "Logged custom event: $eventType")
+        Logging.d(TAG, "Logged custom event: $eventType")
     }
     
     /**
@@ -247,7 +247,7 @@ class TripSessionLogger(private val context: Context) {
             // Get external files directory (same level as downloads)
             val externalFilesDir = context.getExternalFilesDir(null)
             if (externalFilesDir == null) {
-                Log.e(TAG, "External files directory is null")
+                Logging.e(TAG, "External files directory is null")
                 return null
             }
             
@@ -255,15 +255,15 @@ class TripSessionLogger(private val context: Context) {
             if (!logsDir.exists()) {
                 val created = logsDir.mkdirs()
                 if (!created) {
-                    Log.e(TAG, "Failed to create logs directory: ${logsDir.absolutePath}")
+                    Logging.e(TAG, "Failed to create logs directory: ${logsDir.absolutePath}")
                     return null
                 }
-                Log.d(TAG, "Created logs directory: ${logsDir.absolutePath}")
+                Logging.d(TAG, "Created logs directory: ${logsDir.absolutePath}")
             }
             
             logsDir
         } catch (e: Exception) {
-            Log.e(TAG, "Error creating logs directory: ${e.message}", e)
+            Logging.e(TAG, "Error creating logs directory: ${e.message}", e)
             null
         }
     }
@@ -273,7 +273,7 @@ class TripSessionLogger(private val context: Context) {
      */
     private fun writeToFile(content: String) {
         if (currentLogFile == null) {
-            Log.w(TAG, "No current log file, cannot write: $content")
+            Logging.w(TAG, "No current log file, cannot write: $content")
             return
         }
         
@@ -284,7 +284,7 @@ class TripSessionLogger(private val context: Context) {
                 writer.flush()
             }
         } catch (e: IOException) {
-            Log.e(TAG, "Error writing to log file: ${e.message}", e)
+            Logging.e(TAG, "Error writing to log file: ${e.message}", e)
         }
     }
     

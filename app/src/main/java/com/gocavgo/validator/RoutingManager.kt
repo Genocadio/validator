@@ -1,8 +1,7 @@
 package com.gocavgo.validator
 
-import android.util.Log
-import android.os.Handler
 import com.gocavgo.validator.util.Logging
+import android.os.Handler
 import com.here.sdk.core.errors.InstantiationErrorException
 import com.here.sdk.core.GeoCoordinates
 import com.here.sdk.core.Location

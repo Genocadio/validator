@@ -9,7 +9,7 @@ plugins {
     alias(libs.plugins.secrets)
     id("io.gitlab.arturbosch.detekt")
     id("de.thetaphi.forbiddenapis")
-    id("io.sentry.android.gradle") version "4.7.1"
+    id("io.sentry.android.gradle") version "5.12.2"
 }
 
 android {
@@ -21,7 +21,7 @@ android {
         minSdk = 24
         targetSdk = 36
         versionCode = 1
-        versionName = "1.1"
+        versionName = "1.1.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -118,7 +118,7 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.9.0")
 
     // Sentry for error tracking in production
-    implementation("io.sentry:sentry-android:6.34.0")
+    implementation("io.sentry:sentry-android:8.25.0")
     
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
@@ -139,4 +139,13 @@ dependencies {
     androidTestImplementation(libs.androidx.ui.test.junit4)
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
+}
+
+sentry {
+    org.set("nexxserve")
+    projectName.set("android")
+
+    // this will upload your source code to Sentry to show it as part of the stack traces
+    // disable if you don't want to expose your sources
+    includeSourceContext.set(true)
 }

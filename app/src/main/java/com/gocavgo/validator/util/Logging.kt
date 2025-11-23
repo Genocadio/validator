@@ -173,11 +173,9 @@ object Logging {
 
     private fun dispatch(level: LogLevel, tag: String, message: String, tr: Throwable? = null) {
         if (!isEnabled(tag)) return
-        if (sinks.isEmpty()) {
-            // Default to Logcat if no sinks have been configured
-            LogcatSink.log(level, tag, message, tr)
-            return
-        }
+        // Always log to Logcat (console) in addition to any configured sinks
+        LogcatSink.log(level, tag, message, tr)
+        // Also dispatch to all configured sinks (e.g., Sentry)
         sinks.forEach { sink ->
             try {
                 sink.log(level, tag, message, tr)

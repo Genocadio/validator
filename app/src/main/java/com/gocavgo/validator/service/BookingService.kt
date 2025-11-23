@@ -1,7 +1,7 @@
 package com.gocavgo.validator.service
 
 import android.content.Context
-import android.util.Log
+import com.gocavgo.validator.util.Logging
 import com.gocavgo.validator.database.AppDatabase
 import com.gocavgo.validator.database.BookingEntity
 import com.gocavgo.validator.database.PaymentEntity
@@ -118,19 +118,19 @@ class BookingService(private val context: Context) {
                     tickets = listOf(ticket)
                 )
             } catch (e: Exception) {
-                Log.w("BookingService", "Failed to publish booking bundle: ${e.message}")
+                Logging.w("BookingService", "Failed to publish booking bundle: ${e.message}")
             }
             
-            Log.d("BookingService", "=== BOOKING CREATED SUCCESSFULLY ===")
-            Log.d("BookingService", "Booking ID: $bookingId")
-            Log.d("BookingService", "Payment ID: $paymentId")
-            Log.d("BookingService", "Ticket ID: $ticketId")
-            Log.d("BookingService", "Ticket Number: $ticketNumber")
-            Log.d("BookingService", "NFC Tag ID: $nfcId")
-            Log.d("BookingService", "Amount: $price RWF")
-            Log.d("BookingService", "From: $fromLocationName (ID: $fromLocationId)")
-            Log.d("BookingService", "To: $toLocationName (ID: $toLocationId)")
-            Log.d("BookingService", "=====================================")
+            Logging.d("BookingService", "=== BOOKING CREATED SUCCESSFULLY ===")
+            Logging.d("BookingService", "Booking ID: $bookingId")
+            Logging.d("BookingService", "Payment ID: $paymentId")
+            Logging.d("BookingService", "Ticket ID: $ticketId")
+            Logging.d("BookingService", "Ticket Number: $ticketNumber")
+            Logging.d("BookingService", "NFC Tag ID: $nfcId")
+            Logging.d("BookingService", "Amount: $price RWF")
+            Logging.d("BookingService", "From: $fromLocationName (ID: $fromLocationId)")
+            Logging.d("BookingService", "To: $toLocationName (ID: $toLocationId)")
+            Logging.d("BookingService", "=====================================")
             
             BookingCreationResult.Success(
                 bookingId = bookingId,
@@ -141,7 +141,7 @@ class BookingService(private val context: Context) {
             )
             
         } catch (e: Exception) {
-            Log.e("BookingService", "Error creating booking: ${e.message}", e)
+            Logging.e("BookingService", "Error creating booking: ${e.message}", e)
             BookingCreationResult.Error(e.message ?: "Unknown error occurred")
         }
     }
@@ -192,7 +192,7 @@ class BookingService(private val context: Context) {
         return try {
             ticketDao.getTicketByNumber(ticketNumber) != null
         } catch (e: Exception) {
-            Log.w("BookingService", "Error checking ticket number existence: ${e.message}")
+            Logging.w("BookingService", "Error checking ticket number existence: ${e.message}")
             false
         }
     }
@@ -211,7 +211,7 @@ class BookingService(private val context: Context) {
         return try {
             val trip = tripDao.getTripById(tripId)
             if (trip == null) {
-                Log.w("BookingService", "Trip with ID $tripId not found")
+                Logging.w("BookingService", "Trip with ID $tripId not found")
                 return null
             }
             
@@ -230,16 +230,16 @@ class BookingService(private val context: Context) {
             // Search through waypoints to find matching location ID
             for (waypoint in waypoints) {
                 if (waypoint.location_id == locationId) {
-                    Log.d("BookingService", "Location ID $locationId found in waypoints: ${waypoint.location.google_place_name}")
+                    Logging.d("BookingService", "Location ID $locationId found in waypoints: ${waypoint.location.google_place_name}")
                     return waypoint.location.custom_name ?: waypoint.location.google_place_name
                 }
             }
-            Log.d("BookingService", "Location ID $locationId not found in waypoints list")
+            Logging.d("BookingService", "Location ID $locationId not found in waypoints list")
 
-            Log.w("BookingService", "Location ID $locationId not found in trip $tripId")
+            Logging.w("BookingService", "Location ID $locationId not found in trip $tripId")
             null
         } catch (e: Exception) {
-            Log.w("BookingService", "Failed to get location name for ID $locationId: ${e.message}")
+            Logging.w("BookingService", "Failed to get location name for ID $locationId: ${e.message}")
             null
         }
     }
@@ -276,7 +276,7 @@ class BookingService(private val context: Context) {
         try {
             bookingDao.getBookingById(bookingId)
         } catch (e: Exception) {
-            Log.e("BookingService", "Error getting booking by ID: ${e.message}", e)
+            Logging.e("BookingService", "Error getting booking by ID: ${e.message}", e)
             null
         }
     }
@@ -288,7 +288,7 @@ class BookingService(private val context: Context) {
         try {
             ticketDao.getTicketsByBookingId(bookingId)
         } catch (e: Exception) {
-            Log.e("BookingService", "Error getting tickets by booking ID: ${e.message}", e)
+            Logging.e("BookingService", "Error getting tickets by booking ID: ${e.message}", e)
             emptyList()
         }
     }
@@ -300,7 +300,7 @@ class BookingService(private val context: Context) {
         try {
             paymentDao.getPaymentsByBookingId(bookingId)
         } catch (e: Exception) {
-            Log.e("BookingService", "Error getting payments by booking ID: ${e.message}", e)
+            Logging.e("BookingService", "Error getting payments by booking ID: ${e.message}", e)
             emptyList()
         }
     }
@@ -312,7 +312,7 @@ class BookingService(private val context: Context) {
         try {
             ticketDao.getTicketByNumber(ticketNumber)
         } catch (e: Exception) {
-            Log.e("BookingService", "Error getting ticket by number: ${e.message}", e)
+            Logging.e("BookingService", "Error getting ticket by number: ${e.message}", e)
             null
         }
     }
@@ -323,10 +323,10 @@ class BookingService(private val context: Context) {
     suspend fun countPaidPassengersForWaypoint(tripId: Int, waypointLocationName: String): Int = withContext(Dispatchers.IO) {
         try {
             val count = bookingDao.countPaidPassengersForLocation(tripId, waypointLocationName)
-            Log.d("BookingService", "Paid passengers for waypoint '$waypointLocationName' in trip $tripId: $count")
+            Logging.d("BookingService", "Paid passengers for waypoint '$waypointLocationName' in trip $tripId: $count")
             return@withContext count
         } catch (e: Exception) {
-            Log.e("BookingService", "Error counting paid passengers for waypoint: ${e.message}", e)
+            Logging.e("BookingService", "Error counting paid passengers for waypoint: ${e.message}", e)
             return@withContext 0
         }
     }
@@ -354,9 +354,9 @@ class BookingService(private val context: Context) {
                     val ticket = tickets.firstOrNull()
                     
                     if (ticket != null) {
-                        Log.d("BookingService", "Found existing booking for NFC tag: $nfcTagId")
-                        Log.d("BookingService", "Booking ID: ${booking.id}")
-                        Log.d("BookingService", "Ticket Number: ${ticket.ticket_number}")
+                        Logging.d("BookingService", "Found existing booking for NFC tag: $nfcTagId")
+                        Logging.d("BookingService", "Booking ID: ${booking.id}")
+                        Logging.d("BookingService", "Ticket Number: ${ticket.ticket_number}")
                         
                         ExistingBookingResult.Found(
                             booking = booking,
@@ -364,19 +364,19 @@ class BookingService(private val context: Context) {
                             ticket = ticket
                         )
                     } else {
-                        Log.w("BookingService", "No ticket found for existing booking: ${booking.id}")
+                        Logging.w("BookingService", "No ticket found for existing booking: ${booking.id}")
                         ExistingBookingResult.NotFound
                     }
                 } else {
-                    Log.w("BookingService", "No booking found for payment: ${matchingPayment.id}")
+                    Logging.w("BookingService", "No booking found for payment: ${matchingPayment.id}")
                     ExistingBookingResult.NotFound
                 }
             } else {
-                Log.d("BookingService", "No existing booking found for NFC tag: $nfcTagId")
+                Logging.d("BookingService", "No existing booking found for NFC tag: $nfcTagId")
                 ExistingBookingResult.NotFound
             }
         } catch (e: Exception) {
-            Log.e("BookingService", "Error checking existing booking by NFC tag: ${e.message}", e)
+            Logging.e("BookingService", "Error checking existing booking by NFC tag: ${e.message}", e)
             ExistingBookingResult.Error(e.message ?: "Unknown error occurred")
         }
     }
@@ -388,7 +388,7 @@ class BookingService(private val context: Context) {
             val dropoffs = bookingDao.countTicketsDroppingOffAtLocation(tripId, locationIdStr) ?: 0
             Pair(pickups, dropoffs)
         } catch (e: Exception) {
-            Log.e("BookingService", "Error getting passenger counts for location: ${e.message}", e)
+            Logging.e("BookingService", "Error getting passenger counts for location: ${e.message}", e)
             Pair(0, 0)
         }
     }
@@ -422,7 +422,7 @@ class BookingService(private val context: Context) {
                 )
             }
         } catch (e: Exception) {
-            Log.e("BookingService", "Error getting passengers picking up at location: ${e.message}", e)
+            Logging.e("BookingService", "Error getting passengers picking up at location: ${e.message}", e)
             emptyList()
         }
     }
@@ -444,7 +444,7 @@ class BookingService(private val context: Context) {
                 )
             }
         } catch (e: Exception) {
-            Log.e("BookingService", "Error getting passengers dropping off at location: ${e.message}", e)
+            Logging.e("BookingService", "Error getting passengers dropping off at location: ${e.message}", e)
             emptyList()
         }
     }

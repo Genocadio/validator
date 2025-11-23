@@ -1,7 +1,7 @@
 package com.gocavgo.validator.service
 
 import android.content.Context
-import android.util.Log
+import com.gocavgo.validator.util.Logging
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import androidx.work.ExistingPeriodicWorkPolicy
@@ -45,9 +45,9 @@ class NetworkMonitorWorker(
                     workRequest
                 )
                 
-                Log.d(TAG, "Network monitoring worker scheduled (every ${INTERVAL_MINUTES} minutes)")
+                Logging.d(TAG, "Network monitoring worker scheduled (every ${INTERVAL_MINUTES} minutes)")
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to schedule network monitoring worker: ${e.message}", e)
+                Logging.e(TAG, "Failed to schedule network monitoring worker: ${e.message}", e)
             }
         }
         
@@ -57,20 +57,20 @@ class NetworkMonitorWorker(
         fun cancel(context: Context) {
             try {
                 WorkManager.getInstance(context).cancelUniqueWork(WORK_NAME)
-                Log.d(TAG, "Network monitoring worker cancelled")
+                Logging.d(TAG, "Network monitoring worker cancelled")
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to cancel network monitoring worker: ${e.message}", e)
+                Logging.e(TAG, "Failed to cancel network monitoring worker: ${e.message}", e)
             }
         }
     }
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         try {
-            Log.d(TAG, "Network monitoring worker executing...")
+            Logging.d(TAG, "Network monitoring worker executing...")
             
             // Check if we have network permissions
             if (!NetworkUtils.hasNetworkPermissions(applicationContext)) {
-                Log.w(TAG, "Network permissions not available, skipping check")
+                Logging.w(TAG, "Network permissions not available, skipping check")
                 return@withContext Result.success()
             }
             
@@ -79,7 +79,7 @@ class NetworkMonitorWorker(
             val isMetered = NetworkUtils.isConnectionMetered(applicationContext)
             val connectionType = getConnectionType()
             
-            Log.d(TAG, "Background network check: connected=$isConnected, type=$connectionType, metered=$isMetered")
+            Logging.d(TAG, "Background network check: connected=$isConnected, type=$connectionType, metered=$isMetered")
             
             // Store the network state for persistence
             storeNetworkState(isConnected, connectionType, isMetered)
@@ -87,11 +87,11 @@ class NetworkMonitorWorker(
             // Notify MQTT service if it's running
             notifyMqttService(isConnected, connectionType, isMetered)
             
-            Log.d(TAG, "Network monitoring worker completed successfully")
+            Logging.d(TAG, "Network monitoring worker completed successfully")
             Result.success()
             
         } catch (e: Exception) {
-            Log.e(TAG, "Network monitoring worker failed: ${e.message}", e)
+            Logging.e(TAG, "Network monitoring worker failed: ${e.message}", e)
             Result.retry()
         }
     }
@@ -114,7 +114,7 @@ class NetworkMonitorWorker(
                 else -> "UNKNOWN"
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Could not determine connection type: ${e.message}")
+            Logging.w(TAG, "Could not determine connection type: ${e.message}")
             "UNKNOWN"
         }
     }
@@ -130,9 +130,9 @@ class NetworkMonitorWorker(
                 putString("source", "worker") // Mark as worker-updated
                 apply()
             }
-            Log.d(TAG, "Network state stored by worker: connected=$connected, type=$type, metered=$metered")
+            Logging.d(TAG, "Network state stored by worker: connected=$connected, type=$type, metered=$metered")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to store network state: ${e.message}", e)
+            Logging.e(TAG, "Failed to store network state: ${e.message}", e)
         }
     }
     
@@ -144,18 +144,18 @@ class NetworkMonitorWorker(
             
             // Check if service is waiting for network and network is now available
             if (connected && mqttService?.isWaitingForNetwork() == true) {
-                Log.d(TAG, "Network available and MQTT service is waiting, triggering restart")
+                Logging.d(TAG, "Network available and MQTT service is waiting, triggering restart")
                 // The MQTT service will handle the restart through its network monitoring
             }
             
             // Also notify MQTT foreground service if running
             val foregroundService = MqttForegroundService.getInstance()
             if (foregroundService?.isServiceRunning() == true) {
-                Log.d(TAG, "MQTT foreground service is running, network state updated")
+                Logging.d(TAG, "MQTT foreground service is running, network state updated")
             }
             
         } catch (e: Exception) {
-            Log.w(TAG, "Could not notify MQTT service: ${e.message}")
+            Logging.w(TAG, "Could not notify MQTT service: ${e.message}")
         }
     }
 }

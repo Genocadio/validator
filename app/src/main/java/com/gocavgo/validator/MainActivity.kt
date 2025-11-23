@@ -5,7 +5,6 @@ import android.content.Context
 import android.os.Bundle
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent

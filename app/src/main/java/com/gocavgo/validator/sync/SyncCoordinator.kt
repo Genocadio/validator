@@ -1,7 +1,7 @@
 package com.gocavgo.validator.sync
 
 import android.content.Context
-import android.util.Log
+import com.gocavgo.validator.util.Logging
 
 /**
  * Coordinates between MQTT real-time updates and periodic backend polling
@@ -27,9 +27,9 @@ class SyncCoordinator {
                 prefs.edit()
                     .putLong(KEY_LAST_MQTT_TRIP_UPDATE, timestamp)
                     .apply()
-                Log.d(TAG, "Recorded MQTT update timestamp: $timestamp")
+                Logging.d(TAG, "Recorded MQTT update timestamp: $timestamp")
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to record MQTT update: ${e.message}", e)
+                Logging.e(TAG, "Failed to record MQTT update: ${e.message}", e)
             }
         }
         
@@ -42,7 +42,7 @@ class SyncCoordinator {
                 val prefs = context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
                 prefs.getLong(KEY_LAST_MQTT_TRIP_UPDATE, 0L)
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to get last MQTT update time: ${e.message}", e)
+                Logging.e(TAG, "Failed to get last MQTT update time: ${e.message}", e)
                 0L
             }
         }
@@ -59,7 +59,7 @@ class SyncCoordinator {
                 
                 // If there's no MQTT update recorded, proceed with backend fetch
                 if (lastUpdateTime == 0L) {
-                    Log.d(TAG, "No MQTT update recorded, proceeding with backend fetch")
+                    Logging.d(TAG, "No MQTT update recorded, proceeding with backend fetch")
                     return true
                 }
                 
@@ -70,16 +70,16 @@ class SyncCoordinator {
                 val isDataStale = timeSinceLastUpdate >= thresholdMillis
                 
                 if (isDataStale) {
-                    Log.d(TAG, "Data is stale (${timeSinceLastUpdate / MILLIS_PER_MINUTE} minutes old), proceeding with backend fetch")
+                    Logging.d(TAG, "Data is stale (${timeSinceLastUpdate / MILLIS_PER_MINUTE} minutes old), proceeding with backend fetch")
                     return true
                 } else {
                     val minutesOld = timeSinceLastUpdate / MILLIS_PER_MINUTE
                     val secondsOld = (timeSinceLastUpdate % MILLIS_PER_MINUTE) / 1000
-                    Log.d(TAG, "Data is fresh from MQTT (${minutesOld}m ${secondsOld}s ago), skipping backend fetch")
+                    Logging.d(TAG, "Data is fresh from MQTT (${minutesOld}m ${secondsOld}s ago), skipping backend fetch")
                     return false
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Error checking data freshness: ${e.message}", e)
+                Logging.e(TAG, "Error checking data freshness: ${e.message}", e)
                 // On error, proceed with backend fetch for safety
                 return true
             }
@@ -111,9 +111,9 @@ class SyncCoordinator {
                 prefs.edit()
                     .remove(KEY_LAST_MQTT_TRIP_UPDATE)
                     .apply()
-                Log.d(TAG, "Cleared MQTT sync state")
+                Logging.d(TAG, "Cleared MQTT sync state")
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to clear sync state: ${e.message}", e)
+                Logging.e(TAG, "Failed to clear sync state: ${e.message}", e)
             }
         }
         

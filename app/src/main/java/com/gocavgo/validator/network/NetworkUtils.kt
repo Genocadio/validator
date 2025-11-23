@@ -8,7 +8,7 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.Build
 import android.telephony.TelephonyManager
-import android.util.Log
+import com.gocavgo.validator.util.Logging
 import androidx.annotation.RequiresApi
 import androidx.annotation.RequiresPermission
 import androidx.core.content.ContextCompat
@@ -133,10 +133,10 @@ private fun getCellularInfo(context: Context): CellularInfo {
                 simState = getSimStateString(telephonyManager.simState)
         )
     } catch (e: SecurityException) {
-        Log.w(TAG, "Security exception getting cellular info: ${e.message}")
+        Logging.w(TAG, "Security exception getting cellular info: ${e.message}")
         return CellularInfo(hasPermission = false)
     } catch (e: Exception) {
-        Log.w(TAG, "Error getting cellular info: ${e.message}")
+        Logging.w(TAG, "Error getting cellular info: ${e.message}")
         return CellularInfo(hasPermission = true, isAvailable = false)
     }
 }
@@ -154,7 +154,7 @@ private fun getWifiInfo(context: Context): WifiInfo {
                 signalStrength = getWifiSignalStrength(networkCapabilities)
             )
     } catch (e: Exception) {
-        Log.w(TAG, "Error getting WiFi info: ${e.message}")
+        Logging.w(TAG, "Error getting WiFi info: ${e.message}")
         WifiInfo(isAvailable = false, isConnected = false, signalStrength = 0)
     }
 }

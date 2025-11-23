@@ -22,14 +22,14 @@ package com.gocavgo.validator.navigator
 import android.content.Context
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
-import android.util.Log
+import com.gocavgo.validator.util.Logging
 import java.util.Locale
 
 // A simple class that uses Android's TextToSpeech engine to speak texts.
 class VoiceAssistant(context: Context?, voiceAssistantListener: VoiceAssistantListener) {
     private val textToSpeech: TextToSpeech = TextToSpeech(context!!.applicationContext) { status: Int ->
         if (status != TextToSpeech.SUCCESS) {
-            Log.d(TAG, ("ERROR: Initialization of Android's TextToSpeech failed."))
+            Logging.d(TAG, ("ERROR: Initialization of Android's TextToSpeech failed."))
             return@TextToSpeech
         }
         voiceAssistantListener.onInitialized()
@@ -51,7 +51,7 @@ class VoiceAssistant(context: Context?, voiceAssistantListener: VoiceAssistantLi
     }
 
     fun speak(speechMessage: String) {
-        Log.d(TAG, "Voice message: $speechMessage")
+        Logging.d(TAG, "Voice message: $speechMessage")
 
         // No engine specific params used for this example.
         val engineParams: Bundle? = null
@@ -61,7 +61,7 @@ class VoiceAssistant(context: Context?, voiceAssistantListener: VoiceAssistantLi
         val error =
             textToSpeech.speak(speechMessage, TextToSpeech.QUEUE_FLUSH, engineParams, utteranceId)
         if (error != -1) {
-            Log.e(
+            Logging.e(
                 TAG,
                 "Error when speaking using Android's TextToSpeech: $error"
             )

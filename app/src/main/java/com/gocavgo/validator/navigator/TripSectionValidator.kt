@@ -20,13 +20,12 @@
 package com.gocavgo.validator.navigator
 
 import android.content.Context
-import android.util.Log
+import com.gocavgo.validator.util.Logging
 import com.gocavgo.validator.dataclass.TripResponse
 import com.gocavgo.validator.dataclass.TripWaypoint
 import com.gocavgo.validator.database.DatabaseManager
 import com.gocavgo.validator.service.MqttService
 import com.gocavgo.validator.service.RouteProgressMqttService
-import com.gocavgo.validator.util.Logging
 import com.here.sdk.core.GeoCoordinates
 import com.here.sdk.core.Location
 import com.here.sdk.routing.Route
@@ -81,6 +80,9 @@ class TripSectionValidator(private val context: Context) {
     // Callback for trip deletion/cancellation (notifies service/activity to stop navigation)
     private var tripDeletedCallback: ((Int) -> Unit)? = null
     
+    // Callback for destination reached (notifies service/activity that navigation completed)
+    private var destinationReachedCallback: (() -> Unit)? = null
+    
     // Integrated RouteProgressTracker functionality
     private val databaseManager = DatabaseManager.getInstance(context)
     private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -90,6 +92,9 @@ class TripSectionValidator(private val context: Context) {
     private var lastProgressUpdateTime = 0L
     private var lastWaypointApproachNotification = mutableSetOf<Int>()
     private var tripStarted = false
+    
+    // Flag to prevent duplicate destination reached calls (from both distance check and listener)
+    private var destinationReachedByDistance = false
     
     // Latest location data from navigableLocationListener
     private var latestLat: Double? = null
@@ -103,6 +108,7 @@ class TripSectionValidator(private val context: Context) {
         private const val LOCATION_PROXIMITY_THRESHOLD_METERS = 50.0 // Consider locations "same" if within 50m
         private const val WAYPOINT_APPROACHING_TIME_SECONDS = 300L // 5 minutes
         private const val PROGRESS_UPDATE_INTERVAL_SECONDS = 5L // 5 seconds
+        private const val DESTINATION_REACHED_THRESHOLD_METERS = 50.0 // Mark destination as reached when within 50m
     }
     
     /**
@@ -138,10 +144,25 @@ class TripSectionValidator(private val context: Context) {
     }
     
     /**
+     * Get latest speed from NavigableLocationListener
+     * Returns the most recent speed value updated by updateLocationData()
+     * @return Speed in meters per second, or null if no speed data available yet
+     */
+    fun getLatestSpeed(): Double? = latestSpeed
+    
+    /**
      * Set callback for UI updates when waypoint is passed
      */
     fun setWaypointPassedCallback(callback: (() -> Unit)?) {
         this.waypointPassedCallback = callback
+    }
+    
+    /**
+     * Set callback for destination reached
+     * Called when destination is reached and navigation completes
+     */
+    fun setDestinationReachedCallback(callback: (() -> Unit)?) {
+        this.destinationReachedCallback = callback
     }
     
     /**
@@ -169,7 +190,7 @@ class TripSectionValidator(private val context: Context) {
         deviceLocation: GeoCoordinates? = null,
         skippedWaypointCount: Int = 0
     ): Boolean {
-        Log.d(TAG, "=== STARTING ROUTE SECTION VERIFICATION ===")
+        Logging.d(TAG, "=== STARTING ROUTE SECTION VERIFICATION ===")
         
         this.tripResponse = tripResponse
         this.route = route
@@ -182,11 +203,11 @@ class TripSectionValidator(private val context: Context) {
         val expectedSections: Int
         val actualSections = route.sections.size
         
-        Log.d(TAG, "=== WAYPOINT ACCOUNTING ===")
-        Log.d(TAG, "Total waypoints: $totalWaypoints")
-        Log.d(TAG, "Skipped waypoints: $skippedWaypointCount")
-        Log.d(TAG, "Active waypoints: $activeWaypoints")
-        Log.d(TAG, "===========================")
+        Logging.d(TAG, "=== WAYPOINT ACCOUNTING ===")
+        Logging.d(TAG, "Total waypoints: $totalWaypoints")
+        Logging.d(TAG, "Skipped waypoints: $skippedWaypointCount")
+        Logging.d(TAG, "Active waypoints: $activeWaypoints")
+        Logging.d(TAG, "===========================")
         
         if (isDeviceLocationMode) {
             // Device location completely replaces trip origin
@@ -194,36 +215,37 @@ class TripSectionValidator(private val context: Context) {
             // Same as simulated mode: n-1 sections for n locations
             expectedSections = tripLocations - 1
             deviceLocationOffset = 0 // No extra waypoints (device location replaces origin)
-            Log.d(TAG, "🔍 DEVICE LOCATION MODE: Route starts from device location (replaces trip origin)")
-            Log.d(TAG, "  Route structure: Device Location -> Active Waypoints -> Destination")
+            Logging.d(TAG, "🔍 DEVICE LOCATION MODE: Route starts from device location (replaces trip origin)")
+            Logging.d(TAG, "  Route structure: Device Location -> Active Waypoints -> Destination")
         } else {
             // In simulated mode, route starts from trip origin
             expectedSections = tripLocations - 1 // n-1 sections for n locations
             deviceLocationOffset = 0 // No extra waypoints
-            Log.d(TAG, "🎮 SIMULATED MODE: Route starts from trip origin")
-            Log.d(TAG, "  Route structure: Trip Origin -> Active Waypoints -> Destination")
+            Logging.d(TAG, "🎮 SIMULATED MODE: Route starts from trip origin")
+            Logging.d(TAG, "  Route structure: Trip Origin -> Active Waypoints -> Destination")
         }
         
-        Log.d(TAG, "Trip ID: ${tripResponse.id}")
-        Log.d(TAG, "Trip locations: $tripLocations (origin + $activeWaypoints active waypoints + destination)")
-        Log.d(TAG, "Device location offset: $deviceLocationOffset")
-        Log.d(TAG, "Expected sections: $expectedSections")
-        Log.d(TAG, "Actual sections: $actualSections")
+        Logging.d(TAG, "Trip ID: ${tripResponse.id}")
+        Logging.d(TAG, "Trip locations: $tripLocations (origin + $activeWaypoints active waypoints + destination)")
+        Logging.d(TAG, "Device location offset: $deviceLocationOffset")
+        Logging.d(TAG, "Expected sections: $expectedSections")
+        Logging.d(TAG, "Actual sections: $actualSections")
         
         // Build waypoint names list for mapping (only unpassed waypoints)
         waypointNames = buildWaypointNamesList(tripResponse, isDeviceLocationMode, skippedWaypointCount)
-        Log.d(TAG, "Waypoint names (excluding skipped): $waypointNames")
+        Logging.d(TAG, "Waypoint names (excluding skipped): $waypointNames")
         
         // Verify section count
         val verificationPassed = actualSections == expectedSections
         
         if (verificationPassed) {
-            Log.d(TAG, "✅ VERIFICATION PASSED: Route sections match trip structure (accounting for $skippedWaypointCount skipped waypoints)")
+            Logging.d(TAG, "✅ VERIFICATION PASSED: Route sections match trip structure (accounting for $skippedWaypointCount skipped waypoints)")
             isVerified = true
             passedWaypoints.clear() // Reset passed waypoints
             passedWaypointData.clear() // Reset passed waypoint data
             lastProcessedSectionCount = -1 // Reset section count tracking
             isFirstProgressUpdate = true // Reset first progress update flag
+            destinationReachedByDistance = false // Reset destination reached flag for new route
             
             // Ensure trip status is set to IN_PROGRESS immediately upon navigation start
             tripResponse?.let { trip ->
@@ -264,18 +286,18 @@ class TripSectionValidator(private val context: Context) {
             if (!passedWaypoints.contains(0)) {
                 markOriginAsPassed()
             } else {
-                Log.d(TAG, "Origin already marked as passed in database, skipping markOriginAsPassed()")
+                Logging.d(TAG, "Origin already marked as passed in database, skipping markOriginAsPassed()")
             }
             
             // Log initial section details
             logSectionDetails(route.sections)
         } else {
-            Log.e(TAG, "❌ VERIFICATION FAILED: Expected $expectedSections sections, got $actualSections")
-            Log.e(TAG, "   (Total waypoints: $totalWaypoints, Skipped: $skippedWaypointCount, Active: $activeWaypoints)")
+            Logging.e(TAG, "❌ VERIFICATION FAILED: Expected $expectedSections sections, got $actualSections")
+            Logging.e(TAG, "   (Total waypoints: $totalWaypoints, Skipped: $skippedWaypointCount, Active: $activeWaypoints)")
             isVerified = false
         }
         
-        Log.d(TAG, "=== VERIFICATION COMPLETE ===")
+        Logging.d(TAG, "=== VERIFICATION COMPLETE ===")
         return verificationPassed
     }
     
@@ -289,7 +311,7 @@ class TripSectionValidator(private val context: Context) {
     fun processSectionProgress(sectionProgressList: List<SectionProgress>, totalSections: Int) {
         // FIRST: Check if trip is still valid (not null/reset)
         if (tripResponse == null) {
-            Log.w(TAG, "Trip is null (cancelled/reset), skipping section progress processing")
+            Logging.w(TAG, "Trip is null (cancelled/reset), skipping section progress processing")
             return
         }
         
@@ -298,13 +320,13 @@ class TripSectionValidator(private val context: Context) {
         // This avoids blocking the main processing thread with a database check on every update
         
         if (!isVerified) {
-            Log.w(TAG, "Trip not verified, skipping section progress processing")
+            Logging.w(TAG, "Trip not verified, skipping section progress processing")
             return
         }
         
-        Log.d(TAG, "=== PROCESSING SECTION PROGRESS ===")
-        Log.d(TAG, "Current sections: ${sectionProgressList.size}")
-        Log.d(TAG, "Total sections: $totalSections")
+        Logging.d(TAG, "=== PROCESSING SECTION PROGRESS ===")
+        Logging.d(TAG, "Current sections: ${sectionProgressList.size}")
+        Logging.d(TAG, "Total sections: $totalSections")
         
         // Log first progress update to file
         if (isFirstProgressUpdate) {
@@ -315,7 +337,7 @@ class TripSectionValidator(private val context: Context) {
             // Set initialization flag to false after first real progress update
             // This prevents overwriting correct database state with incorrect in-memory indices during resume
             if (isInitializingAfterResume) {
-                Log.d(TAG, "First real progress update received - enabling database writes")
+                Logging.d(TAG, "First real progress update received - enabling database writes")
                 isInitializingAfterResume = false
             }
         }
@@ -332,7 +354,31 @@ class TripSectionValidator(private val context: Context) {
         if (!isInitializingAfterResume) {
             writeProgressToDatabase(sectionProgressList)
         } else {
-            Log.d(TAG, "Skipping database write during initialization - preserving database state")
+            Logging.d(TAG, "Skipping database write during initialization - preserving database state")
+        }
+        
+        // Check if destination should be marked as reached (50m threshold)
+        // Only check destination, not waypoints (waypoints use milestone detection)
+        if (!destinationReachedByDistance && sectionProgressList.isNotEmpty()) {
+            tripResponse?.let { trip ->
+                // Check if all waypoints are passed (only destination remains)
+                val allWaypointsPassed = trip.waypoints.all { it.is_passed }
+                
+                if (allWaypointsPassed) {
+                    // Get remaining distance to destination from last section
+                    val lastSection = sectionProgressList.lastOrNull()
+                    val remainingDistanceToDestination = lastSection?.remainingDistanceInMeters?.toDouble() ?: Double.MAX_VALUE
+                    
+                    if (remainingDistanceToDestination <= DESTINATION_REACHED_THRESHOLD_METERS) {
+                        Logging.d(TAG, "🏁 DESTINATION WITHIN ${DESTINATION_REACHED_THRESHOLD_METERS}m THRESHOLD!")
+                        Logging.d(TAG, "  Remaining distance: ${remainingDistanceToDestination}m")
+                        Logging.d(TAG, "  All waypoints passed: $allWaypointsPassed")
+                        
+                        // Call handleDestinationReached() - it will set the flag internally to prevent duplicates
+                        handleDestinationReached()
+                    }
+                }
+            }
         }
         
         // Send periodic progress update via MQTT (reads from database)
@@ -341,7 +387,7 @@ class TripSectionValidator(private val context: Context) {
         // Log passed waypoints summary
         logPassedWaypointsSummary()
         
-        Log.d(TAG, "=== SECTION PROGRESS PROCESSING COMPLETE ===")
+        Logging.d(TAG, "=== SECTION PROGRESS PROCESSING COMPLETE ===")
     }
     
     /**
@@ -428,7 +474,7 @@ class TripSectionValidator(private val context: Context) {
      */
     private fun rebuildPassedWaypointsFromDatabase() {
         tripResponse?.let { trip ->
-            Log.d(TAG, "=== REBUILDING PASSED WAYPOINTS FROM DATABASE ===")
+            Logging.d(TAG, "=== REBUILDING PASSED WAYPOINTS FROM DATABASE ===")
             passedWaypoints.clear()
             passedWaypointData.clear()
             
@@ -436,9 +482,9 @@ class TripSectionValidator(private val context: Context) {
             val sortedWaypoints = trip.waypoints.sortedBy { it.order }
             val unpassedWaypoints = sortedWaypoints.filter { !it.is_passed }
             
-            Log.d(TAG, "Total waypoints in trip: ${sortedWaypoints.size}")
-            Log.d(TAG, "Passed waypoints in DB: ${sortedWaypoints.count { it.is_passed }}")
-            Log.d(TAG, "Unpassed waypoints in DB: ${unpassedWaypoints.size}")
+            Logging.d(TAG, "Total waypoints in trip: ${sortedWaypoints.size}")
+            Logging.d(TAG, "Passed waypoints in DB: ${sortedWaypoints.count { it.is_passed }}")
+            Logging.d(TAG, "Unpassed waypoints in DB: ${unpassedWaypoints.size}")
             
             // Map database waypoint state to waypointNames indices
             // waypointNames = ["Origin", "Unpassed Waypoint 1", "Unpassed Waypoint 2", ..., "Destination"]
@@ -447,7 +493,7 @@ class TripSectionValidator(private val context: Context) {
             if (trip.status.equals("IN_PROGRESS", ignoreCase = true) || sortedWaypoints.any { it.is_passed }) {
                 // Trip has started, so origin is passed
                 passedWaypoints.add(0)
-                Log.d(TAG, "Added origin (index 0) to passedWaypoints based on trip status")
+                Logging.d(TAG, "Added origin (index 0) to passedWaypoints based on trip status")
                 
                 // Add origin to passedWaypointData
                 val originName = waypointNames.getOrNull(0) ?: "Origin"
@@ -465,8 +511,8 @@ class TripSectionValidator(private val context: Context) {
             // The passed waypoints are already filtered out from waypointNames by buildWaypointNamesList()
             // So passedWaypoints should only contain index 0 (origin) if the trip has started
             
-            Log.d(TAG, "Rebuilt passedWaypoints set: $passedWaypoints")
-            Log.d(TAG, "================================================")
+            Logging.d(TAG, "Rebuilt passedWaypoints set: $passedWaypoints")
+            Logging.d(TAG, "================================================")
         }
     }
     
@@ -500,9 +546,9 @@ class TripSectionValidator(private val context: Context) {
             )
             passedWaypointData.add(passedInfo)
             
-            Log.d(TAG, "🏁 DEVICE LOCATION MARKED AS PASSED: $deviceLocationName")
-            Log.d(TAG, "  ⏰ Trip started at: ${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(currentTime)}")
-            Log.d(TAG, "  📊 Actual waypoint order: $actualWaypointOrder")
+            Logging.d(TAG, "🏁 DEVICE LOCATION MARKED AS PASSED: $deviceLocationName")
+            Logging.d(TAG, "  ⏰ Trip started at: ${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(currentTime)}")
+            Logging.d(TAG, "  📊 Actual waypoint order: $actualWaypointOrder")
             
             // Log device location marking to file
             val deviceLocationMarkingInfo = "🏁 DEVICE LOCATION MARKED AS PASSED: $deviceLocationName\n  ⏰ Trip started at: ${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(currentTime)}"
@@ -530,9 +576,9 @@ class TripSectionValidator(private val context: Context) {
             )
             passedWaypointData.add(passedInfo)
             
-            Log.d(TAG, "🏁 ORIGIN MARKED AS PASSED: $originName")
-            Log.d(TAG, "  ⏰ Trip started at: ${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(currentTime)}")
-            Log.d(TAG, "  📊 Actual waypoint order: $actualWaypointOrder")
+            Logging.d(TAG, "🏁 ORIGIN MARKED AS PASSED: $originName")
+            Logging.d(TAG, "  ⏰ Trip started at: ${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(currentTime)}")
+            Logging.d(TAG, "  📊 Actual waypoint order: $actualWaypointOrder")
             
             // Log origin marking to file
             val originMarkingInfo = "🏁 ORIGIN MARKED AS PASSED: $originName\n  ⏰ Trip started at: ${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(currentTime)}"
@@ -566,21 +612,21 @@ class TripSectionValidator(private val context: Context) {
         val sortedWaypoints = tripResponse.waypoints.sortedBy { it.order }
         val unpassedWaypoints = sortedWaypoints.filter { !it.is_passed }
         
-        Log.d(TAG, "=== BUILDING WAYPOINT NAMES LIST ===")
-        Log.d(TAG, "Total waypoints: ${sortedWaypoints.size}")
-        Log.d(TAG, "Skipped count parameter: $skippedWaypointCount")
-        Log.d(TAG, "Unpassed waypoints: ${unpassedWaypoints.size}")
+        Logging.d(TAG, "=== BUILDING WAYPOINT NAMES LIST ===")
+        Logging.d(TAG, "Total waypoints: ${sortedWaypoints.size}")
+        Logging.d(TAG, "Skipped count parameter: $skippedWaypointCount")
+        Logging.d(TAG, "Unpassed waypoints: ${unpassedWaypoints.size}")
         
         unpassedWaypoints.forEach { waypoint ->
             names.add("Waypoint ${waypoint.order}: ${waypoint.location.custom_name}")
-            Log.d(TAG, "Added waypoint: ${waypoint.order} - ${waypoint.location.custom_name}")
+            Logging.d(TAG, "Added waypoint: ${waypoint.order} - ${waypoint.location.custom_name}")
         }
         
         // Add destination
         names.add("Destination: ${tripResponse.route.destination.custom_name}")
         
-        Log.d(TAG, "Total names in list: ${names.size}")
-        Log.d(TAG, "====================================")
+        Logging.d(TAG, "Total names in list: ${names.size}")
+        Logging.d(TAG, "====================================")
         
         return names
     }
@@ -589,18 +635,18 @@ class TripSectionValidator(private val context: Context) {
      * Logs detailed information about route sections
      */
     private fun logSectionDetails(sections: List<Section>) {
-        Log.d(TAG, "=== ROUTE SECTION DETAILS ===")
-        Log.d(TAG, "Device location mode: $isDeviceLocationMode")
-        Log.d(TAG, "Device location offset: $deviceLocationOffset")
+        Logging.d(TAG, "=== ROUTE SECTION DETAILS ===")
+        Logging.d(TAG, "Device location mode: $isDeviceLocationMode")
+        Logging.d(TAG, "Device location offset: $deviceLocationOffset")
         
         sections.forEachIndexed { index, section ->
-            Log.d(TAG, "Section ${index + 1}:")
-            Log.d(TAG, "  Length: ${section.lengthInMeters}m")
-            Log.d(TAG, "  Duration: ${section.duration.seconds}s")
-            Log.d(TAG, "  From: ${waypointNames.getOrNull(index) ?: "Unknown"}")
-            Log.d(TAG, "  To: ${waypointNames.getOrNull(index + 1) ?: "Unknown"}")
+            Logging.d(TAG, "Section ${index + 1}:")
+            Logging.d(TAG, "  Length: ${section.lengthInMeters}m")
+            Logging.d(TAG, "  Duration: ${section.duration.seconds}s")
+            Logging.d(TAG, "  From: ${waypointNames.getOrNull(index) ?: "Unknown"}")
+            Logging.d(TAG, "  To: ${waypointNames.getOrNull(index + 1) ?: "Unknown"}")
         }
-        Log.d(TAG, "=============================")
+        Logging.d(TAG, "=============================")
     }
     
     
@@ -614,8 +660,8 @@ class TripSectionValidator(private val context: Context) {
         // When sections reduce, we need to find the first unpassed waypoint
         val completedWaypointIndex = findFirstUnpassedWaypointIndex()
         
-        Log.d(TAG, "Section reduction detected: $expectedSections -> $currentSections")
-        Log.d(TAG, "Completed waypoint index: $completedWaypointIndex")
+        Logging.d(TAG, "Section reduction detected: $expectedSections -> $currentSections")
+        Logging.d(TAG, "Completed waypoint index: $completedWaypointIndex")
         
         // Mark only the next unpassed waypoint as completed
         if (completedWaypointIndex != -1 && !passedWaypoints.contains(completedWaypointIndex)) {
@@ -647,12 +693,12 @@ class TripSectionValidator(private val context: Context) {
             val detailedStatus = getComprehensiveStatusInfo()
             tripSessionLogger?.logWaypointMark(waypointName, actualWaypointOrder, detailedStatus)
             
-            Log.d(TAG, "🎯 WAYPOINT COMPLETED (Section reduction): $waypointName")
-            Log.d(TAG, "  ⏰ Timestamp: ${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(currentTime)}")
-            Log.d(TAG, "  📊 Waypoint index: $completedWaypointIndex")
+            Logging.d(TAG, "🎯 WAYPOINT COMPLETED (Section reduction): $waypointName")
+            Logging.d(TAG, "  ⏰ Timestamp: ${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(currentTime)}")
+            Logging.d(TAG, "  📊 Waypoint index: $completedWaypointIndex")
         }
         
-        Log.d(TAG, "  📊 Sections reduced from $expectedSections to $currentSections")
+        Logging.d(TAG, "  📊 Sections reduced from $expectedSections to $currentSections")
     }
     
     /**
@@ -661,11 +707,11 @@ class TripSectionValidator(private val context: Context) {
     private fun findFirstUnpassedWaypointIndex(): Int {
         for (i in waypointNames.indices) {
             if (!passedWaypoints.contains(i)) {
-                Log.d(TAG, "findFirstUnpassedWaypointIndex: Found unpassed waypoint at index $i")
+                Logging.d(TAG, "findFirstUnpassedWaypointIndex: Found unpassed waypoint at index $i")
                 return i
             }
         }
-        Log.d(TAG, "findFirstUnpassedWaypointIndex: All waypoints passed, returning -1")
+        Logging.d(TAG, "findFirstUnpassedWaypointIndex: All waypoints passed, returning -1")
         return -1 // All waypoints passed
     }
     
@@ -674,7 +720,7 @@ class TripSectionValidator(private val context: Context) {
      * Handles trip completion when all sections are gone
      */
     private fun handleTripCompletion() {
-        Log.d(TAG, "🏁 TRIP COMPLETION DETECTED!")
+        Logging.d(TAG, "🏁 TRIP COMPLETION DETECTED!")
         
         // Mark all remaining waypoints as passed
         for (i in passedWaypoints.size until waypointNames.size) {
@@ -703,10 +749,10 @@ class TripSectionValidator(private val context: Context) {
                 )
                 passedWaypointData.add(passedInfo)
                 
-                Log.d(TAG, "🎯 WAYPOINT COMPLETED (Trip completion): $waypointName")
-                Log.d(TAG, "  ⏰ Timestamp: ${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(currentTime)}")
-                Log.d(TAG, "  📊 Waypoint index: $i")
-                Log.d(TAG, "  📊 Actual waypoint order: $actualWaypointOrder")
+                Logging.d(TAG, "🎯 WAYPOINT COMPLETED (Trip completion): $waypointName")
+                Logging.d(TAG, "  ⏰ Timestamp: ${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(currentTime)}")
+                Logging.d(TAG, "  📊 Waypoint index: $i")
+                Logging.d(TAG, "  📊 Actual waypoint order: $actualWaypointOrder")
             }
         }
         
@@ -714,7 +760,7 @@ class TripSectionValidator(private val context: Context) {
         val detailedStatus = getComprehensiveStatusInfo()
         tripSessionLogger?.logTripCompletion(detailedStatus)
         
-        Log.d(TAG, "🎉 TRIP COMPLETED! All waypoints reached.")
+        Logging.d(TAG, "🎉 TRIP COMPLETED! All waypoints reached.")
     }
     
     /**
@@ -722,7 +768,7 @@ class TripSectionValidator(private val context: Context) {
      */
     fun markWaypointAsPassedByMilestone(waypointOrder: Int, wayCordinates: GeoCoordinates) {
         if (!isVerified) {
-            Log.w(TAG, "Trip not verified, ignoring milestone event")
+            Logging.w(TAG, "Trip not verified, ignoring milestone event")
             return
         }
         
@@ -731,18 +777,18 @@ class TripSectionValidator(private val context: Context) {
         val waypointIndex = waypointOrder
         
         if (passedWaypoints.contains(waypointIndex)) {
-            Log.d(TAG, "Waypoint $waypointOrder already marked as passed")
+            Logging.d(TAG, "Waypoint $waypointOrder already marked as passed")
             return
         }
         
         val waypointName = waypointNames.getOrNull(waypointIndex) ?: "Unknown"
         val currentTime = System.currentTimeMillis()
         
-        Log.d(TAG, "🎯 WAYPOINT PASSED VIA MILESTONE: $waypointName")
-        Log.d(TAG, "  📊 Waypoint order (TripWaypoint.order): $waypointOrder")
-        Log.d(TAG, "  📊 Waypoint index (waypointNames index): $waypointIndex")
-        Log.d(TAG, "  📊 Passed waypoints before: $passedWaypoints")
-        Log.d(TAG, "  ⏰ Timestamp: ${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(currentTime)}")
+        Logging.d(TAG, "🎯 WAYPOINT PASSED VIA MILESTONE: $waypointName")
+        Logging.d(TAG, "  📊 Waypoint order (TripWaypoint.order): $waypointOrder")
+        Logging.d(TAG, "  📊 Waypoint index (waypointNames index): $waypointIndex")
+        Logging.d(TAG, "  📊 Passed waypoints before: $passedWaypoints")
+        Logging.d(TAG, "  ⏰ Timestamp: ${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(currentTime)}")
         
         passedWaypoints.add(waypointIndex)
         
@@ -766,10 +812,20 @@ class TripSectionValidator(private val context: Context) {
     }
 
     /**
-     * Called by destination reached listener
+     * Called by destination reached listener or distance threshold check
+     * This method is idempotent - it can be called multiple times but will only process once
      */
     fun handleDestinationReached() {
-        Log.d(TAG, "🏁 DESTINATION REACHED!")
+        // Check if destination was already reached (prevent duplicate processing)
+        if (destinationReachedByDistance) {
+            Logging.d(TAG, "Destination already reached (via distance check or listener), skipping duplicate processing")
+            return
+        }
+        
+        // Mark destination as reached to prevent duplicate calls
+        destinationReachedByDistance = true
+        
+        Logging.d(TAG, "🏁 DESTINATION REACHED!")
         
         // Mark any remaining waypoints as passed
         for (i in passedWaypoints.size until waypointNames.size) {
@@ -787,7 +843,7 @@ class TripSectionValidator(private val context: Context) {
                 )
                 passedWaypointData.add(passedInfo)
                 
-                Log.d(TAG, "🎯 WAYPOINT COMPLETED (Destination): $waypointName")
+                Logging.d(TAG, "🎯 WAYPOINT COMPLETED (Destination): $waypointName")
             }
         }
         
@@ -799,16 +855,19 @@ class TripSectionValidator(private val context: Context) {
         publishDestinationReachedNotification()
         publishFinalTripProgressUpdate()
         
-        Log.d(TAG, "🎉 TRIP COMPLETED! All waypoints reached.")
+        // Notify Service/Activity that destination was reached
+        destinationReachedCallback?.invoke()
+        
+        Logging.d(TAG, "🎉 TRIP COMPLETED! All waypoints reached.")
     }
     
     /**
      * Maps current section progress to waypoint information and logs details
      */
     private fun mapSectionsToWaypoints(sectionProgressList: List<SectionProgress>) {
-        Log.d(TAG, "=== SECTION TO WAYPOINT MAPPING ===")
-        Log.d(TAG, "Passed waypoints: $passedWaypoints")
-        Log.d(TAG, "Total waypoints: ${waypointNames.size}")
+        Logging.d(TAG, "=== SECTION TO WAYPOINT MAPPING ===")
+        Logging.d(TAG, "Passed waypoints: $passedWaypoints")
+        Logging.d(TAG, "Total waypoints: ${waypointNames.size}")
         
         sectionProgressList.forEachIndexed { sectionIndex, sectionProgress ->
             // Calculate the target waypoint index for this section
@@ -817,7 +876,7 @@ class TripSectionValidator(private val context: Context) {
             
             // Skip logging for already-passed waypoints
             if (passedWaypoints.contains(targetWaypointIndex)) {
-                Log.d(TAG, "Section $sectionIndex: Skipping updates for already-passed waypoint at index $targetWaypointIndex")
+                Logging.d(TAG, "Section $sectionIndex: Skipping updates for already-passed waypoint at index $targetWaypointIndex")
                 return@forEachIndexed
             }
             
@@ -828,12 +887,12 @@ class TripSectionValidator(private val context: Context) {
             }
             val toWaypoint = waypointNames.getOrNull(targetWaypointIndex) ?: "Unknown"
             
-            Log.d(TAG, "Section $sectionIndex:")
-            Log.d(TAG, "  Route: $fromWaypoint → $toWaypoint")
-            Log.d(TAG, "  Target waypoint index: $targetWaypointIndex")
-            Log.d(TAG, "  Remaining distance: ${sectionProgress.remainingDistanceInMeters}m")
-            Log.d(TAG, "  Remaining duration: ${sectionProgress.remainingDuration.toSeconds()}s")
-            Log.d(TAG, "  Traffic delay: ${sectionProgress.trafficDelay.seconds}s")
+            Logging.d(TAG, "Section $sectionIndex:")
+            Logging.d(TAG, "  Route: $fromWaypoint → $toWaypoint")
+            Logging.d(TAG, "  Target waypoint index: $targetWaypointIndex")
+            Logging.d(TAG, "  Remaining distance: ${sectionProgress.remainingDistanceInMeters}m")
+            Logging.d(TAG, "  Remaining duration: ${sectionProgress.remainingDuration.toSeconds()}s")
+            Logging.d(TAG, "  Traffic delay: ${sectionProgress.trafficDelay.seconds}s")
         }
         
         // Log overall progress
@@ -843,13 +902,13 @@ class TripSectionValidator(private val context: Context) {
             val totalRemainingTime = lastSection.remainingDuration.toSeconds()
             val finalDestination = waypointNames.lastOrNull() ?: "Unknown"
             
-            Log.d(TAG, "📍 OVERALL PROGRESS:")
-            Log.d(TAG, "  Final destination: $finalDestination")
-            Log.d(TAG, "  Total remaining distance: ${totalRemainingDistance}m")
-            Log.d(TAG, "  Total remaining time: ${totalRemainingTime}s")
+            Logging.d(TAG, "📍 OVERALL PROGRESS:")
+            Logging.d(TAG, "  Final destination: $finalDestination")
+            Logging.d(TAG, "  Total remaining distance: ${totalRemainingDistance}m")
+            Logging.d(TAG, "  Total remaining time: ${totalRemainingTime}s")
         }
         
-        Log.d(TAG, "================================")
+        Logging.d(TAG, "================================")
     }
     
     /**
@@ -857,17 +916,17 @@ class TripSectionValidator(private val context: Context) {
      */
     private fun logPassedWaypointsSummary() {
         if (passedWaypointData.isNotEmpty()) {
-            Log.d(TAG, "=== PASSED WAYPOINTS SUMMARY ===")
+            Logging.d(TAG, "=== PASSED WAYPOINTS SUMMARY ===")
             passedWaypointData.forEach { passedInfo ->
                 val timeFormat = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault())
                 val formattedTime = timeFormat.format(passedInfo.passedTimestamp)
-                Log.d(TAG, "✅ ${passedInfo.waypointName}")
-                Log.d(TAG, "  📍 Distance: ${passedInfo.passedDistance}m")
-                Log.d(TAG, "  ⏰ Passed at: $formattedTime")
-                Log.d(TAG, "  📊 Section: ${passedInfo.sectionIndex}")
+                Logging.d(TAG, "✅ ${passedInfo.waypointName}")
+                Logging.d(TAG, "  📍 Distance: ${passedInfo.passedDistance}m")
+                Logging.d(TAG, "  ⏰ Passed at: $formattedTime")
+                Logging.d(TAG, "  📊 Section: ${passedInfo.sectionIndex}")
             }
-            Log.d(TAG, "Total passed waypoints: ${passedWaypointData.size}")
-            Log.d(TAG, "================================")
+            Logging.d(TAG, "Total passed waypoints: ${passedWaypointData.size}")
+            Logging.d(TAG, "================================")
         }
     }
     
@@ -955,8 +1014,9 @@ class TripSectionValidator(private val context: Context) {
         lastProgressUpdateTime = 0L
         lastWaypointApproachNotification.clear()
         tripStarted = false
+        destinationReachedByDistance = false
         
-        Log.d(TAG, "Validator state reset")
+        Logging.d(TAG, "Validator state reset")
     }
     
     /**
@@ -976,9 +1036,9 @@ class TripSectionValidator(private val context: Context) {
             val validationDetails = route?.let { getTripValidationDetails(tripResponse, it) }
             tripSessionLogger?.logTripValidation(validationDetails)
             
-            Log.d(TAG, "Trip session logging initialized for trip: ${tripResponse.id}")
+            Logging.d(TAG, "Trip session logging initialized for trip: ${tripResponse.id}")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to initialize trip session logging: ${e.message}", e)
+            Logging.e(TAG, "Failed to initialize trip session logging: ${e.message}", e)
         }
     }
     

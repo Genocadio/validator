@@ -37,6 +37,7 @@ import com.gocavgo.validator.util.Logging
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import io.sentry.Sentry
 
 class LauncherActivity : ComponentActivity() {
     companion object {
@@ -64,12 +65,24 @@ class LauncherActivity : ComponentActivity() {
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+    // waiting for view to draw to better represent a captured error with a screenshot
+    findViewById<android.view.View>(android.R.id.content).viewTreeObserver.addOnGlobalLayoutListener {
+      try {
+          Sentry.logger().info("A simple log message")
+          Sentry.logger().error("A %s log message", "formatted")
+        throw Exception("This app uses Sentry! :)")
+      } catch (e: Exception) {
+        Sentry.captureException(e)
+      }
+    }
+
         enableEdgeToEdge()
         
         // Set this activity as active and disable its logging
         Logging.setActivityLoggingEnabled(TAG, false)
         Logging.d(TAG, "=== LAUNCHER ACTIVITY STARTED ===")
-        
+
         // Initialize managers
         vehicleSecurityManager = VehicleSecurityManager(this)
         settingsManager = VehicleSettingsManager.getInstance(this)
@@ -226,6 +239,7 @@ class LauncherActivity : ComponentActivity() {
     
     private fun evaluateSettingsAndNavigate() {
         isLoading = true
+        locationPermissionDenied = false
         locationPermissionDenied = false
         exactAlarmPermissionDenied = false
         exactAlarmButtonClicked = false

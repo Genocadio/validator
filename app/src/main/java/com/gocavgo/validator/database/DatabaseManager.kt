@@ -3,13 +3,16 @@ package com.gocavgo.validator.database
 import android.content.Context
 import com.gocavgo.validator.dataclass.TripResponse
 import com.gocavgo.validator.util.Logging
+import com.gocavgo.validator.util.DateUtils
 import com.gocavgo.validator.repository.TripRepository
 import com.gocavgo.validator.service.BookingService
 import com.gocavgo.validator.util.Result
+import com.gocavgo.validator.database.AppDatabase
 import kotlinx.coroutines.flow.Flow
 
 class DatabaseManager(context: Context) {
     
+    private val context = context
     private val tripRepository = TripRepository(context)
     private val bookingService = BookingService.getInstance(context)
     
@@ -140,12 +143,12 @@ class DatabaseManager(context: Context) {
     ) {
         try {
             tripRepository.updateTripCompletionTimestamp(tripId, completionTimestamp)
-            android.util.Log.d(
+            Logging.d(
                 "DatabaseManager",
                 "Persisted trip completion timestamp: trip=$tripId, timestamp=$completionTimestamp"
             )
         } catch (e: Exception) {
-            android.util.Log.e("DatabaseManager", "Failed to persist trip completion timestamp: ${e.message}", e)
+            Logging.e("DatabaseManager", "Failed to persist trip completion timestamp: ${e.message}", e)
             throw e
         }
     }

@@ -3,7 +3,7 @@ package com.gocavgo.validator
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
-import android.util.Log
+import com.gocavgo.validator.util.Logging
 import com.here.sdk.core.LanguageCode
 import com.here.sdk.core.engine.SDKNativeEngine
 import com.here.sdk.maploader.DownloadRegionsStatusListener
@@ -71,36 +71,36 @@ class MapDownloaderManager(
      */
     fun initialize() {
         if (isInitialized) {
-            Log.d(TAG, "MapDownloaderManager already initialized")
+            Logging.d(TAG, "MapDownloaderManager already initialized")
             return
         }
 
-        Log.d(TAG, "=== INITIALIZING MAP DOWNLOADER MANAGER ===")
+        Logging.d(TAG, "=== INITIALIZING MAP DOWNLOADER MANAGER ===")
         onStatusUpdate("Initializing map downloader...")
 
         val sdkNativeEngine = SDKNativeEngine.getSharedInstance()
         if (sdkNativeEngine == null) {
-            Log.e(TAG, "SDKNativeEngine not initialized!")
+            Logging.e(TAG, "SDKNativeEngine not initialized!")
             onError("SDK not initialized")
             isMapDataReady = true // Proceed without offline maps
             return
         }
 
-        Log.d(TAG, "SDKNativeEngine found, initializing MapDownloader...")
+        Logging.d(TAG, "SDKNativeEngine found, initializing MapDownloader...")
 
         // Initialize MapDownloader
         MapDownloader.fromEngineAsync(sdkNativeEngine) { mapDownloader ->
             // Verify SDK is still valid before proceeding
             val currentSdk = SDKNativeEngine.getSharedInstance()
             if (currentSdk == null) {
-                Log.w(TAG, "SDK disposed during MapDownloader initialization, aborting")
+                Logging.w(TAG, "SDK disposed during MapDownloader initialization, aborting")
                 onStatusUpdate("SDK unavailable during initialization")
                 isMapDataReady = true // Proceed without offline maps
                 return@fromEngineAsync
             }
             
             this@MapDownloaderManager.mapDownloader = mapDownloader
-            Log.d(TAG, "MapDownloader initialized successfully")
+            Logging.d(TAG, "MapDownloader initialized successfully")
             
             // Initialize MapUpdater
             MapUpdater.fromEngineAsync(currentSdk, object : MapUpdaterConstructionCallback {
@@ -108,17 +108,17 @@ class MapDownloaderManager(
                     // Verify SDK is still valid before proceeding
                     val finalSdk = SDKNativeEngine.getSharedInstance()
                     if (finalSdk == null) {
-                        Log.w(TAG, "SDK disposed during MapUpdater initialization, aborting")
+                        Logging.w(TAG, "SDK disposed during MapUpdater initialization, aborting")
                         onStatusUpdate("SDK unavailable during initialization")
                         isMapDataReady = true // Proceed without offline maps
                         return
                     }
                     
                     this@MapDownloaderManager.mapUpdater = mapUpdater
-                    Log.d(TAG, "MapUpdater initialized successfully")
+                    Logging.d(TAG, "MapUpdater initialized successfully")
                     
                     isInitialized = true
-                    Log.d(TAG, "MapDownloaderManager fully initialized, checking existing map data...")
+                    Logging.d(TAG, "MapDownloaderManager fully initialized, checking existing map data...")
                     checkExistingMapData()
                 }
             })
@@ -132,7 +132,7 @@ class MapDownloaderManager(
         // Verify SDK is still valid before proceeding
         val sdkNativeEngine = SDKNativeEngine.getSharedInstance()
         if (sdkNativeEngine == null) {
-            Log.w(TAG, "SDK not available, skipping map data check")
+            Logging.w(TAG, "SDK not available, skipping map data check")
             onStatusUpdate("SDK not available, proceeding without offline maps")
             isMapDataReady = true // Proceed without offline maps
             return
@@ -141,25 +141,25 @@ class MapDownloaderManager(
         mapDownloader?.let { downloader ->
             try {
                 val installedRegions = downloader.installedRegions
-                Log.d(TAG, "=== CHECKING INSTALLED REGIONS ===")
-                Log.d(TAG, "Total installed regions: ${installedRegions.size}")
+                Logging.d(TAG, "=== CHECKING INSTALLED REGIONS ===")
+                Logging.d(TAG, "Total installed regions: ${installedRegions.size}")
 
                 var rwandaFound = false
                 var rwandaRegionInstalled: InstalledRegion? = null
 
                 for (region in installedRegions) {
                     val sizeInMB = region.sizeOnDiskInBytes / (1024 * 1024)
-                    Log.d(TAG, "Installed region: ${region.regionId.id}, Size: ${sizeInMB}MB, Status: ${region.status}")
+                    Logging.d(TAG, "Installed region: ${region.regionId.id}, Size: ${sizeInMB}MB, Status: ${region.status}")
 
                     if (isRwandaRegion(region.regionId.id.toString())) {
                         rwandaFound = true
                         rwandaRegionInstalled = region
-                        Log.d(TAG, "Found existing Rwanda map data!")
+                        Logging.d(TAG, "Found existing Rwanda map data!")
                     }
                 }
 
                 if (rwandaFound && rwandaRegionInstalled != null) {
-                    Log.d(TAG, "Rwanda map data already available")
+                    Logging.d(TAG, "Rwanda map data already available")
                     isMapDataReady = true
                     onStatusUpdate("Rwanda map data is ready")
                     
@@ -167,33 +167,33 @@ class MapDownloaderManager(
                     checkForMapUpdatesBackground(rwandaRegionInstalled)
                     onDownloadComplete()
                 } else {
-                    Log.d(TAG, "No Rwanda map data found, will download")
+                    Logging.d(TAG, "No Rwanda map data found, will download")
                     onStatusUpdate("Rwanda map data not found, downloading...")
                     onToastMessage?.invoke("Downloading Rwanda map data...")
                     onShowProgressDialog?.invoke() // Show progress dialog for initial download
                     downloadRegionsList()
                 }
 
-                Log.d(TAG, "==============================")
+                Logging.d(TAG, "==============================")
             } catch (e: MapLoaderException) {
                 // Check if error is OPERATION_AFTER_DISPOSE
                 val errorString = e.error.toString()
                 if (errorString.contains("OPERATION_AFTER_DISPOSE", ignoreCase = true) ||
                     errorString.contains("DISPOSE", ignoreCase = true)) {
-                    Log.w(TAG, "SDK disposed during map check, proceeding without offline maps: ${e.error}")
+                    Logging.w(TAG, "SDK disposed during map check, proceeding without offline maps: ${e.error}")
                     isMapDataReady = true // Proceed without offline maps
                     onStatusUpdate("Map check cancelled (SDK unavailable)")
                 } else {
-                    Log.e(TAG, "Error checking installed regions: ${e.error}")
+                    Logging.e(TAG, "Error checking installed regions: ${e.error}")
                     onError("Error checking installed regions: ${e.error}")
                 }
             } catch (e: Exception) {
                 // Catch any other exceptions (including runtime exceptions)
-                Log.e(TAG, "Unexpected error checking installed regions: ${e.message}", e)
+                Logging.e(TAG, "Unexpected error checking installed regions: ${e.message}", e)
                 val errorMessage = e.message ?: "Unknown error"
                 if (errorMessage.contains("dispose", ignoreCase = true) || 
                     errorMessage.contains("OPERATION_AFTER_DISPOSE", ignoreCase = true)) {
-                    Log.w(TAG, "SDK disposed, proceeding without offline maps")
+                    Logging.w(TAG, "SDK disposed, proceeding without offline maps")
                     isMapDataReady = true // Proceed without offline maps
                     onStatusUpdate("Map check cancelled (SDK unavailable)")
                 } else {
@@ -201,7 +201,7 @@ class MapDownloaderManager(
                 }
             }
         } ?: run {
-            Log.w(TAG, "MapDownloader not available, skipping map data check")
+            Logging.w(TAG, "MapDownloader not available, skipping map data check")
             isMapDataReady = true // Proceed without offline maps
         }
     }
@@ -211,28 +211,28 @@ class MapDownloaderManager(
      */
     private fun downloadRegionsList() {
         mapDownloader?.let { downloader ->
-            Log.d(TAG, "Downloading list of available regions...")
+            Logging.d(TAG, "Downloading list of available regions...")
             onStatusUpdate("Fetching available regions...")
 
             downloader.getDownloadableRegions(LanguageCode.EN_US, object : DownloadableRegionsCallback {
                 override fun onCompleted(mapLoaderError: MapLoaderError?, regions: MutableList<Region>?) {
                     if (mapLoaderError != null) {
-                        Log.e(TAG, "Error downloading regions list: $mapLoaderError")
+                        Logging.e(TAG, "Error downloading regions list: $mapLoaderError")
                         onError("Failed to fetch regions: $mapLoaderError")
                         return
                     }
 
                     if (regions != null) {
                         downloadableRegions = regions
-                        Log.d(TAG, "Found ${regions.size} top-level regions")
+                        Logging.d(TAG, "Found ${regions.size} top-level regions")
 
                         val rwandaRegion = findRwandaRegion(regions)
                         if (rwandaRegion != null) {
-                            Log.d(TAG, "Found Rwanda region: ${rwandaRegion.name}")
+                            Logging.d(TAG, "Found Rwanda region: ${rwandaRegion.name}")
                             this@MapDownloaderManager.rwandaRegion = rwandaRegion
                             downloadRwandaMapWithRetry(rwandaRegion)
                         } else {
-                            Log.e(TAG, "Rwanda region not found in available regions!")
+                            Logging.e(TAG, "Rwanda region not found in available regions!")
                             onError("Rwanda region not found in available regions")
                         }
                     }
@@ -255,7 +255,7 @@ class MapDownloaderManager(
             // Check top-level regions
             for (name in rwandaNames) {
                 if (region.name.equals(name, ignoreCase = true) || region.name.contains(name, ignoreCase = true)) {
-                    Log.d(TAG, "Found Rwanda at top level: ${region.name}")
+                    Logging.d(TAG, "Found Rwanda at top level: ${region.name}")
                     return region
                 }
             }
@@ -265,7 +265,7 @@ class MapDownloaderManager(
                 for (childRegion in childRegions) {
                     for (name in rwandaNames) {
                         if (childRegion.name.equals(name, ignoreCase = true) || childRegion.name.contains(name, ignoreCase = true)) {
-                            Log.d(TAG, "Found Rwanda in ${region.name}: ${childRegion.name}")
+                            Logging.d(TAG, "Found Rwanda in ${region.name}: ${childRegion.name}")
                             return childRegion
                         }
                     }
@@ -275,7 +275,7 @@ class MapDownloaderManager(
                         for (subRegion in subRegions) {
                             for (name in rwandaNames) {
                                 if (subRegion.name.equals(name, ignoreCase = true) || subRegion.name.contains(name, ignoreCase = true)) {
-                                    Log.d(TAG, "Found Rwanda in ${childRegion.name}: ${subRegion.name}")
+                                    Logging.d(TAG, "Found Rwanda in ${childRegion.name}: ${subRegion.name}")
                                     return subRegion
                                 }
                             }
@@ -303,19 +303,19 @@ class MapDownloaderManager(
      */
     private fun downloadRwandaMapWithRetry(rwandaRegion: Region) {
         if (isDownloadInProgress) {
-            Log.w(TAG, "Download already in progress, skipping retry")
+            Logging.w(TAG, "Download already in progress, skipping retry")
             return
         }
 
         if (downloadRetryCount >= MAX_DOWNLOAD_RETRIES) {
-            Log.e(TAG, "Maximum download retries reached ($MAX_DOWNLOAD_RETRIES), proceeding without offline maps")
+            Logging.e(TAG, "Maximum download retries reached ($MAX_DOWNLOAD_RETRIES), proceeding without offline maps")
             onError("Maximum download retries reached. Please check your internet connection.")
             onToastMessage?.invoke("Map download failed after $MAX_DOWNLOAD_RETRIES attempts")
             return
         }
 
         downloadRetryCount++
-        Log.d(TAG, "Starting Rwanda map download (attempt $downloadRetryCount/$MAX_DOWNLOAD_RETRIES)")
+        Logging.d(TAG, "Starting Rwanda map download (attempt $downloadRetryCount/$MAX_DOWNLOAD_RETRIES)")
         
         val sizeInMB = (rwandaRegion.sizeOnDiskInBytes / (1024 * 1024)).toInt()
         onStatusUpdate("Downloading Rwanda map (${sizeInMB}MB) - Attempt $downloadRetryCount/$MAX_DOWNLOAD_RETRIES")
@@ -330,11 +330,11 @@ class MapDownloaderManager(
     private fun downloadRwandaMap(rwandaRegion: Region) {
         mapDownloader?.let { downloader ->
             val sizeInMB: Int = (rwandaRegion.sizeOnDiskInBytes / (1024 * 1024)).toInt()
-            Log.d(TAG, "=== DOWNLOADING RWANDA MAP ===")
-            Log.d(TAG, "Region: ${rwandaRegion.name}")
-            Log.d(TAG, "Size: ${sizeInMB}MB")
-            Log.d(TAG, "Attempt: $downloadRetryCount/$MAX_DOWNLOAD_RETRIES")
-            Log.d(TAG, "==============================")
+            Logging.d(TAG, "=== DOWNLOADING RWANDA MAP ===")
+            Logging.d(TAG, "Region: ${rwandaRegion.name}")
+            Logging.d(TAG, "Size: ${sizeInMB}MB")
+            Logging.d(TAG, "Attempt: $downloadRetryCount/$MAX_DOWNLOAD_RETRIES")
+            Logging.d(TAG, "==============================")
 
             isDownloadInProgress = true
             val regionIds = listOf(rwandaRegion.regionId)
@@ -343,16 +343,16 @@ class MapDownloaderManager(
                     isDownloadInProgress = false
 
                     if (mapLoaderError != null) {
-                        Log.e(TAG, "Rwanda map download failed: $mapLoaderError")
+                        Logging.e(TAG, "Rwanda map download failed: $mapLoaderError")
                         handleDownloadError(mapLoaderError, rwandaRegion)
                         return
                     }
 
                     if (regionIds != null) {
-                        Log.d(TAG, "=== DOWNLOAD COMPLETED ===")
-                        Log.d(TAG, "Successfully downloaded Rwanda map!")
-                        Log.d(TAG, "Downloaded regions: ${regionIds.map { it.id }}")
-                        Log.d(TAG, "==========================")
+                        Logging.d(TAG, "=== DOWNLOAD COMPLETED ===")
+                        Logging.d(TAG, "Successfully downloaded Rwanda map!")
+                        Logging.d(TAG, "Downloaded regions: ${regionIds.map { it.id }}")
+                        Logging.d(TAG, "==========================")
 
                         downloadRetryCount = 0
                         isMapDataReady = true
@@ -363,7 +363,7 @@ class MapDownloaderManager(
                 }
 
                 override fun onProgress(regionId: RegionId, percentage: Int) {
-                    Log.d(TAG, "Downloading Rwanda map: ${percentage}% (Region: ${regionId.id})")
+                    Logging.d(TAG, "Downloading Rwanda map: ${percentage}% (Region: ${regionId.id})")
                     mainHandler.post {
                         onProgressUpdate("Downloading Rwanda map...", percentage, sizeInMB)
                     }
@@ -371,16 +371,16 @@ class MapDownloaderManager(
 
                 override fun onPause(mapLoaderError: MapLoaderError?) {
                     if (mapLoaderError == null) {
-                        Log.d(TAG, "Rwanda map download paused by user")
+                        Logging.d(TAG, "Rwanda map download paused by user")
                         onStatusUpdate("Download paused")
                     } else {
-                        Log.e(TAG, "Rwanda map download paused due to error: $mapLoaderError")
+                        Logging.e(TAG, "Rwanda map download paused due to error: $mapLoaderError")
                         handleDownloadError(mapLoaderError, rwandaRegion)
                     }
                 }
 
                 override fun onResume() {
-                    Log.d(TAG, "Rwanda map download resumed")
+                    Logging.d(TAG, "Rwanda map download resumed")
                     onStatusUpdate("Download resumed")
                 }
             })
@@ -393,36 +393,36 @@ class MapDownloaderManager(
      * Handle download errors with appropriate retry logic
      */
     private fun handleDownloadError(error: MapLoaderError, rwandaRegion: Region) {
-        Log.e(TAG, "=== DOWNLOAD ERROR HANDLING ===")
-        Log.e(TAG, "Error: $error")
-        Log.e(TAG, "Retry count: $downloadRetryCount/$MAX_DOWNLOAD_RETRIES")
+        Logging.e(TAG, "=== DOWNLOAD ERROR HANDLING ===")
+        Logging.e(TAG, "Error: $error")
+        Logging.e(TAG, "Retry count: $downloadRetryCount/$MAX_DOWNLOAD_RETRIES")
 
         when (error) {
             MapLoaderError.NETWORK_CONNECTION_ERROR -> {
-                Log.w(TAG, "Network error detected, will retry")
+                Logging.w(TAG, "Network error detected, will retry")
                 onStatusUpdate("Network error, retrying in ${DOWNLOAD_RETRY_DELAY_MS/1000} seconds...")
                 scheduleRetryWithDelay(rwandaRegion)
             }
             MapLoaderError.NOT_ENOUGH_SPACE -> {
-                Log.e(TAG, "Insufficient storage for map download")
+                Logging.e(TAG, "Insufficient storage for map download")
                 onError("Insufficient storage space for map download")
             }
             MapLoaderError.INVALID_ARGUMENT -> {
-                Log.e(TAG, "Invalid parameters for download")
+                Logging.e(TAG, "Invalid parameters for download")
                 onError("Invalid download parameters")
             }
             MapLoaderError.INTERNAL_ERROR, MapLoaderError.NOT_READY -> {
-                Log.w(TAG, "Recoverable error, will retry")
+                Logging.w(TAG, "Recoverable error, will retry")
                 onStatusUpdate("Download error, retrying...")
                 scheduleRetryWithDelay(rwandaRegion)
             }
             else -> {
-                Log.w(TAG, "Unknown error, will retry")
+                Logging.w(TAG, "Unknown error, will retry")
                 onError("Download failed: ${error.name}")
                 scheduleRetryWithDelay(rwandaRegion)
             }
         }
-        Log.e(TAG, "===============================")
+        Logging.e(TAG, "===============================")
     }
 
     /**
@@ -431,7 +431,7 @@ class MapDownloaderManager(
     private fun scheduleRetryWithDelay(rwandaRegion: Region) {
         if (downloadRetryCount < MAX_DOWNLOAD_RETRIES) {
             val delay = DOWNLOAD_RETRY_DELAY_MS * downloadRetryCount
-            Log.d(TAG, "Scheduling retry in ${delay}ms")
+            Logging.d(TAG, "Scheduling retry in ${delay}ms")
 
             mainHandler.postDelayed({
                 if (!isMapDataReady) {
@@ -439,7 +439,7 @@ class MapDownloaderManager(
                 }
             }, delay)
         } else {
-            Log.e(TAG, "Maximum retries reached, proceeding without offline maps")
+            Logging.e(TAG, "Maximum retries reached, proceeding without offline maps")
             onError("Maximum download retries reached. Please check your internet connection.")
         }
     }
@@ -450,34 +450,34 @@ class MapDownloaderManager(
     fun checkForMapUpdates(installedRegion: InstalledRegion) {
         val currentTime = System.currentTimeMillis()
         if (currentTime - lastUpdateCheckTime < UPDATE_CHECK_INTERVAL_MS) {
-            Log.d(TAG, "Map update check skipped - last check was ${(currentTime - lastUpdateCheckTime) / (1000 * 60 * 60)} hours ago")
+            Logging.d(TAG, "Map update check skipped - last check was ${(currentTime - lastUpdateCheckTime) / (1000 * 60 * 60)} hours ago")
             return
         }
 
-        Log.d(TAG, "=== CHECKING FOR MAP UPDATES ===")
+        Logging.d(TAG, "=== CHECKING FOR MAP UPDATES ===")
         onStatusUpdate("Checking for map updates...")
 
         mapUpdater?.let { updater ->
             updater.retrieveCatalogsUpdateInfo(object : CatalogsUpdateInfoCallback {
                 override fun apply(mapLoaderError: MapLoaderError?, catalogList: MutableList<CatalogUpdateInfo>?) {
                     if (mapLoaderError != null) {
-                        Log.e(TAG, "Error checking for updates: $mapLoaderError")
+                        Logging.e(TAG, "Error checking for updates: $mapLoaderError")
                         onStatusUpdate("Error checking for updates")
                         return
                     }
 
                     if (catalogList != null && catalogList.isNotEmpty()) {
-                        Log.d(TAG, "Map updates available")
+                        Logging.d(TAG, "Map updates available")
                         onStatusUpdate("Map updates available, downloading...")
                         onShowProgressDialog?.invoke() // Show progress dialog for updates
                         performMapUpdate(catalogList[0])
                     } else {
-                        Log.d(TAG, "No map updates available")
+                        Logging.d(TAG, "No map updates available")
                         onStatusUpdate("Map is up to date")
                     }
 
                     lastUpdateCheckTime = currentTime
-                    Log.d(TAG, "===============================")
+                    Logging.d(TAG, "===============================")
                 }
             })
         }
@@ -489,33 +489,33 @@ class MapDownloaderManager(
     private fun checkForMapUpdatesBackground(installedRegion: InstalledRegion) {
         val currentTime = System.currentTimeMillis()
         if (currentTime - lastUpdateCheckTime < UPDATE_CHECK_INTERVAL_MS) {
-            Log.d(TAG, "Background map update check skipped - last check was ${(currentTime - lastUpdateCheckTime) / (1000 * 60 * 60)} hours ago")
+            Logging.d(TAG, "Background map update check skipped - last check was ${(currentTime - lastUpdateCheckTime) / (1000 * 60 * 60)} hours ago")
             return
         }
 
-        Log.d(TAG, "=== BACKGROUND CHECKING FOR MAP UPDATES ===")
+        Logging.d(TAG, "=== BACKGROUND CHECKING FOR MAP UPDATES ===")
         onToastMessage?.invoke("Checking for map updates...")
 
         mapUpdater?.let { updater ->
             updater.retrieveCatalogsUpdateInfo(object : CatalogsUpdateInfoCallback {
                 override fun apply(mapLoaderError: MapLoaderError?, catalogList: MutableList<CatalogUpdateInfo>?) {
                     if (mapLoaderError != null) {
-                        Log.e(TAG, "Error checking for updates: $mapLoaderError")
+                        Logging.e(TAG, "Error checking for updates: $mapLoaderError")
                         onToastMessage?.invoke("Error checking for map updates")
                         return
                     }
 
                     if (catalogList != null && catalogList.isNotEmpty()) {
-                        Log.d(TAG, "Map updates available")
+                        Logging.d(TAG, "Map updates available")
                         onToastMessage?.invoke("Map updates available, downloading...")
                         performMapUpdateBackground(catalogList[0])
                     } else {
-                        Log.d(TAG, "No map updates available")
+                        Logging.d(TAG, "No map updates available")
                         onToastMessage?.invoke("Maps are up to date")
                     }
 
                     lastUpdateCheckTime = currentTime
-                    Log.d(TAG, "===============================")
+                    Logging.d(TAG, "===============================")
                 }
             })
         }
@@ -528,7 +528,7 @@ class MapDownloaderManager(
         mapUpdater?.let { updater ->
             val task = updater.updateCatalog(catalogUpdateInfo, object : CatalogUpdateProgressListener {
                 override fun onProgress(regionId: RegionId, percentage: Int) {
-                    Log.d(TAG, "Updating map: ${percentage}% for region ${regionId.id}")
+                    Logging.d(TAG, "Updating map: ${percentage}% for region ${regionId.id}")
                     mainHandler.post {
                         onProgressUpdate("Updating map...", percentage, 0)
                     }
@@ -536,27 +536,27 @@ class MapDownloaderManager(
 
                 override fun onPause(mapLoaderError: MapLoaderError?) {
                     if (mapLoaderError == null) {
-                        Log.d(TAG, "Map update paused by user")
+                        Logging.d(TAG, "Map update paused by user")
                         onStatusUpdate("Map update paused")
                     } else {
-                        Log.e(TAG, "Map update paused due to error: $mapLoaderError")
+                        Logging.e(TAG, "Map update paused due to error: $mapLoaderError")
                         onError("Map update failed: $mapLoaderError")
                     }
                 }
 
                 override fun onResume() {
-                    Log.d(TAG, "Map update resumed")
+                    Logging.d(TAG, "Map update resumed")
                     onStatusUpdate("Map update resumed")
                 }
 
                 override fun onComplete(mapLoaderError: MapLoaderError?) {
                     if (mapLoaderError != null) {
-                        Log.e(TAG, "Map update completion error: $mapLoaderError")
+                        Logging.e(TAG, "Map update completion error: $mapLoaderError")
                         onError("Map update failed: $mapLoaderError")
                         return
                     }
 
-                    Log.d(TAG, "Map update completed successfully")
+                    Logging.d(TAG, "Map update completed successfully")
                     onStatusUpdate("Map updated successfully")
                 }
             })
@@ -570,7 +570,7 @@ class MapDownloaderManager(
         mapUpdater?.let { updater ->
             val task = updater.updateCatalog(catalogUpdateInfo, object : CatalogUpdateProgressListener {
                 override fun onProgress(regionId: RegionId, percentage: Int) {
-                    Log.d(TAG, "Background updating map: ${percentage}% for region ${regionId.id}")
+                    Logging.d(TAG, "Background updating map: ${percentage}% for region ${regionId.id}")
                     // Only show toast at 25%, 50%, 75%, 100% to avoid spam
                     if (percentage % 25 == 0) {
                         mainHandler.post {
@@ -581,27 +581,27 @@ class MapDownloaderManager(
 
                 override fun onPause(mapLoaderError: MapLoaderError?) {
                     if (mapLoaderError == null) {
-                        Log.d(TAG, "Background map update paused by user")
+                        Logging.d(TAG, "Background map update paused by user")
                         onToastMessage?.invoke("Map update paused")
                     } else {
-                        Log.e(TAG, "Background map update paused due to error: $mapLoaderError")
+                        Logging.e(TAG, "Background map update paused due to error: $mapLoaderError")
                         onToastMessage?.invoke("Map update failed: $mapLoaderError")
                     }
                 }
 
                 override fun onResume() {
-                    Log.d(TAG, "Background map update resumed")
+                    Logging.d(TAG, "Background map update resumed")
                     onToastMessage?.invoke("Map update resumed")
                 }
 
                 override fun onComplete(mapLoaderError: MapLoaderError?) {
                     if (mapLoaderError != null) {
-                        Log.e(TAG, "Background map update completion error: $mapLoaderError")
+                        Logging.e(TAG, "Background map update completion error: $mapLoaderError")
                         onToastMessage?.invoke("Map update failed: $mapLoaderError")
                         return
                     }
 
-                    Log.d(TAG, "Background map update completed successfully")
+                    Logging.d(TAG, "Background map update completed successfully")
                     onToastMessage?.invoke("Maps updated successfully!")
                 }
             })
@@ -615,7 +615,7 @@ class MapDownloaderManager(
         for (task in mapDownloaderTasks) {
             task.cancel()
         }
-        Log.d(TAG, "Cancelled ${mapDownloaderTasks.size} download tasks")
+        Logging.d(TAG, "Cancelled ${mapDownloaderTasks.size} download tasks")
         mapDownloaderTasks.clear()
         isDownloadInProgress = false
         onStatusUpdate("Downloads cancelled")
@@ -641,7 +641,7 @@ class MapDownloaderManager(
      */
     fun onNetworkAvailable() {
         if (!isMapDataReady && rwandaRegion != null && !isDownloadInProgress) {
-            Log.d(TAG, "Network available and no map data, starting download")
+            Logging.d(TAG, "Network available and no map data, starting download")
             downloadRwandaMapWithRetry(rwandaRegion!!)
         }
     }
@@ -651,20 +651,20 @@ class MapDownloaderManager(
      */
     fun triggerMapUpdate() {
         if (!isInitialized) {
-            Log.w(TAG, "MapDownloaderManager not initialized, cannot trigger update")
+            Logging.w(TAG, "MapDownloaderManager not initialized, cannot trigger update")
             return
         }
 
         // Verify SDK is still valid before proceeding
         val sdkNativeEngine = SDKNativeEngine.getSharedInstance()
         if (sdkNativeEngine == null) {
-            Log.w(TAG, "SDK not available, cannot trigger update")
+            Logging.w(TAG, "SDK not available, cannot trigger update")
             onError("SDK not available")
             return
         }
 
         if (isMapDataReady) {
-            Log.d(TAG, "Map data is ready, checking for updates...")
+            Logging.d(TAG, "Map data is ready, checking for updates...")
             // Check for updates on existing installed regions
             mapDownloader?.let { downloader ->
                 try {
@@ -676,40 +676,40 @@ class MapDownloaderManager(
                     if (rwandaInstalled != null) {
                         checkForMapUpdates(rwandaInstalled)
                     } else {
-                        Log.d(TAG, "No installed Rwanda region found for update check")
+                        Logging.d(TAG, "No installed Rwanda region found for update check")
                         onStatusUpdate("No installed map data found for updates")
                     }
                 } catch (e: MapLoaderException) {
                     val errorString = e.error.toString()
                     if (errorString.contains("OPERATION_AFTER_DISPOSE", ignoreCase = true) ||
                         errorString.contains("DISPOSE", ignoreCase = true)) {
-                        Log.w(TAG, "SDK disposed during update check: ${e.error}")
+                        Logging.w(TAG, "SDK disposed during update check: ${e.error}")
                         onError("SDK unavailable, cannot check for updates")
                     } else {
-                        Log.e(TAG, "Error checking for updates: ${e.error}", e)
+                        Logging.e(TAG, "Error checking for updates: ${e.error}", e)
                         onError("Error checking for updates: ${e.error}")
                     }
                 } catch (e: Exception) {
                     val errorMessage = e.message ?: "Unknown error"
                     if (errorMessage.contains("dispose", ignoreCase = true) || 
                         errorMessage.contains("OPERATION_AFTER_DISPOSE", ignoreCase = true)) {
-                        Log.w(TAG, "SDK disposed during update check")
+                        Logging.w(TAG, "SDK disposed during update check")
                         onError("SDK unavailable, cannot check for updates")
                     } else {
-                        Log.e(TAG, "Error checking for updates: ${e.message}", e)
+                        Logging.e(TAG, "Error checking for updates: ${e.message}", e)
                         onError("Error checking for updates: ${e.message}")
                     }
                 }
             } ?: run {
-                Log.w(TAG, "MapDownloader not available")
+                Logging.w(TAG, "MapDownloader not available")
                 onError("Map downloader not available")
             }
         } else {
-            Log.d(TAG, "Map data not ready, starting fresh download...")
+            Logging.d(TAG, "Map data not ready, starting fresh download...")
             if (rwandaRegion != null) {
                 downloadRwandaMapWithRetry(rwandaRegion!!)
             } else {
-                Log.d(TAG, "No Rwanda region available, fetching region list...")
+                Logging.d(TAG, "No Rwanda region available, fetching region list...")
                 downloadRegionsList()
             }
         }
@@ -720,19 +720,19 @@ class MapDownloaderManager(
      */
     fun forceMapDownload() {
         if (!isInitialized) {
-            Log.w(TAG, "MapDownloaderManager not initialized, cannot force download")
+            Logging.w(TAG, "MapDownloaderManager not initialized, cannot force download")
             onToastMessage?.invoke("Map downloader not ready")
             return
         }
 
-        Log.d(TAG, "Force downloading map data...")
+        Logging.d(TAG, "Force downloading map data...")
         onToastMessage?.invoke("Starting map download...")
         onShowProgressDialog?.invoke() // Show progress dialog for manual download
         
         if (rwandaRegion != null) {
             downloadRwandaMapWithRetry(rwandaRegion!!)
         } else {
-            Log.d(TAG, "No Rwanda region available, fetching region list...")
+            Logging.d(TAG, "No Rwanda region available, fetching region list...")
             downloadRegionsList()
         }
     }

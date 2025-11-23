@@ -20,8 +20,8 @@
 package com.gocavgo.validator.navigator
 
 import android.os.Bundle
-import android.util.Log
 import androidx.activity.ComponentActivity
+import com.gocavgo.validator.util.Logging
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
@@ -147,7 +147,7 @@ class HeadlessNavigActivity: ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        Log.d(TAG, "HeadlessNavigActivity started - listening for active trip")
+        Logging.d(TAG, "HeadlessNavigActivity started - listening for active trip")
         
         // Mark navigation as active
         isNavigationActive.set(true)
@@ -179,25 +179,25 @@ class HeadlessNavigActivity: ComponentActivity() {
             scope = coroutineScope,
             callback = object : ActiveTripCallback {
                 override fun onActiveTripFound(trip: TripResponse) {
-                    Log.d(TAG, "Active trip found: ${trip.id}")
+                    Logging.d(TAG, "Active trip found: ${trip.id}")
                     handleActiveTrip(trip)
                 }
                 
                 override fun onActiveTripChanged(newTrip: TripResponse, oldTrip: TripResponse?) {
-                    Log.d(TAG, "Active trip changed: ${oldTrip?.id} → ${newTrip.id}")
+                    Logging.d(TAG, "Active trip changed: ${oldTrip?.id} → ${newTrip.id}")
                     handleActiveTrip(newTrip)
                 }
                 
                 override fun onTripCancelled(tripId: Int) {
-                    Log.d(TAG, "Trip cancelled: $tripId")
+                    Logging.d(TAG, "Trip cancelled: $tripId")
                     if (tripResponse?.id == tripId) {
-                        Log.e(TAG, "Current trip was cancelled. Finishing activity.")
+                        Logging.e(TAG, "Current trip was cancelled. Finishing activity.")
                         finish()
                     }
                 }
                 
                 override fun onError(error: String) {
-                    Log.e(TAG, "Error from ActiveTripListener: $error")
+                    Logging.e(TAG, "Error from ActiveTripListener: $error")
                     messageViewUpdater?.updateText("Error: $error")
                 }
                 
@@ -245,12 +245,12 @@ class HeadlessNavigActivity: ComponentActivity() {
                 val settings = settingsManager.getSettings(vehicleId.toInt())
                 isSimulated = settings?.simulate ?: false
                 
-                Log.d(TAG, "Handling active trip: ${trip.id}, simulate: $isSimulated")
+                Logging.d(TAG, "Handling active trip: ${trip.id}, simulate: $isSimulated")
                 
                 // Load full trip from database to ensure we have all data
                 tripResponse = databaseManager.getTripById(trip.id)
                 if (tripResponse == null) {
-                    Log.e(TAG, "Trip with ID ${trip.id} not found in database. Cannot start navigation.")
+                    Logging.e(TAG, "Trip with ID ${trip.id} not found in database. Cannot start navigation.")
                     withContext(Dispatchers.Main) {
                         messageViewUpdater?.updateText("Trip not found in database")
                         finish()
@@ -272,7 +272,7 @@ class HeadlessNavigActivity: ComponentActivity() {
                     initializeApp()
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Error handling active trip: ${e.message}", e)
+                Logging.e(TAG, "Error handling active trip: ${e.message}", e)
                 withContext(Dispatchers.Main) {
                     messageViewUpdater?.updateText("Error: ${e.message}")
                 }
@@ -482,13 +482,13 @@ class HeadlessNavigActivity: ComponentActivity() {
         try {
             // Ensure HERE SDK is initialized before creating App
             if (SDKNativeEngine.getSharedInstance() == null) {
-                Log.e(TAG, "HERE SDK not initialized, initializing now...")
+                Logging.e(TAG, "HERE SDK not initialized, initializing now...")
                 initializeHERESDK()
             }
             
             // Create App with null mapView for headless mode
             app = App(applicationContext, null, messageViewUpdater!!, tripResponse)
-            Log.d(TAG, "App instance created (headless mode): $app")
+            Logging.d(TAG, "App instance created (headless mode): $app")
 
             // Set up route calculation callback
             app?.setOnRouteCalculatedCallback {
@@ -498,7 +498,7 @@ class HeadlessNavigActivity: ComponentActivity() {
             // Now that App is created, update it with trip data if available
             updateTripDataWhenReady()
         } catch (e: Exception) {
-            Log.e(TAG, "Error initializing App: ${e.message}", e)
+            Logging.e(TAG, "Error initializing App: ${e.message}", e)
             messageViewUpdater?.updateText("Error initializing navigation: ${e.message}")
         }
     }
@@ -507,7 +507,7 @@ class HeadlessNavigActivity: ComponentActivity() {
         try {
             // Check if SDK is already initialized to avoid duplicate initialization
             if (SDKNativeEngine.getSharedInstance() != null) {
-                Log.d(TAG, "HERE SDK already initialized, skipping")
+                Logging.d(TAG, "HERE SDK already initialized, skipping")
                 return
             }
             
@@ -517,43 +517,43 @@ class HeadlessNavigActivity: ComponentActivity() {
             val options = SDKOptions(authenticationMode)
             if(lowMEm) {
                 options.lowMemoryMode = true
-                Log.d(TAG, "Initialised in Low memory mode")
+                Logging.d(TAG, "Initialised in Low memory mode")
             }
             
             // Initialize SDK with timeout protection
             SDKNativeEngine.makeSharedInstance(this, options)
-            Log.d(TAG, "HERE SDK initialized successfully")
+            Logging.d(TAG, "HERE SDK initialized successfully")
             
             // Apply pending offline mode if any
             pendingOfflineMode?.let { offlineMode ->
                 try {
                     SDKNativeEngine.getSharedInstance()?.setOfflineMode(offlineMode)
-                    Log.d(TAG, "Applied pending HERE SDK offline mode: $offlineMode")
+                    Logging.d(TAG, "Applied pending HERE SDK offline mode: $offlineMode")
                     pendingOfflineMode = null
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed to apply pending offline mode: ${e.message}", e)
+                    Logging.e(TAG, "Failed to apply pending offline mode: ${e.message}", e)
                 }
             }
         } catch (e: InstantiationErrorException) {
-            Log.e(TAG, "Initialization of HERE SDK failed: ${e.error.name}", e)
+            Logging.e(TAG, "Initialization of HERE SDK failed: ${e.error.name}", e)
             // Don't throw RuntimeException to prevent ANR, just log and continue
             // The app can still function without HERE SDK in some cases
         } catch (e: Exception) {
-            Log.e(TAG, "Unexpected error during HERE SDK initialization: ${e.message}", e)
+            Logging.e(TAG, "Unexpected error during HERE SDK initialization: ${e.message}", e)
         }
     }
 
     private fun initializeNetworkMonitoring() {
-        Log.d(TAG, "Initializing network monitoring...")
+        Logging.d(TAG, "Initializing network monitoring...")
 
         // Check if we have network permissions
         if (!NetworkUtils.hasNetworkPermissions(this)) {
-            Log.w(TAG, "Network permissions not available, using basic monitoring")
+            Logging.w(TAG, "Network permissions not available, using basic monitoring")
             return
         }
 
         networkMonitor = NetworkMonitor(this) { connected, type, metered ->
-            Log.d(TAG, "Network state changed: connected=$connected, type=$type, metered=$metered")
+            Logging.d(TAG, "Network state changed: connected=$connected, type=$type, metered=$metered")
             
             // Update UI state
             isConnected = connected
@@ -565,7 +565,7 @@ class HeadlessNavigActivity: ComponentActivity() {
         }
 
         networkMonitor?.startMonitoring()
-        Log.d(TAG, "Network monitoring started")
+        Logging.d(TAG, "Network monitoring started")
     }
 
     override fun onTrimMemory(level: Int) {
@@ -595,7 +595,7 @@ class HeadlessNavigActivity: ComponentActivity() {
     }
 
     override fun onDestroy() {
-        Log.d(TAG, "HeadlessNavigActivity onDestroy - starting cleanup")
+        Logging.d(TAG, "HeadlessNavigActivity onDestroy - starting cleanup")
         
         // Mark navigation as inactive
         isNavigationActive.set(false)
@@ -619,7 +619,7 @@ class HeadlessNavigActivity: ComponentActivity() {
         // Cancel coroutines
         coroutineScope.cancel()
         
-        Log.d(TAG, "HeadlessNavigActivity onDestroy - cleanup completed")
+        Logging.d(TAG, "HeadlessNavigActivity onDestroy - cleanup completed")
         super.onDestroy()
     }
 
@@ -633,18 +633,18 @@ class HeadlessNavigActivity: ComponentActivity() {
             val sdkNativeEngine = SDKNativeEngine.getSharedInstance()
             if (sdkNativeEngine != null) {
                 sdkNativeEngine.setOfflineMode(!isConnected)
-                Log.d(TAG, "HERE SDK offline mode set to: ${!isConnected}")
+                Logging.d(TAG, "HERE SDK offline mode set to: ${!isConnected}")
             } else {
-                Log.d(TAG, "HERE SDK not yet initialized, will set offline mode when ready")
+                Logging.d(TAG, "HERE SDK not yet initialized, will set offline mode when ready")
                 // Store the desired offline mode state for when SDK is ready
                 pendingOfflineMode = !isConnected
             }
         } catch (e: UnsatisfiedLinkError) {
-            Log.d(TAG, "HERE SDK native library not loaded yet, will set offline mode when ready")
+            Logging.d(TAG, "HERE SDK native library not loaded yet, will set offline mode when ready")
             // Store the desired offline mode state for when SDK is ready
             pendingOfflineMode = !isConnected
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to update HERE SDK offline mode: ${e.message}", e)
+            Logging.e(TAG, "Failed to update HERE SDK offline mode: ${e.message}", e)
         }
     }
 
@@ -655,7 +655,7 @@ class HeadlessNavigActivity: ComponentActivity() {
         try {
             val sdkNativeEngine = SDKNativeEngine.getSharedInstance()
             if (sdkNativeEngine != null) {
-                Log.d(TAG, "Disposing HERE SDK...")
+                Logging.d(TAG, "Disposing HERE SDK...")
                 
                 // Additional cleanup to ensure all service connections are released
                 try {
@@ -663,25 +663,25 @@ class HeadlessNavigActivity: ComponentActivity() {
                     val locationEngine = com.here.sdk.location.LocationEngine()
                     if (locationEngine.isStarted) {
                         locationEngine.stop()
-                        Log.d(TAG, "Stopped remaining location engine before disposal")
+                        Logging.d(TAG, "Stopped remaining location engine before disposal")
                     }
                 } catch (e: Exception) {
-                    Log.w(TAG, "Error stopping location engine before disposal: ${e.message}")
+                    Logging.w(TAG, "Error stopping location engine before disposal: ${e.message}")
                 }
                 
                 // Dispose the SDK
                 sdkNativeEngine.dispose()
-                Log.d(TAG, "HERE SDK disposed successfully")
+                Logging.d(TAG, "HERE SDK disposed successfully")
                 
                 // For safety reasons, we explicitly set the shared instance to null to avoid situations,
                 // where a disposed instance is accidentally reused.
                 SDKNativeEngine.setSharedInstance(null)
-                Log.d(TAG, "HERE SDK shared instance cleared")
+                Logging.d(TAG, "HERE SDK shared instance cleared")
             } else {
-                Log.d(TAG, "HERE SDK not initialized, nothing to dispose")
+                Logging.d(TAG, "HERE SDK not initialized, nothing to dispose")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error disposing HERE SDK: ${e.message}", e)
+            Logging.e(TAG, "Error disposing HERE SDK: ${e.message}", e)
         }
     }
     
@@ -690,7 +690,7 @@ class HeadlessNavigActivity: ComponentActivity() {
      */
     private fun stopAllLocationServices() {
         try {
-            Log.d(TAG, "Stopping all location services...")
+            Logging.d(TAG, "Stopping all location services...")
             
             // Set shutdown flag first to prevent starting new services during cleanup
             app?.getNavigationExample()?.setShuttingDown(true)
@@ -700,33 +700,33 @@ class HeadlessNavigActivity: ComponentActivity() {
                 try {
                     // Stop headless navigation first (this will skip enabling device positioning due to shutdown flag)
                     navExample.stopHeadlessNavigation()
-                    Log.d(TAG, "Headless navigation stopped")
+                    Logging.d(TAG, "Headless navigation stopped")
                 } catch (e: Exception) {
-                    Log.w(TAG, "Error stopping headless navigation: ${e.message}")
+                    Logging.w(TAG, "Error stopping headless navigation: ${e.message}")
                 }
                 
                 try {
                     // Stop location services
                     navExample.stopLocating()
-                    Log.d(TAG, "Location services stopped")
+                    Logging.d(TAG, "Location services stopped")
                 } catch (e: Exception) {
-                    Log.w(TAG, "Error stopping location services: ${e.message}")
+                    Logging.w(TAG, "Error stopping location services: ${e.message}")
                 }
                 
                 try {
                     // Force disconnect HERE SDK location services to prevent leaks
                     navExample.getHerePositioningProvider().forceDisconnect()
-                    Log.d(TAG, "HERE SDK location services force disconnected")
+                    Logging.d(TAG, "HERE SDK location services force disconnected")
                 } catch (e: Exception) {
-                    Log.w(TAG, "Error force disconnecting location services: ${e.message}")
+                    Logging.w(TAG, "Error force disconnecting location services: ${e.message}")
                 }
                 
                 try {
                     // Stop rendering (should be no-op in headless mode, but safe to call)
                     navExample.stopRendering()
-                    Log.d(TAG, "Rendering stopped")
+                    Logging.d(TAG, "Rendering stopped")
                 } catch (e: Exception) {
-                    Log.w(TAG, "Error stopping rendering: ${e.message}")
+                    Logging.w(TAG, "Error stopping rendering: ${e.message}")
                 }
             }
             
@@ -738,16 +738,16 @@ class HeadlessNavigActivity: ComponentActivity() {
                     val locationEngine = com.here.sdk.location.LocationEngine()
                     if (locationEngine.isStarted) {
                         locationEngine.stop()
-                        Log.d(TAG, "HERE SDK LocationEngine stopped")
+                        Logging.d(TAG, "HERE SDK LocationEngine stopped")
                     }
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "Error stopping HERE SDK LocationEngine: ${e.message}")
+                Logging.w(TAG, "Error stopping HERE SDK LocationEngine: ${e.message}")
             }
             
-            Log.d(TAG, "All location services stopped successfully")
+            Logging.d(TAG, "All location services stopped successfully")
         } catch (e: Exception) {
-            Log.e(TAG, "Error during location services cleanup: ${e.message}", e)
+            Logging.e(TAG, "Error during location services cleanup: ${e.message}", e)
         }
     }
     
@@ -765,7 +765,7 @@ class HeadlessNavigActivity: ComponentActivity() {
      */
     fun updateRouteCalculationStatus(calculated: Boolean) {
         isRouteCalculated = calculated
-        Log.d(TAG, "Route calculation status updated: $calculated")
+        Logging.d(TAG, "Route calculation status updated: $calculated")
     }
     
     /**
@@ -773,7 +773,7 @@ class HeadlessNavigActivity: ComponentActivity() {
      */
     fun updateTripDataWhenReady() {
         if (tripResponse != null && app != null) {
-            Log.d(TAG, "Updating App with trip data after both are ready")
+            Logging.d(TAG, "Updating App with trip data after both are ready")
             app?.updateTripData(tripResponse, isSimulated)
         }
     }

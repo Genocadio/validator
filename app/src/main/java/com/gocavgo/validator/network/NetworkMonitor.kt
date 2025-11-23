@@ -6,7 +6,7 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.os.PowerManager
-import android.util.Log
+import com.gocavgo.validator.util.Logging
 
 /**
  * Real-time network connectivity monitor that tracks internet availability,
@@ -38,38 +38,38 @@ class NetworkMonitor(
                 PowerManager.PARTIAL_WAKE_LOCK,
                 "GoCavGo:NetworkMonitor"
             )
-            Log.d(TAG, "Wake lock initialized for network monitoring")
+            Logging.d(TAG, "Wake lock initialized for network monitoring")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to initialize wake lock: ${e.message}", e)
+            Logging.e(TAG, "Failed to initialize wake lock: ${e.message}", e)
         }
     }
 
     fun startMonitoring() {
         if (isMonitoring || connectivityManager == null) {
-            Log.w(TAG, "Network monitoring already started or ConnectivityManager unavailable")
+            Logging.w(TAG, "Network monitoring already started or ConnectivityManager unavailable")
             return
         }
 
-        Log.d(TAG, "Starting network monitoring...")
+        Logging.d(TAG, "Starting network monitoring...")
 
         networkCallback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
-                Log.d(TAG, "Network became available: $network")
+                Logging.d(TAG, "Network became available: $network")
                 checkAndReportNetworkState()
             }
 
             override fun onLost(network: Network) {
-                Log.d(TAG, "Network lost: $network")
+                Logging.d(TAG, "Network lost: $network")
                 checkAndReportNetworkState()
             }
 
             override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
-                Log.d(TAG, "Network capabilities changed: $network")
+                Logging.d(TAG, "Network capabilities changed: $network")
                 checkAndReportNetworkState()
             }
 
             override fun onLinkPropertiesChanged(network: Network, linkProperties: android.net.LinkProperties) {
-                Log.d(TAG, "Link properties changed: $network")
+                Logging.d(TAG, "Link properties changed: $network")
                 checkAndReportNetworkState()
             }
         }
@@ -84,7 +84,7 @@ class NetworkMonitor(
         // Initial state check
         checkAndReportNetworkState()
 
-        Log.d(TAG, "Network monitoring started successfully")
+        Logging.d(TAG, "Network monitoring started successfully")
     }
 
     fun stopMonitoring() {
@@ -92,23 +92,23 @@ class NetworkMonitor(
             return
         }
 
-        Log.d(TAG, "Stopping network monitoring...")
+        Logging.d(TAG, "Stopping network monitoring...")
 
         try {
             connectivityManager?.unregisterNetworkCallback(networkCallback!!)
         } catch (e: IllegalArgumentException) {
-            Log.w(TAG, "Network callback was not registered: ${e.message}")
+            Logging.w(TAG, "Network callback was not registered: ${e.message}")
         }
 
         networkCallback = null
         isMonitoring = false
 
-        Log.d(TAG, "Network monitoring stopped")
+        Logging.d(TAG, "Network monitoring stopped")
     }
 
     private fun checkAndReportNetworkState() {
         if (!NetworkUtils.hasNetworkPermissions(context)) {
-            Log.w(TAG, "Cannot check network state - permissions not granted")
+            Logging.w(TAG, "Cannot check network state - permissions not granted")
             onNetworkChanged(false, "UNKNOWN", true)
             return
         }
@@ -121,7 +121,7 @@ class NetworkMonitor(
             val isMetered = NetworkUtils.isConnectionMetered(context)
             val connectionType = getConnectionType()
 
-            Log.d(TAG, "Network state: Connected=$isConnected, Type=$connectionType, Metered=$isMetered")
+            Logging.d(TAG, "Network state: Connected=$isConnected, Type=$connectionType, Metered=$isMetered")
 
             onNetworkChanged(isConnected, connectionType, isMetered)
         } finally {
@@ -150,7 +150,7 @@ class NetworkMonitor(
                 else -> "OTHER"
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error getting connection type: ${e.message}")
+            Logging.e(TAG, "Error getting connection type: ${e.message}")
             return "UNKNOWN"
         }
     }
@@ -168,7 +168,7 @@ class NetworkMonitor(
                 "CELLULAR"
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Could not get detailed cellular info: ${e.message}")
+            Logging.w(TAG, "Could not get detailed cellular info: ${e.message}")
             "CELLULAR"
         }
     }
@@ -206,11 +206,11 @@ class NetworkMonitor(
             wakeLock?.let { lock ->
                 if (!lock.isHeld) {
                     lock.acquire(30 * 1000L) // 30 seconds timeout
-                    Log.d(TAG, "Wake lock acquired for network operation")
+                    Logging.d(TAG, "Wake lock acquired for network operation")
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to acquire wake lock: ${e.message}", e)
+            Logging.e(TAG, "Failed to acquire wake lock: ${e.message}", e)
         }
     }
     
@@ -222,11 +222,11 @@ class NetworkMonitor(
             wakeLock?.let { lock ->
                 if (lock.isHeld) {
                     lock.release()
-                    Log.d(TAG, "Wake lock released")
+                    Logging.d(TAG, "Wake lock released")
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to release wake lock: ${e.message}", e)
+            Logging.e(TAG, "Failed to release wake lock: ${e.message}", e)
         }
     }
 }

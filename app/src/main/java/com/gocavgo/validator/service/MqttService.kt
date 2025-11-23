@@ -2,7 +2,7 @@ package com.gocavgo.validator.service
 
 import android.annotation.SuppressLint
 import android.content.Context
-import android.util.Log
+import com.gocavgo.validator.util.Logging
 import com.hivemq.client.mqtt.MqttClient
 import com.hivemq.client.mqtt.MqttClientState
 import com.hivemq.client.mqtt.mqtt5.Mqtt5AsyncClient
@@ -48,18 +48,21 @@ class MqttService private constructor(
         private const val TAG = "MqttService"
         private val QOS = MqttQos.AT_LEAST_ONCE
         private const val KEEP_ALIVE_SECONDS = 60
-        private const val RECONNECT_DELAY_MS = 5000L
-        private const val MAX_RECONNECT_ATTEMPTS = 10
+        private const val RECONNECT_DELAY_MS = 5000L // Legacy constant, not used
         private const val HEARTBEAT_INTERVAL_MS = 30000L
         private const val CONNECTION_TIMEOUT_MS = 15000L // Increased timeout
-        private const val BACKGROUND_RECONNECT_DELAY_MS = 10000L
-        private const val FOREGROUND_RECONNECT_DELAY_MS = 2000L
+        private const val BACKGROUND_RECONNECT_DELAY_MS = 3000L // Reduced from 10000L for faster reconnection
+        private const val FOREGROUND_RECONNECT_DELAY_MS = 1000L // Reduced from 2000L for faster reconnection
         private const val MAX_QUEUE_SIZE = 100
-        private const val MAX_RECONNECT_BACKOFF_MS = 60000L // Max 1 minute between attempts
+        private const val MAX_RECONNECT_BACKOFF_MS = 30000L // Reduced from 60000L - Max 30 seconds between attempts
+        private const val MAX_RECONNECT_ATTEMPTS = 100 // Increased from 10 - never give up
+        
+        // Continuous monitoring
+        private const val CONNECTION_CHECK_INTERVAL_MS = 10000L // Check connection every 10 seconds
         
         // Background optimization constants
         private const val FOREGROUND_HEARTBEAT_INTERVAL_MS = 30000L // 30s when active
-        private const val BACKGROUND_HEARTBEAT_INTERVAL_MS = 120000L // 2min when background
+        private const val BACKGROUND_HEARTBEAT_INTERVAL_MS = 60000L // Reduced from 120000L - 1min when background for faster detection
 
         // Broadcast action for UI when a booking bundle is saved locally
         const val ACTION_BOOKING_BUNDLE_SAVED = "com.gocavgo.validator.BOOKING_BUNDLE_SAVED"
@@ -134,6 +137,7 @@ class MqttService private constructor(
     // Heartbeat management
     private var heartbeatJob: Job? = null
     private var reconnectJob: Job? = null
+    private var connectionMonitorJob: Job? = null // Continuous connection monitoring
     
     // Connection credentials
     private var username: String? = null
@@ -233,7 +237,7 @@ class MqttService private constructor(
     @SuppressLint("CheckResult")
     fun connect(username: String? = null, password: String? = null) {
         if (isServiceActive.get()) {
-            Log.d(TAG, "MQTT service already active, skipping connection")
+            Logging.d(TAG, "MQTT service already active, skipping connection")
             return
         }
         
@@ -254,37 +258,37 @@ class MqttService private constructor(
     private fun initializeNetworkMonitoring() {
         try {
             networkMonitor = NetworkMonitor(context) { connected, type, metered ->
-                Log.d(TAG, "=== NETWORK STATE CHANGED ===")
-                Log.d(TAG, "Connected: $connected")
-                Log.d(TAG, "Type: $type")
-                Log.d(TAG, "Metered: $metered")
-                Log.d(TAG, "============================")
+                Logging.d(TAG, "=== NETWORK STATE CHANGED ===")
+                Logging.d(TAG, "Connected: $connected")
+                Logging.d(TAG, "Type: $type")
+                Logging.d(TAG, "Metered: $metered")
+                Logging.d(TAG, "============================")
                 
                 val wasConnected = isNetworkAvailable.get()
                 isNetworkAvailable.set(connected)
                 
                 if (connected && !wasConnected) {
                     // Network came back online
-                    Log.d(TAG, "Network restored, checking if service should restart...")
+                    Logging.d(TAG, "Network restored, checking if service should restart...")
                     if (isWaitingForNetwork.get()) {
-                        Log.d(TAG, "Service was waiting for network, restarting...")
+                        Logging.d(TAG, "Service was waiting for network, restarting...")
                         restartAfterNetworkRestored()
                     } else {
-                        Log.d(TAG, "Service not waiting for network, attempting reconnection...")
+                        Logging.d(TAG, "Service not waiting for network, attempting reconnection...")
                         scheduleReconnection()
                     }
                 } else if (!connected && wasConnected) {
                     // Network lost
-                    Log.d(TAG, "Network lost, shutting down service...")
+                    Logging.d(TAG, "Network lost, shutting down service...")
                     connectionLostTime.set(System.currentTimeMillis())
                     shutdownDueToNetworkLoss()
                 }
             }
             
             networkMonitor?.startMonitoring()
-            Log.d(TAG, "Network monitoring initialized")
+            Logging.d(TAG, "Network monitoring initialized")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to initialize network monitoring: ${e.message}", e)
+            Logging.e(TAG, "Failed to initialize network monitoring: ${e.message}", e)
         }
     }
     
@@ -293,14 +297,14 @@ class MqttService private constructor(
      */
     private fun startConnectionProcess() {
         if (!isNetworkAvailable.get()) {
-            Log.w(TAG, "No network available, scheduling reconnection")
+            Logging.w(TAG, "No network available, scheduling reconnection")
             scheduleReconnection()
             return
         }
         
         // If we're disconnecting, wait for it to complete
         if (isDisconnecting.get()) {
-            Log.d(TAG, "Service is disconnecting, scheduling reconnection after delay")
+            Logging.d(TAG, "Service is disconnecting, scheduling reconnection after delay")
             scheduleReconnection()
             return
         }
@@ -312,11 +316,11 @@ class MqttService private constructor(
             val connectionTimeout = CONNECTION_TIMEOUT_MS + 5000 // Add 5s buffer
             
             if (timeSinceConnectionStart > connectionTimeout && connectionStartTime > 0) {
-                Log.w(TAG, "Connection attempt timed out (${timeSinceConnectionStart}ms), resetting connection state")
+                Logging.w(TAG, "Connection attempt timed out (${timeSinceConnectionStart}ms), resetting connection state")
                 isConnecting.set(false)
                 // Continue to attempt new connection
             } else {
-                Log.d(TAG, "Connection already in progress (${timeSinceConnectionStart}ms), skipping")
+                Logging.d(TAG, "Connection already in progress (${timeSinceConnectionStart}ms), skipping")
                 return
             }
         }
@@ -328,7 +332,7 @@ class MqttService private constructor(
         try {
             performConnection()
         } catch (e: Exception) {
-            Log.e(TAG, "Connection process failed: ${e.message}", e)
+            Logging.e(TAG, "Connection process failed: ${e.message}", e)
             isConnecting.set(false)
             scheduleReconnection()
         }
@@ -340,7 +344,7 @@ class MqttService private constructor(
     @SuppressLint("CheckResult")
     private fun performConnection() {
         try {
-            Log.d(TAG, "Connecting to HiveMQ broker: $brokerHost:$brokerPort")
+            Logging.d(TAG, "Connecting to HiveMQ broker: $brokerHost:$brokerPort")
 
             // Build MQTT5 client with proper TLS configuration
             val clientBuilder = MqttClient.builder()
@@ -353,7 +357,7 @@ class MqttService private constructor(
             // Add TLS configuration for secure connections
             if (brokerPort == 8883) {
                 clientBuilder.sslWithDefaultConfig()
-                Log.d(TAG, "SSL/TLS configuration applied for port 8883")
+                Logging.d(TAG, "SSL/TLS configuration applied for port 8883")
             }
 
             mqttClient = clientBuilder.buildAsync()
@@ -371,7 +375,7 @@ class MqttService private constructor(
 
             // Add credentials if provided
             username?.let { user ->
-                Log.d(TAG, "Adding authentication credentials for user: $user")
+                Logging.d(TAG, "Adding authentication credentials for user: $user")
                 connectBuilder.simpleAuth()
                     .username(user)
                     .password(password?.toByteArray() ?: ByteArray(0))
@@ -382,36 +386,36 @@ class MqttService private constructor(
             mqttClient!!.publishes(MqttGlobalPublishFilter.ALL) { publish: Mqtt5Publish ->
                 val topic = publish.topic.toString()
                 val payload = String(publish.payloadAsBytes)
-                Log.d(TAG, "📨 Message received on topic: $topic")
-                Log.d(TAG, "📄 Payload: $payload")
+                Logging.d(TAG, "📨 Message received on topic: $topic")
+                Logging.d(TAG, "📄 Payload: $payload")
                 handleMessage(topic, payload)
             }
             
             // Note: Connection state monitoring is handled in the connection callback
 
             // Connect with detailed error handling and timeout
-            Log.d(TAG, "Attempting MQTT connection...")
+            Logging.d(TAG, "Attempting MQTT connection...")
             connectBuilder.send()
                 .whenComplete { connAck, throwable ->
                     if (throwable != null) {
-                        Log.e(TAG, "❌ MQTT Connection failed!")
-                        Log.e(TAG, "Error type: ${throwable.javaClass.simpleName}")
-                        Log.e(TAG, "Error message: ${throwable.message}")
-                        Log.e(TAG, "Error cause: ${throwable.cause?.message}")
+                        Logging.e(TAG, "❌ MQTT Connection failed!")
+                        Logging.e(TAG, "Error type: ${throwable.javaClass.simpleName}")
+                        Logging.e(TAG, "Error message: ${throwable.message}")
+                        Logging.e(TAG, "Error cause: ${throwable.cause?.message}")
 
                         // Log specific SSL/TLS errors
                         if (throwable.message?.contains("SSL") == true ||
                             throwable.message?.contains("TLS") == true) {
-                            Log.e(TAG, "SSL/TLS connection error - check broker SSL configuration")
+                            Logging.e(TAG, "SSL/TLS connection error - check broker SSL configuration")
                         }
 
                         throwable.printStackTrace()
                         connectionCallback?.invoke(false)
                     } else {
-                        Log.i(TAG, "✅ Successfully connected to HiveMQ broker!")
-                        Log.d(TAG, "Connection ACK reason: ${connAck.reasonCode}")
-                        Log.d(TAG, "Session present: ${connAck.isSessionPresent}")
-                        Log.d(TAG, "Connection restrictions: ${connAck.restrictions}")
+                        Logging.i(TAG, "✅ Successfully connected to HiveMQ broker!")
+                        Logging.d(TAG, "Connection ACK reason: ${connAck.reasonCode}")
+                        Logging.d(TAG, "Session present: ${connAck.isSessionPresent}")
+                        Logging.d(TAG, "Connection restrictions: ${connAck.restrictions}")
 
                         // Update connection state
                         isConnecting.set(false)
@@ -427,6 +431,9 @@ class MqttService private constructor(
 
                         // Start heartbeat mechanism
                         startHeartbeat()
+                        
+                        // Start continuous connection monitoring
+                        startConnectionMonitoring()
 
                         // Process queued messages
                         processQueuedMessages()
@@ -435,15 +442,15 @@ class MqttService private constructor(
                     }
                 }
                 .exceptionally { ex ->
-                    Log.e(TAG, "❌ Connection timeout or exception", ex)
+                    Logging.e(TAG, "❌ Connection timeout or exception", ex)
                     connectionCallback?.invoke(false)
                     null
                 }
 
         } catch (e: Exception) {
-            Log.e(TAG, "❌ Failed to initialize MQTT client", e)
-            Log.e(TAG, "Exception type: ${e.javaClass.simpleName}")
-            Log.e(TAG, "Exception message: ${e.message}")
+            Logging.e(TAG, "❌ Failed to initialize MQTT client", e)
+            Logging.e(TAG, "Exception type: ${e.javaClass.simpleName}")
+            Logging.e(TAG, "Exception message: ${e.message}")
             e.printStackTrace()
             connectionCallback?.invoke(false)
         }
@@ -454,12 +461,13 @@ class MqttService private constructor(
      */
     fun disconnect() {
         try {
-            Log.d(TAG, "Disconnecting from MQTT broker...")
+            Logging.d(TAG, "Disconnecting from MQTT broker...")
             isDisconnecting.set(true)
             
             // Stop all background jobs
             stopHeartbeat()
             stopReconnection()
+            stopConnectionMonitoring()
             stopNetworkMonitoring()
             
             if (isConnected()) {
@@ -467,14 +475,14 @@ class MqttService private constructor(
                     // Publish offline status before disconnecting
                     publishOfflineStatus()
                 } catch (e: Exception) {
-                    Log.w(TAG, "Failed to publish offline status: ${e.message}")
+                    Logging.w(TAG, "Failed to publish offline status: ${e.message}")
                 }
 
                 mqttClient?.disconnect()?.whenComplete { _, throwable ->
                     if (throwable != null) {
-                        Log.e(TAG, "Error during disconnect", throwable)
+                        Logging.e(TAG, "Error during disconnect", throwable)
                     } else {
-                        Log.i(TAG, "Disconnected from MQTT broker")
+                        Logging.i(TAG, "Disconnected from MQTT broker")
                     }
                     // Clear connection state after disconnect completes
                     isServiceActive.set(false)
@@ -493,7 +501,7 @@ class MqttService private constructor(
             }
             
         } catch (e: Exception) {
-            Log.e(TAG, "Error during disconnect", e)
+            Logging.e(TAG, "Error during disconnect", e)
             // Ensure state is cleared even on error
             isServiceActive.set(false)
             isConnecting.set(false)
@@ -508,26 +516,27 @@ class MqttService private constructor(
      */
     private fun shutdownDueToNetworkLoss() {
         try {
-            Log.d(TAG, "Shutting down MQTT service due to network loss...")
+            Logging.d(TAG, "Shutting down MQTT service due to network loss...")
             isDisconnecting.set(true)
             
             // Stop all background jobs
             stopHeartbeat()
             stopReconnection()
+            stopConnectionMonitoring()
             
             if (isConnected()) {
                 try {
                     // Publish offline status before disconnecting
                     publishOfflineStatus()
                 } catch (e: Exception) {
-                    Log.w(TAG, "Failed to publish offline status: ${e.message}")
+                    Logging.w(TAG, "Failed to publish offline status: ${e.message}")
                 }
 
                 mqttClient?.disconnect()?.whenComplete { _, throwable ->
                     if (throwable != null) {
-                        Log.e(TAG, "Error during network-triggered disconnect", throwable)
+                        Logging.e(TAG, "Error during network-triggered disconnect", throwable)
                     } else {
-                        Log.i(TAG, "Disconnected from MQTT broker due to network loss")
+                        Logging.i(TAG, "Disconnected from MQTT broker due to network loss")
                     }
                     // Clear connection state but preserve credentials and mark as waiting
                     isServiceActive.set(false)
@@ -546,7 +555,7 @@ class MqttService private constructor(
             }
             
         } catch (e: Exception) {
-            Log.e(TAG, "Error during network-triggered shutdown", e)
+            Logging.e(TAG, "Error during network-triggered shutdown", e)
             // Ensure state is cleared even on error
             isServiceActive.set(false)
             isConnecting.set(false)
@@ -561,10 +570,10 @@ class MqttService private constructor(
      */
     private fun restartAfterNetworkRestored() {
         try {
-            Log.d(TAG, "Restarting MQTT service after network restoration...")
+            Logging.d(TAG, "Restarting MQTT service after network restoration...")
             
             if (!isWaitingForNetwork.get()) {
-                Log.d(TAG, "Service not waiting for network, skipping restart")
+                Logging.d(TAG, "Service not waiting for network, skipping restart")
                 return
             }
             
@@ -580,7 +589,7 @@ class MqttService private constructor(
                 previousCallback?.invoke(connected)
                 
                 if (connected) {
-                    Log.d(TAG, "MQTT reconnected after network restore - connection callback notified")
+                    Logging.d(TAG, "MQTT reconnected after network restore - connection callback notified")
                     // Connection callback will be handled by Activity/Service to send trip status/heartbeat
                 }
             }
@@ -589,7 +598,7 @@ class MqttService private constructor(
             connect(username, password)
             
         } catch (e: Exception) {
-            Log.e(TAG, "Error restarting service after network restoration: ${e.message}", e)
+            Logging.e(TAG, "Error restarting service after network restoration: ${e.message}", e)
             // If restart fails, mark as waiting again
             isWaitingForNetwork.set(true)
         }
@@ -599,22 +608,22 @@ class MqttService private constructor(
      * Handle app lifecycle changes
      */
     fun onAppForeground() {
-        Log.d(TAG, "App moved to foreground")
+        Logging.d(TAG, "App moved to foreground")
         isAppInForeground.set(true)
         
         // Always check connection and reconnect if needed
         if (isServiceActive.get()) {
             if (!isConnected()) {
-                Log.d(TAG, "App in foreground but MQTT disconnected, reconnecting...")
+                Logging.d(TAG, "App in foreground but MQTT disconnected, reconnecting...")
                 // Reset connection state to allow reconnection
                 isConnecting.set(false)
                 reconnectAttempts.set(0)
                 scheduleReconnection()
             } else {
-                Log.d(TAG, "MQTT is connected, no reconnection needed")
+                Logging.d(TAG, "MQTT is connected, no reconnection needed")
             }
         } else {
-            Log.d(TAG, "MQTT service is not active, will connect when service starts")
+            Logging.d(TAG, "MQTT service is not active, will connect when service starts")
         }
     }
     
@@ -622,12 +631,12 @@ class MqttService private constructor(
      * Handle app lifecycle changes
      */
     fun onAppBackground() {
-        Log.d(TAG, "App moved to background")
+        Logging.d(TAG, "App moved to background")
         isAppInForeground.set(false)
         
         // Continue running in background but with reduced activity
         if (isServiceActive.get()) {
-            Log.d(TAG, "Continuing MQTT service in background")
+            Logging.d(TAG, "Continuing MQTT service in background")
         }
     }
     
@@ -635,18 +644,18 @@ class MqttService private constructor(
      * Handle network state changes from NetworkMonitor
      */
     fun onNetworkStateChanged(connected: Boolean, connectionType: String, metered: Boolean) {
-        Log.d(TAG, "Network state changed: connected=$connected, type=$connectionType, metered=$metered")
+        Logging.d(TAG, "Network state changed: connected=$connected, type=$connectionType, metered=$metered")
         
         val wasNetworkAvailable = isNetworkAvailable.get()
         isNetworkAvailable.set(connected)
         
         if (connected && !wasNetworkAvailable) {
-            Log.d(TAG, "Network became available, attempting reconnection...")
+            Logging.d(TAG, "Network became available, attempting reconnection...")
             if (isServiceActive.get() && !isConnected()) {
                 scheduleReconnection()
             }
         } else if (!connected && wasNetworkAvailable) {
-            Log.d(TAG, "Network became unavailable, pausing operations...")
+            Logging.d(TAG, "Network became unavailable, pausing operations...")
             // Network is down, but don't disconnect immediately
             // Let the connection timeout handle it naturally
         }
@@ -657,15 +666,12 @@ class MqttService private constructor(
      */
     private fun scheduleReconnection() {
         if (reconnectJob?.isActive == true) {
-            Log.d(TAG, "Reconnection already scheduled")
+            Logging.d(TAG, "Reconnection already scheduled")
             return
         }
         
         val currentAttempts = reconnectAttempts.get()
-        if (currentAttempts >= MAX_RECONNECT_ATTEMPTS) {
-            Log.e(TAG, "Maximum reconnection attempts reached, giving up")
-            return
-        }
+        // Removed MAX_RECONNECT_ATTEMPTS check - never give up on reconnection for maximum stability
         
         val delay = if (isAppInForeground.get()) {
             (FOREGROUND_RECONNECT_DELAY_MS * (1L shl currentAttempts.toInt().coerceAtMost(5))).coerceAtMost(MAX_RECONNECT_BACKOFF_MS)
@@ -673,23 +679,23 @@ class MqttService private constructor(
             (BACKGROUND_RECONNECT_DELAY_MS * (1L shl currentAttempts.toInt().coerceAtMost(3))).coerceAtMost(MAX_RECONNECT_BACKOFF_MS)
         }
         
-        Log.d(TAG, "Scheduling reconnection in ${delay}ms (attempt ${currentAttempts + 1}/$MAX_RECONNECT_ATTEMPTS)")
+        Logging.d(TAG, "Scheduling reconnection in ${delay}ms (attempt ${currentAttempts + 1})")
         
         reconnectJob = ioScope.launch {
             try {
                 delay(delay)
                 
                 if (isServiceActive.get() && isNetworkAvailable.get()) {
-                    Log.d(TAG, "Attempting reconnection...")
+                    Logging.d(TAG, "Attempting reconnection...")
                     reconnectAttempts.incrementAndGet()
                     startConnectionProcess()
                 } else {
-                    Log.d(TAG, "Skipping reconnection - service inactive or no network")
+                    Logging.d(TAG, "Skipping reconnection - service inactive or no network")
                 }
             } catch (e: CancellationException) {
-                Log.d(TAG, "Reconnection cancelled")
+                Logging.d(TAG, "Reconnection cancelled")
             } catch (e: Exception) {
-                Log.e(TAG, "Reconnection failed: ${e.message}", e)
+                Logging.e(TAG, "Reconnection failed: ${e.message}", e)
                 scheduleReconnection()
             }
         }
@@ -720,29 +726,34 @@ class MqttService private constructor(
                             // Send heartbeat
                             sendHeartbeat()
                             lastHeartbeatTime.set(System.currentTimeMillis())
-                            Log.d(TAG, "Heartbeat sent successfully (interval: ${heartbeatInterval}ms)")
+                            Logging.d(TAG, "Heartbeat sent successfully (interval: ${heartbeatInterval}ms)")
                         } catch (e: Exception) {
-                            Log.e(TAG, "Heartbeat send failed: ${e.message}", e)
+                            Logging.e(TAG, "Heartbeat send failed: ${e.message}", e)
                             
                             // If heartbeat fails, check if we're still connected
                             if (!isConnected()) {
-                                Log.w(TAG, "Heartbeat failed - connection lost, scheduling reconnection")
+                                Logging.w(TAG, "Heartbeat failed - connection lost, scheduling reconnection")
                                 scheduleReconnection()
                                 break
                             }
                         }
                     } else {
-                        Log.w(TAG, "Heartbeat skipped - not connected or disconnecting")
+                        Logging.w(TAG, "Heartbeat skipped - not connected or disconnecting")
                         if (!isDisconnecting.get()) {
+                            // Continue checking and trigger reconnection instead of breaking
+                            // This ensures heartbeat keeps monitoring and triggers reconnection faster
                             scheduleReconnection()
+                            // Don't break - continue loop to keep checking connection state
+                            delay(5000) // Wait 5 seconds before checking again
+                        } else {
+                            break // Only break if explicitly disconnecting
                         }
-                        break
                     }
                 }
             } catch (e: CancellationException) {
-                Log.d(TAG, "Heartbeat cancelled")
+                Logging.d(TAG, "Heartbeat cancelled")
             } catch (e: Exception) {
-                Log.e(TAG, "Heartbeat error: ${e.message}", e)
+                Logging.e(TAG, "Heartbeat error: ${e.message}", e)
             }
         }
     }
@@ -791,12 +802,12 @@ class MqttService private constructor(
                         currentLng = vehicleLocation.longitude
                         currentSpeed = vehicleLocation.speed
                         bearing = vehicleLocation.bearing
-                        Log.d(TAG, "Including location in heartbeat: lat=$currentLat, lng=$currentLng, speed=$currentSpeed, bearing=$bearing")
+                        Logging.d(TAG, "Including location in heartbeat: lat=$currentLat, lng=$currentLng, speed=$currentSpeed, bearing=$bearing")
                     } else {
-                        Log.d(TAG, "No location data available for heartbeat message (sending nulls)")
+                        Logging.d(TAG, "No location data available for heartbeat message (sending nulls)")
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed to fetch location for heartbeat: ${e.message}", e)
+                    Logging.e(TAG, "Failed to fetch location for heartbeat: ${e.message}", e)
                 }
             }
             
@@ -815,13 +826,13 @@ class MqttService private constructor(
             publish("car/$carId/heartbeat", payload, QOS, false)
                 .whenComplete { result, throwable ->
                     if (throwable != null) {
-                        Log.w(TAG, "Heartbeat send failed: ${throwable.message}")
+                        Logging.w(TAG, "Heartbeat send failed: ${throwable.message}")
                     } else {
-                        Log.d(TAG, "Heartbeat sent successfully with location data")
+                        Logging.d(TAG, "Heartbeat sent successfully with location data")
                     }
                 }
         } catch (e: Exception) {
-            Log.e(TAG, "Error sending heartbeat: ${e.message}", e)
+            Logging.e(TAG, "Error sending heartbeat: ${e.message}", e)
         }
     }
     
@@ -831,14 +842,14 @@ class MqttService private constructor(
     private fun processQueuedMessages() {
         try {
             if (messageQueue.isEmpty()) {
-                Log.d(TAG, "No queued messages to process")
+                Logging.d(TAG, "No queued messages to process")
                 return
             }
             
-            Log.d(TAG, "Processing ${messageQueue.size} queued message topics...")
+            Logging.d(TAG, "Processing ${messageQueue.size} queued message topics...")
             
             messageQueue.forEach { (topic, messages) ->
-                Log.d(TAG, "Processing ${messages.size} messages for topic: $topic")
+                Logging.d(TAG, "Processing ${messages.size} messages for topic: $topic")
                 
                 messages.forEach { queuedMessage ->
                     publish(
@@ -848,9 +859,9 @@ class MqttService private constructor(
                         queuedMessage.retained
                     ).whenComplete { result, throwable ->
                         if (throwable != null) {
-                            Log.w(TAG, "Failed to send queued message to $topic: ${throwable.message}")
+                            Logging.w(TAG, "Failed to send queued message to $topic: ${throwable.message}")
                         } else {
-                            Log.d(TAG, "Queued message sent to $topic")
+                            Logging.d(TAG, "Queued message sent to $topic")
                         }
                     }
                 }
@@ -858,10 +869,10 @@ class MqttService private constructor(
             
             // Clear processed messages
             messageQueue.clear()
-            Log.d(TAG, "All queued messages processed")
+            Logging.d(TAG, "All queued messages processed")
             
         } catch (e: Exception) {
-            Log.e(TAG, "Error processing queued messages: ${e.message}", e)
+            Logging.e(TAG, "Error processing queued messages: ${e.message}", e)
         }
     }
     
@@ -874,16 +885,88 @@ class MqttService private constructor(
     }
     
     /**
+     * Start continuous connection monitoring
+     * Checks connection state every 10 seconds and triggers reconnection if needed
+     */
+    private fun startConnectionMonitoring() {
+        stopConnectionMonitoring() // Stop any existing monitoring
+        
+        connectionMonitorJob = ioScope.launch {
+            try {
+                while (isActive && isServiceActive.get()) {
+                    delay(CONNECTION_CHECK_INTERVAL_MS)
+                    
+                    if (isDisconnecting.get()) {
+                        continue // Skip checks while disconnecting
+                    }
+                    
+                    val isConnected = isConnected()
+                    val isActive = isServiceActive.get()
+                    val isNetworkAvailable = isNetworkAvailable.get()
+                    val lastHeartbeat = lastHeartbeatTime.get()
+                    val currentTime = System.currentTimeMillis()
+                    val heartbeatTimeout = BACKGROUND_HEARTBEAT_INTERVAL_MS * 3 // 3x heartbeat interval
+                    
+                    // Check if heartbeat is stale
+                    val isHeartbeatStale = lastHeartbeat > 0 && (currentTime - lastHeartbeat) > heartbeatTimeout
+                    
+                    // If service is active but not connected, trigger reconnection immediately
+                    if (isActive && !isConnected && isNetworkAvailable) {
+                        Logging.w(TAG, "Connection monitor: Service active but not connected, triggering reconnection")
+                        if (reconnectJob?.isActive != true) {
+                            scheduleReconnection()
+                        }
+                    }
+                    
+                    // If connected but heartbeat is stale, connection might be dead
+                    if (isConnected && isHeartbeatStale) {
+                        Logging.w(TAG, "Connection monitor: Heartbeat stale (${currentTime - lastHeartbeat}ms old), connection may be dead")
+                        // Force reconnection
+                        if (reconnectJob?.isActive != true) {
+                            scheduleReconnection()
+                        }
+                    }
+                    
+                    // If we've been trying to connect for too long (>30 seconds), reset state
+                    if (isConnecting.get()) {
+                        val connectionStartTime = lastConnectionTime.get()
+                        val timeSinceConnectionStart = currentTime - connectionStartTime
+                        if (timeSinceConnectionStart > CONNECTION_TIMEOUT_MS * 2) {
+                            Logging.w(TAG, "Connection monitor: Connection attempt stuck for ${timeSinceConnectionStart}ms, resetting")
+                            isConnecting.set(false)
+                            scheduleReconnection()
+                        }
+                    }
+                }
+            } catch (e: CancellationException) {
+                Logging.d(TAG, "Connection monitoring cancelled")
+            } catch (e: Exception) {
+                Logging.e(TAG, "Connection monitoring error: ${e.message}", e)
+            }
+        }
+        
+        Logging.d(TAG, "Connection monitoring started (checking every ${CONNECTION_CHECK_INTERVAL_MS}ms)")
+    }
+    
+    /**
+     * Stop continuous connection monitoring
+     */
+    private fun stopConnectionMonitoring() {
+        connectionMonitorJob?.cancel()
+        connectionMonitorJob = null
+    }
+    
+    /**
      * Force reconnection (useful for testing or manual recovery)
      */
     fun forceReconnect() {
-        Log.d(TAG, "Force reconnection requested")
+        Logging.d(TAG, "Force reconnection requested")
         
         // Stop any existing reconnection attempts
         stopReconnection()
         
         if (isConnected()) {
-            Log.d(TAG, "Disconnecting before force reconnect")
+            Logging.d(TAG, "Disconnecting before force reconnect")
             disconnect()
             
             // Wait a bit for disconnect to complete, then reconnect
@@ -895,13 +978,13 @@ class MqttService private constructor(
                         startConnectionProcess()
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "Error in force reconnect delay: ${e.message}", e)
+                    Logging.e(TAG, "Error in force reconnect delay: ${e.message}", e)
                     reconnectAttempts.set(0)
                     startConnectionProcess()
                 }
             }
         } else {
-            Log.d(TAG, "Not connected, starting connection process immediately")
+            Logging.d(TAG, "Not connected, starting connection process immediately")
             reconnectAttempts.set(0)
             startConnectionProcess()
         }
@@ -909,25 +992,108 @@ class MqttService private constructor(
     
     /**
      * Check and fix inconsistent service state
+     * More aggressive in detecting and fixing issues
      */
     fun checkAndFixInconsistentState() {
         val isActive = isServiceActive.get()
         val isConnected = isConnected()
         val isNetworkAvailable = isNetworkAvailable.get()
+        val lastConnectionTime = lastConnectionTime.get()
+        val currentTime = System.currentTimeMillis()
+        val timeSinceLastConnection = if (lastConnectionTime > 0) currentTime - lastConnectionTime else Long.MAX_VALUE
         
-        Log.d(TAG, "Checking service state: active=$isActive, connected=$isConnected, network=$isNetworkAvailable")
+        Logging.d(TAG, "Checking service state: active=$isActive, connected=$isConnected, network=$isNetworkAvailable, timeSinceConnection=${timeSinceLastConnection}ms")
         
         // If we're connected but marked as inactive, fix the state
         if (isConnected && !isActive && isNetworkAvailable) {
-            Log.w(TAG, "Detected inconsistent state: connected but not active, fixing...")
+            Logging.w(TAG, "Detected inconsistent state: connected but not active, fixing...")
             isServiceActive.set(true)
             startHeartbeat()
+            startConnectionMonitoring()
         }
         
         // If we're active but not connected and have network, try to reconnect
         if (isActive && !isConnected && isNetworkAvailable) {
-            Log.w(TAG, "Detected inconsistent state: active but not connected, reconnecting...")
+            // Check if we've been stuck for >30 seconds - trigger full restart
+            if (timeSinceLastConnection > 30000 && lastConnectionTime > 0) {
+                Logging.w(TAG, "Detected inconsistent state: active but not connected for >30s, triggering full restart")
+                fullRestart()
+            } else {
+                Logging.w(TAG, "Detected inconsistent state: active but not connected, reconnecting...")
+                // Reset connection state to allow immediate reconnection
+                isConnecting.set(false)
+                reconnectAttempts.set(0)
+                scheduleReconnection()
+            }
+        }
+        
+        // If we're stuck in connecting state for too long, reset
+        if (isConnecting.get() && timeSinceLastConnection > CONNECTION_TIMEOUT_MS * 2) {
+            Logging.w(TAG, "Connection attempt stuck for ${timeSinceLastConnection}ms, resetting state")
+            isConnecting.set(false)
             scheduleReconnection()
+        }
+    }
+    
+    /**
+     * Full restart of MQTT service - completely resets and reinitializes
+     * Used when service is completely stuck or unhealthy for extended period
+     */
+    fun fullRestart() {
+        Logging.w(TAG, "=== FULL RESTART INITIATED ===")
+        
+        try {
+            // Stop all background jobs
+            stopHeartbeat()
+            stopReconnection()
+            stopConnectionMonitoring()
+            
+            // Disconnect if connected
+            if (isConnected()) {
+                try {
+                    mqttClient?.disconnect()?.whenComplete { _, throwable ->
+                        if (throwable != null) {
+                            Logging.e(TAG, "Error during full restart disconnect", throwable)
+                        }
+                    }
+                } catch (e: Exception) {
+                    Logging.e(TAG, "Exception during full restart disconnect: ${e.message}", e)
+                }
+            }
+            
+            // Clear all state flags
+            isServiceActive.set(false)
+            isConnecting.set(false)
+            isDisconnecting.set(false)
+            isWaitingForNetwork.set(false)
+            reconnectAttempts.set(0)
+            lastConnectionTime.set(0)
+            lastHeartbeatTime.set(0)
+            connectionLostTime.set(0)
+            
+            // Clear client
+            mqttClient = null
+            
+            // Wait a moment for cleanup
+            ioScope.launch {
+                try {
+                    delay(2000) // Wait 2 seconds for cleanup
+                    
+                    // Restart with preserved credentials
+                    if (username != null && password != null) {
+                        Logging.d(TAG, "Full restart: Reconnecting with preserved credentials")
+                        connect(username, password)
+                    } else {
+                        Logging.w(TAG, "Full restart: No credentials available, service will need to be reinitialized")
+                    }
+                } catch (e: Exception) {
+                    Logging.e(TAG, "Error during full restart reconnection: ${e.message}", e)
+                }
+            }
+            
+            Logging.w(TAG, "=== FULL RESTART COMPLETE ===")
+        } catch (e: Exception) {
+            Logging.e(TAG, "Error during full restart: ${e.message}", e)
         }
     }
     
@@ -949,7 +1115,7 @@ class MqttService private constructor(
         if (isWaiting) {
             val healthy = isNetworkAvailable && !isConnected
             if (!healthy) {
-                Log.d(TAG, "Health check failed (waiting for network): active=$isActive, connected=$isConnected, network=$isNetworkAvailable, waiting=$isWaiting")
+                Logging.d(TAG, "Health check failed (waiting for network): active=$isActive, connected=$isConnected, network=$isNetworkAvailable, waiting=$isWaiting")
             }
             return healthy
         }
@@ -965,7 +1131,7 @@ class MqttService private constructor(
         }
         
         if (!healthy) {
-            Log.d(TAG, "Health check failed: active=$isActive, connected=$isConnected, network=$isNetworkAvailable, heartbeatValid=$isHeartbeatValid, waiting=$isWaiting")
+            Logging.d(TAG, "Health check failed: active=$isActive, connected=$isConnected, network=$isNetworkAvailable, heartbeatValid=$isHeartbeatValid, waiting=$isWaiting")
         }
         
         return healthy
@@ -1010,15 +1176,15 @@ class MqttService private constructor(
                     ?.send()
                     ?.whenComplete { subAck, throwable ->
                         if (throwable != null) {
-                            Log.e(TAG, "Failed to subscribe to topic: $topic", throwable)
+                            Logging.e(TAG, "Failed to subscribe to topic: $topic", throwable)
                         } else {
-                            Log.d(TAG, "Subscribed to topic: $topic")
-                            Log.d(TAG, "Subscription reason codes: ${subAck.reasonCodes}")
+                            Logging.d(TAG, "Subscribed to topic: $topic")
+                            Logging.d(TAG, "Subscription reason codes: ${subAck.reasonCodes}")
                         }
                     }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to subscribe to topic: $topic", e)
+            Logging.e(TAG, "Failed to subscribe to topic: $topic", e)
         }
     }
 
@@ -1034,7 +1200,7 @@ class MqttService private constructor(
         return try {
             // Check if we're in the middle of disconnecting
             if (isDisconnecting.get()) {
-                Log.w(TAG, "Cannot publish - service is disconnecting, queuing message")
+                Logging.w(TAG, "Cannot publish - service is disconnecting, queuing message")
                 queueMessage(topic, payload, qos, retained)
                 val queuedFuture = CompletableFuture<Mqtt5PublishResult>()
                 queuedFuture.completeExceptionally(IllegalStateException("Service disconnecting - message queued"))
@@ -1051,18 +1217,18 @@ class MqttService private constructor(
 
                 future.whenComplete { publishResult, throwable ->
                     if (throwable != null) {
-                        Log.e(TAG, "Failed to publish to topic: $topic", throwable)
+                        Logging.e(TAG, "Failed to publish to topic: $topic", throwable)
                         
                         // If it's a session expired error, trigger reconnection
                         if (throwable.message?.contains("Session expired") == true ||
                             throwable.message?.contains("connection was closed") == true) {
-                            Log.w(TAG, "Session expired, triggering reconnection")
+                            Logging.w(TAG, "Session expired, triggering reconnection")
                             scheduleReconnection()
                         }
                     } else {
-                        Log.d(TAG, "Published to topic: $topic")
-                        Log.d(TAG, "Payload: $payload")
-                        Log.d(
+                        Logging.d(TAG, "Published to topic: $topic")
+                        Logging.d(TAG, "Payload: $payload")
+                        Logging.d(
                             TAG,
                             "Publish result: ${publishResult?.error?.orElse(null) ?: "SUCCESS"}"
                         )
@@ -1071,7 +1237,7 @@ class MqttService private constructor(
 
                 future
             } else {
-                Log.w(TAG, "Cannot publish - not connected to broker, queuing message")
+                Logging.w(TAG, "Cannot publish - not connected to broker, queuing message")
                 queueMessage(topic, payload, qos, retained)
                 
                 val queuedFuture = CompletableFuture<Mqtt5PublishResult>()
@@ -1079,12 +1245,12 @@ class MqttService private constructor(
                 queuedFuture
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to publish to topic: $topic", e)
+            Logging.e(TAG, "Failed to publish to topic: $topic", e)
             
             // If it's a session expired error, trigger reconnection
             if (e.message?.contains("Session expired") == true ||
                 e.message?.contains("connection was closed") == true) {
-                Log.w(TAG, "Session expired during publish, triggering reconnection")
+                Logging.w(TAG, "Session expired during publish, triggering reconnection")
                 scheduleReconnection()
             }
             
@@ -1109,9 +1275,9 @@ class MqttService private constructor(
                 messages.add(queuedMessage)
             }
             
-            Log.d(TAG, "Message queued for topic: $topic (queue size: ${messageQueue[topic]?.size ?: 0})")
+            Logging.d(TAG, "Message queued for topic: $topic (queue size: ${messageQueue[topic]?.size ?: 0})")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to queue message: ${e.message}", e)
+            Logging.e(TAG, "Failed to queue message: ${e.message}", e)
         }
     }
 
@@ -1139,12 +1305,12 @@ class MqttService private constructor(
                     currentLng = vehicleLocation.longitude
                     currentSpeed = vehicleLocation.speed
                     bearing = vehicleLocation.bearing
-                    Log.d(TAG, "Including location in status: lat=$currentLat, lng=$currentLng, speed=$currentSpeed, bearing=$bearing")
+                    Logging.d(TAG, "Including location in status: lat=$currentLat, lng=$currentLng, speed=$currentSpeed, bearing=$bearing")
                 } else {
-                    Log.d(TAG, "No location data available for status message (sending nulls)")
+                    Logging.d(TAG, "No location data available for status message (sending nulls)")
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to fetch location for status: ${e.message}", e)
+                Logging.e(TAG, "Failed to fetch location for status: ${e.message}", e)
             }
         }
         
@@ -1278,25 +1444,25 @@ class MqttService private constructor(
         remainingDistanceToDestination: Double? = null,
         nextWaypointData: Pair<Long?, Double?>? = null
     ): TripData {
-        Log.d(TAG, "=== CONVERTING TRIP RESPONSE TO TRIP DATA ===")
-        Log.d(TAG, "Trip ID: ${tripResponse.id}")
+        Logging.d(TAG, "=== CONVERTING TRIP RESPONSE TO TRIP DATA ===")
+        Logging.d(TAG, "Trip ID: ${tripResponse.id}")
         // If live-calculated remaining time/distance are not provided, fall back to any values stored on the trip/waypoints
         val (finalRemainingTime, finalRemainingDistance) = run {
-            Log.d(TAG, "--- FALLBACK LOGIC FOR REMAINING TIME/DISTANCE ---")
-            Log.d(TAG, "Live remaining time: ${remainingTimeToDestination?.let { formatDuration(it) } ?: "null"}")
-            Log.d(TAG, "Live remaining distance: ${remainingDistanceToDestination?.let { String.format("%.1f", it) } ?: "null"}m")
+            Logging.d(TAG, "--- FALLBACK LOGIC FOR REMAINING TIME/DISTANCE ---")
+            Logging.d(TAG, "Live remaining time: ${remainingTimeToDestination?.let { formatDuration(it) } ?: "null"}")
+            Logging.d(TAG, "Live remaining distance: ${remainingDistanceToDestination?.let { String.format("%.1f", it) } ?: "null"}m")
             
             val nextOrFirstUnpassed = tripResponse.waypoints.firstOrNull { it.is_next }
                 ?: tripResponse.waypoints.firstOrNull { !it.is_passed }
             
-            Log.d(TAG, "Next/first unpassed waypoint: ${nextOrFirstUnpassed?.location?.google_place_name ?: "null"}")
-            Log.d(TAG, "Waypoint remaining_time: ${nextOrFirstUnpassed?.remaining_time?.let { formatDuration(it) } ?: "null"}")
-            Log.d(TAG, "Waypoint remaining_distance: ${nextOrFirstUnpassed?.remaining_distance?.let { String.format("%.1f", it) } ?: "null"}m")
+            Logging.d(TAG, "Next/first unpassed waypoint: ${nextOrFirstUnpassed?.location?.google_place_name ?: "null"}")
+            Logging.d(TAG, "Waypoint remaining_time: ${nextOrFirstUnpassed?.remaining_time?.let { formatDuration(it) } ?: "null"}")
+            Logging.d(TAG, "Waypoint remaining_distance: ${nextOrFirstUnpassed?.remaining_distance?.let { String.format("%.1f", it) } ?: "null"}m")
             
             // Log all waypoints for debugging
-            Log.d(TAG, "All waypoints in trip:")
+            Logging.d(TAG, "All waypoints in trip:")
             tripResponse.waypoints.forEachIndexed { index, waypoint ->
-                Log.d(TAG, "  [$index] ID:${waypoint.id}, Name:${waypoint.location.google_place_name}, is_next:${waypoint.is_next}, is_passed:${waypoint.is_passed}, remaining_time:${waypoint.remaining_time?.let { formatDuration(it) } ?: "null"}, remaining_distance:${waypoint.remaining_distance?.let { String.format("%.1f", it) } ?: "null"}m")
+                Logging.d(TAG, "  [$index] ID:${waypoint.id}, Name:${waypoint.location.google_place_name}, is_next:${waypoint.is_next}, is_passed:${waypoint.is_passed}, remaining_time:${waypoint.remaining_time?.let { formatDuration(it) } ?: "null"}, remaining_distance:${waypoint.remaining_distance?.let { String.format("%.1f", it) } ?: "null"}m")
             }
 
             val time = remainingTimeToDestination
@@ -1307,17 +1473,17 @@ class MqttService private constructor(
                 ?: tripResponse.remaining_distance_to_destination
                 ?: nextOrFirstUnpassed?.remaining_distance
 
-            Log.d(TAG, "Final fallback result: time=${time?.let { formatDuration(it) } ?: "null"}, distance=${dist?.let { String.format("%.1f", it) } ?: "null"}m")
-            Log.d(TAG, "-----------------------------------------------")
+            Logging.d(TAG, "Final fallback result: time=${time?.let { formatDuration(it) } ?: "null"}, distance=${dist?.let { String.format("%.1f", it) } ?: "null"}m")
+            Logging.d(TAG, "-----------------------------------------------")
 
             Pair(time, dist)
         }
 
-        Log.d(TAG, "Remaining time to destination: ${finalRemainingTime?.let { formatDuration(it) } ?: "null"}")
-        Log.d(TAG, "Remaining distance to destination: ${finalRemainingDistance?.let { String.format("%.1f", it) } ?: "null"}m")
-        Log.d(TAG, "Current speed: ${currentSpeed?.let { String.format("%.2f", it) } ?: "null"} m/s")
-        Log.d(TAG, "Current location: ${currentLocation?.let { "${it.latitude}, ${it.longitude}" } ?: "null"}")
-        Log.d(TAG, "=============================================")
+        Logging.d(TAG, "Remaining time to destination: ${finalRemainingTime?.let { formatDuration(it) } ?: "null"}")
+        Logging.d(TAG, "Remaining distance to destination: ${finalRemainingDistance?.let { String.format("%.1f", it) } ?: "null"}m")
+        Logging.d(TAG, "Current speed: ${currentSpeed?.let { String.format("%.2f", it) } ?: "null"} m/s")
+        Logging.d(TAG, "Current location: ${currentLocation?.let { "${it.latitude}, ${it.longitude}" } ?: "null"}")
+        Logging.d(TAG, "=============================================")
         return TripData(
             id = tripResponse.id,
             route_id = tripResponse.route_id,
@@ -1378,10 +1544,10 @@ class MqttService private constructor(
             waypoints = tripResponse.waypoints.map { waypoint ->
                 // Use fresh data for the next waypoint, otherwise use stored data
                 val (freshTime, freshDistance) = if (waypoint.is_next && nextWaypointData != null) {
-                    Log.d(TAG, "Using fresh data for next waypoint: ${waypoint.location.google_place_name}")
+                    Logging.d(TAG, "Using fresh data for next waypoint: ${waypoint.location.google_place_name}")
                     nextWaypointData
                 } else {
-                    Log.d(TAG, "Using stored data for waypoint: ${waypoint.location.google_place_name}")
+                    Logging.d(TAG, "Using stored data for waypoint: ${waypoint.location.google_place_name}")
                     Pair(waypoint.remaining_time, waypoint.remaining_distance)
                 }
                 
@@ -1501,7 +1667,7 @@ class MqttService private constructor(
             messageListeners[topic]?.invoke(topic, payload)
 
         } catch (e: Exception) {
-            Log.e(TAG, "Error handling message for topic: $topic", e)
+            Logging.e(TAG, "Error handling message for topic: $topic", e)
         }
     }
 
@@ -1532,7 +1698,7 @@ class MqttService private constructor(
             val topic = "trip/$tripId/booking_bundle/inbound"
             publish(topic, payload)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to publish booking bundle", e)
+            Logging.e(TAG, "Failed to publish booking bundle", e)
         }
     }
 
@@ -1542,7 +1708,7 @@ class MqttService private constructor(
     private fun handleBookingBundleMessage(topic: String, payload: String) {
         try {
             val bundle = json.decodeFromString<BookingBundle>(payload)
-            Log.i(TAG, "Booking bundle received for trip: ${bundle.trip_id}")
+            Logging.i(TAG, "Booking bundle received for trip: ${bundle.trip_id}")
 
             // Persist in background with proper conflict handling
             ioScope.launch {
@@ -1558,17 +1724,17 @@ class MqttService private constructor(
 
                     // Handle booking with conflict detection
                     val bookingResult = handleBookingConflict(bookingDao, bookingEntity)
-                    Log.d(TAG, "Booking processing result: $bookingResult")
+                    Logging.d(TAG, "Booking processing result: $bookingResult")
 
                     // Handle payment with conflict detection
                     val paymentResult = handlePaymentConflict(paymentDao, paymentEntity)
-                    Log.d(TAG, "Payment processing result: $paymentResult")
+                    Logging.d(TAG, "Payment processing result: $paymentResult")
 
                     // Handle tickets with conflict detection
                     val ticketResults = handleTicketConflicts(ticketDao, ticketEntities)
-                    Log.d(TAG, "Ticket processing results: $ticketResults")
+                    Logging.d(TAG, "Ticket processing results: $ticketResults")
 
-                    Log.d(TAG, "Booking bundle processed: booking=${bookingEntity.id}, payment=${paymentEntity.id}, tickets=${ticketEntities.size}")
+                    Logging.d(TAG, "Booking bundle processed: booking=${bookingEntity.id}, payment=${paymentEntity.id}, tickets=${ticketEntities.size}")
 
                     // Notify UI layer that a booking bundle was saved
                     try {
@@ -1580,7 +1746,7 @@ class MqttService private constructor(
                         val numTickets = ticketEntities.size
                         val isPaid = paymentEntity.status == com.gocavgo.validator.dataclass.PaymentStatus.COMPLETED
 
-                        Log.d(TAG, "Broadcasting booking bundle saved event: trip=${bundle.trip_id}, passenger=$passengerName, pickup=$pickup, dropoff=$dropoff, tickets=$numTickets, paid=$isPaid")
+                        Logging.d(TAG, "Broadcasting booking bundle saved event: trip=${bundle.trip_id}, passenger=$passengerName, pickup=$pickup, dropoff=$dropoff, tickets=$numTickets, paid=$isPaid")
                         
                         // Show notification if app is not in foreground
                         if (!isAppInForeground.get()) {
@@ -1599,25 +1765,25 @@ class MqttService private constructor(
                             putExtra("is_paid", isPaid)
                         }
                         context.sendBroadcast(intent)
-                        Log.d(TAG, "Booking bundle broadcast sent successfully")
+                        Logging.d(TAG, "Booking bundle broadcast sent successfully")
                         
                         // Also call direct callback if available (more reliable)
                         try {
                             bookingBundleCallback?.invoke(bundle.trip_id, passengerName, pickup, dropoff, numTickets, isPaid)
-                            Log.d(TAG, "Booking bundle callback invoked successfully")
+                            Logging.d(TAG, "Booking bundle callback invoked successfully")
                         } catch (callbackError: Exception) {
-                            Log.w(TAG, "Error invoking booking bundle callback: ${callbackError.message}")
+                            Logging.w(TAG, "Error invoking booking bundle callback: ${callbackError.message}")
                         }
                         
                     } catch (e: Exception) {
-                        Log.e(TAG, "Failed to broadcast booking bundle saved event: ${e.message}", e)
+                        Logging.e(TAG, "Failed to broadcast booking bundle saved event: ${e.message}", e)
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed to persist booking bundle", e)
+                    Logging.e(TAG, "Failed to persist booking bundle", e)
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error parsing booking bundle message", e)
+            Logging.e(TAG, "Error parsing booking bundle message", e)
         }
     }
 
@@ -1644,7 +1810,7 @@ class MqttService private constructor(
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error handling booking conflict: ${e.message}", e)
+            Logging.e(TAG, "Error handling booking conflict: ${e.message}", e)
             "ERROR: ${e.message}"
         }
     }
@@ -1672,7 +1838,7 @@ class MqttService private constructor(
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error handling payment conflict: ${e.message}", e)
+            Logging.e(TAG, "Error handling payment conflict: ${e.message}", e)
             "ERROR: ${e.message}"
         }
     }
@@ -1703,7 +1869,7 @@ class MqttService private constructor(
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Error handling ticket conflict for ${newTicket.id}: ${e.message}", e)
+                Logging.e(TAG, "Error handling ticket conflict for ${newTicket.id}: ${e.message}", e)
                 results[newTicket.id] = "ERROR: ${e.message}"
             }
         }
@@ -1717,13 +1883,13 @@ class MqttService private constructor(
     private fun shouldUpdateBooking(existing: com.gocavgo.validator.database.BookingEntity, incoming: com.gocavgo.validator.database.BookingEntity): Boolean {
         // Always update if timestamps are different (incoming is newer)
         if (incoming.updated_at > existing.updated_at) {
-            Log.d(TAG, "Booking ${existing.id} has newer timestamp, updating")
+            Logging.d(TAG, "Booking ${existing.id} has newer timestamp, updating")
             return true
         }
         
         // Don't update if incoming is older
         if (incoming.updated_at < existing.updated_at) {
-            Log.d(TAG, "Booking ${existing.id} incoming data is older, skipping update")
+            Logging.d(TAG, "Booking ${existing.id} incoming data is older, skipping update")
             return false
         }
         
@@ -1734,11 +1900,11 @@ class MqttService private constructor(
                         existing.dropoff_location_id != incoming.dropoff_location_id
         
         if (hasChanges) {
-            Log.d(TAG, "Booking ${existing.id} has meaningful changes, updating")
+            Logging.d(TAG, "Booking ${existing.id} has meaningful changes, updating")
             return true
         }
         
-        Log.d(TAG, "Booking ${existing.id} no changes detected, skipping update")
+        Logging.d(TAG, "Booking ${existing.id} no changes detected, skipping update")
         return false
     }
     
@@ -1748,13 +1914,13 @@ class MqttService private constructor(
     private fun shouldUpdatePayment(existing: com.gocavgo.validator.database.PaymentEntity, incoming: com.gocavgo.validator.database.PaymentEntity): Boolean {
         // Always update if timestamps are different (incoming is newer)
         if (incoming.updated_at > existing.updated_at) {
-            Log.d(TAG, "Payment ${existing.id} has newer timestamp, updating")
+            Logging.d(TAG, "Payment ${existing.id} has newer timestamp, updating")
             return true
         }
         
         // Don't update if incoming is older
         if (incoming.updated_at < existing.updated_at) {
-            Log.d(TAG, "Payment ${existing.id} incoming data is older, skipping update")
+            Logging.d(TAG, "Payment ${existing.id} incoming data is older, skipping update")
             return false
         }
         
@@ -1765,11 +1931,11 @@ class MqttService private constructor(
                         existing.payment_data != incoming.payment_data
         
         if (hasChanges) {
-            Log.d(TAG, "Payment ${existing.id} has meaningful changes, updating")
+            Logging.d(TAG, "Payment ${existing.id} has meaningful changes, updating")
             return true
         }
         
-        Log.d(TAG, "Payment ${existing.id} no changes detected, skipping update")
+        Logging.d(TAG, "Payment ${existing.id} no changes detected, skipping update")
         return false
     }
     
@@ -1779,13 +1945,13 @@ class MqttService private constructor(
     private fun shouldUpdateTicket(existing: com.gocavgo.validator.database.TicketEntity, incoming: com.gocavgo.validator.database.TicketEntity): Boolean {
         // Always update if timestamps are different (incoming is newer)
         if (incoming.updated_at > existing.updated_at) {
-            Log.d(TAG, "Ticket ${existing.id} has newer timestamp, updating")
+            Logging.d(TAG, "Ticket ${existing.id} has newer timestamp, updating")
             return true
         }
         
         // Don't update if incoming is older
         if (incoming.updated_at < existing.updated_at) {
-            Log.d(TAG, "Ticket ${existing.id} incoming data is older, skipping update")
+            Logging.d(TAG, "Ticket ${existing.id} incoming data is older, skipping update")
             return false
         }
         
@@ -1799,11 +1965,11 @@ class MqttService private constructor(
                         existing.car_company != incoming.car_company
         
         if (hasChanges) {
-            Log.d(TAG, "Ticket ${existing.id} has meaningful changes, updating")
+            Logging.d(TAG, "Ticket ${existing.id} has meaningful changes, updating")
             return true
         }
         
-        Log.d(TAG, "Ticket ${existing.id} no changes detected, skipping update")
+        Logging.d(TAG, "Ticket ${existing.id} no changes detected, skipping update")
         return false
     }
 
@@ -1813,12 +1979,12 @@ class MqttService private constructor(
     private fun handleTripEventMessage(payload: String) {
         try {
             val tripEvent = json.decodeFromString<TripEventMessage>(payload)
-            Log.i(TAG, "Trip event received: ${tripEvent.event}")
-            Log.d(TAG, "Trip data: ${tripEvent.data}")
+            Logging.i(TAG, "Trip event received: ${tripEvent.event}")
+            Logging.d(TAG, "Trip data: ${tripEvent.data}")
 
             // Convert backend trip data to Android trip response format if needed
             val tripResponse = convertBackendTripToAndroid(tripEvent.data)
-            Log.d(TAG, "Converted trip response: $tripResponse")
+            Logging.d(TAG, "Converted trip response: $tripResponse")
 
             // Save trip to database directly in background (like booking bundles)
             ioScope.launch {
@@ -1831,8 +1997,8 @@ class MqttService private constructor(
                     // Use insertTrip to handle both new and existing trips (REPLACE on conflict)
                     tripDao.insertTrip(tripEntity)
                     
-                    Log.d(TAG, "Trip saved to database successfully: ID=${tripResponse.id}, status=${tripResponse.status}")
-                    Log.d(TAG, "Route: ${tripResponse.route.origin.google_place_name} → ${tripResponse.route.destination.google_place_name}")
+                    Logging.d(TAG, "Trip saved to database successfully: ID=${tripResponse.id}, status=${tripResponse.status}")
+                    Logging.d(TAG, "Route: ${tripResponse.route.origin.google_place_name} → ${tripResponse.route.destination.google_place_name}")
                     
                     // Record MQTT update timestamp for sync coordination
                     SyncCoordinator.recordMqttUpdate(context)
@@ -1846,7 +2012,7 @@ class MqttService private constructor(
                     routeTripEvent(tripEvent)
                     
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed to save trip to database: ${e.message}", e)
+                    Logging.e(TAG, "Failed to save trip to database: ${e.message}", e)
                     
                     // Still try to route event even if database save failed
                     routeTripEvent(tripEvent)
@@ -1854,7 +2020,7 @@ class MqttService private constructor(
             }
 
         } catch (e: Exception) {
-            Log.e(TAG, "Error parsing trip event message", e)
+            Logging.e(TAG, "Error parsing trip event message", e)
         }
     }
 
@@ -1959,13 +2125,13 @@ class MqttService private constructor(
     private fun handleTripMessage(payload: String) {
         try {
             val tripData = json.decodeFromString<TripAssignmentMessage>(payload)
-            Log.i(TAG, "Trip assigned: ${tripData.trip_id} from ${tripData.start_location} to ${tripData.end_location}")
+            Logging.i(TAG, "Trip assigned: ${tripData.trip_id} from ${tripData.start_location} to ${tripData.end_location}")
 
             // Handle trip assignment logic here
             // You can add callbacks or listeners for trip events
 
         } catch (e: Exception) {
-            Log.e(TAG, "Error parsing trip message", e)
+            Logging.e(TAG, "Error parsing trip message", e)
         }
     }
 
@@ -1975,11 +2141,11 @@ class MqttService private constructor(
     private fun handlePingMessage(payload: String) {
         try {
             val pingData = json.decodeFromString<PingMessage>(payload)
-            Log.d(TAG, "Ping received, sending pong response")
+            Logging.d(TAG, "Ping received, sending pong response")
             sendPong(pingData.ping_time)
 
         } catch (e: Exception) {
-            Log.e(TAG, "Error parsing ping message", e)
+            Logging.e(TAG, "Error parsing ping message", e)
         }
     }
 
@@ -1988,8 +2154,8 @@ class MqttService private constructor(
      */
     private fun handleSettingsMessage(payload: String) {
         try {
-            Log.d(TAG, "=== SETTINGS MESSAGE RECEIVED ===")
-            Log.d(TAG, "Payload: $payload")
+            Logging.d(TAG, "=== SETTINGS MESSAGE RECEIVED ===")
+            Logging.d(TAG, "Payload: $payload")
             
             // Parse MQTT payload format (may include licensePlate)
             val mqttPayload = json.decodeFromString<VehicleSettingsMqttPayload>(payload)
@@ -1997,7 +2163,7 @@ class MqttService private constructor(
             // Convert to VehicleSettings format (using vehicleId from carId)
             val vehicleId = carId.toIntOrNull()
             if (vehicleId == null) {
-                Log.e(TAG, "Invalid vehicle ID from carId: $carId")
+                Logging.e(TAG, "Invalid vehicle ID from carId: $carId")
                 return
             }
             
@@ -2011,25 +2177,25 @@ class MqttService private constructor(
                 simulate = mqttPayload.simulate
             )
             
-            Log.d(TAG, "Parsed settings: logout=${settings.logout}, devmode=${settings.devmode}, deactivate=${settings.deactivate}, simulate=${settings.simulate}")
+            Logging.d(TAG, "Parsed settings: logout=${settings.logout}, devmode=${settings.devmode}, deactivate=${settings.deactivate}, simulate=${settings.simulate}")
             
             // Save settings to database in background
             ioScope.launch {
                 try {
                     val settingsManager = com.gocavgo.validator.security.VehicleSettingsManager.getInstance(context)
                     settingsManager.saveSettings(settings)
-                    Log.d(TAG, "Settings saved to database from MQTT")
+                    Logging.d(TAG, "Settings saved to database from MQTT")
                     
                     // Apply settings (check logout/deactivate)
                     settingsManager.applySettings(context, settings)
-                    Log.d(TAG, "Settings applied successfully")
+                    Logging.d(TAG, "Settings applied successfully")
                 } catch (e: Exception) {
-                    Log.e(TAG, "Error saving settings from MQTT: ${e.message}", e)
+                    Logging.e(TAG, "Error saving settings from MQTT: ${e.message}", e)
                 }
             }
             
         } catch (e: Exception) {
-            Log.e(TAG, "Error parsing settings message: ${e.message}", e)
+            Logging.e(TAG, "Error parsing settings message: ${e.message}", e)
         }
     }
 
@@ -2041,13 +2207,13 @@ class MqttService private constructor(
             val bookingData = json.decodeFromString<BookingEventMessage>(payload)
             val tripId = extractTripIdFromTopic(topic)
 
-            Log.i(TAG, "Booking event received for trip: $tripId")
-            Log.d(TAG, "Booking data: $bookingData")
+            Logging.i(TAG, "Booking event received for trip: $tripId")
+            Logging.d(TAG, "Booking data: $bookingData")
 
             // Handle booking event logic here
 
         } catch (e: Exception) {
-            Log.e(TAG, "Error parsing booking message", e)
+            Logging.e(TAG, "Error parsing booking message", e)
         }
     }
 
@@ -2060,12 +2226,12 @@ class MqttService private constructor(
             val tripId = extractTripIdFromTopic(topic)
             val action = updateData.booking.action
 
-            Log.i(TAG, "Booking update received for trip: $tripId, action: $action")
+            Logging.i(TAG, "Booking update received for trip: $tripId, action: $action")
 
             // Handle booking update logic here
 
         } catch (e: Exception) {
-            Log.e(TAG, "Error parsing booking update message", e)
+            Logging.e(TAG, "Error parsing booking update message", e)
         }
     }
 
@@ -2119,29 +2285,29 @@ class MqttService private constructor(
             
             if (isActivityActive && activityTripEventCallback != null) {
                 // Activity is active - route to Activity callback
-                Log.d(TAG, "Routing trip event to Activity callback (Activity is active)")
+                Logging.d(TAG, "Routing trip event to Activity callback (Activity is active)")
                 try {
                     activityTripEventCallback?.invoke(tripEvent)
-                    Log.d(TAG, "Activity trip event callback invoked successfully")
+                    Logging.d(TAG, "Activity trip event callback invoked successfully")
                 } catch (callbackError: Exception) {
-                    Log.e(TAG, "Error invoking Activity trip event callback: ${callbackError.message}", callbackError)
+                    Logging.e(TAG, "Error invoking Activity trip event callback: ${callbackError.message}", callbackError)
                 }
             } else if (!isActivityActive && serviceTripEventCallback != null) {
                 // Activity is inactive - route to Service callback
-                Log.d(TAG, "Routing trip event to Service callback (Activity is inactive)")
+                Logging.d(TAG, "Routing trip event to Service callback (Activity is inactive)")
                 try {
                     serviceTripEventCallback?.invoke(tripEvent)
-                    Log.d(TAG, "Service trip event callback invoked successfully")
+                    Logging.d(TAG, "Service trip event callback invoked successfully")
                 } catch (callbackError: Exception) {
-                    Log.e(TAG, "Error invoking Service trip event callback: ${callbackError.message}", callbackError)
+                    Logging.e(TAG, "Error invoking Service trip event callback: ${callbackError.message}", callbackError)
                 }
             } else {
                 // No callback available - log warning but message is already in DB
-                Log.w(TAG, "No trip event callback available (Activity active: $isActivityActive, Activity callback: ${activityTripEventCallback != null}, Service callback: ${serviceTripEventCallback != null})")
-                Log.w(TAG, "Trip event message saved to database but no handler available. Service should poll database.")
+                Logging.w(TAG, "No trip event callback available (Activity active: $isActivityActive, Activity callback: ${activityTripEventCallback != null}, Service callback: ${serviceTripEventCallback != null})")
+                Logging.w(TAG, "Trip event message saved to database but no handler available. Service should poll database.")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error routing trip event: ${e.message}", e)
+            Logging.e(TAG, "Error routing trip event: ${e.message}", e)
         }
     }
     
@@ -2150,7 +2316,7 @@ class MqttService private constructor(
      */
     fun setTripEventCallback(callback: ((com.gocavgo.validator.dataclass.TripEventMessage) -> Unit)?) {
         activityTripEventCallback = callback
-        Log.d(TAG, "Activity trip event callback ${if (callback != null) "registered" else "unregistered"}")
+        Logging.d(TAG, "Activity trip event callback ${if (callback != null) "registered" else "unregistered"}")
     }
     
     /**
@@ -2158,7 +2324,7 @@ class MqttService private constructor(
      */
     fun setServiceTripEventCallback(callback: ((com.gocavgo.validator.dataclass.TripEventMessage) -> Unit)?) {
         serviceTripEventCallback = callback
-        Log.d(TAG, "Service trip event callback ${if (callback != null) "registered" else "unregistered"}")
+        Logging.d(TAG, "Service trip event callback ${if (callback != null) "registered" else "unregistered"}")
     }
     
     /**
@@ -2203,7 +2369,7 @@ class MqttService private constructor(
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error formatting duration: ${e.message}", e)
+            Logging.e(TAG, "Error formatting duration: ${e.message}", e)
             "Unknown"
         }
     }

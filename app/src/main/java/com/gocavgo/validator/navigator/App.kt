@@ -660,9 +660,9 @@ class App(
                     )
                 )
             } catch (e: MapPolyline.Representation.InstantiationException) {
-                Log.e("MapPolyline Representation Exception:", e.error.name)
+                Logging.e("App", "MapPolyline Representation Exception: ${e.error.name}")
             } catch (e: MapMeasureDependentRenderSize.InstantiationException) {
-                Log.e("MapMeasureDependentRenderSize Exception:", e.error.name)
+                Logging.e("App", "MapMeasureDependentRenderSize Exception: ${e.error.name}")
             }
 
             mapView.mapScene.addMapPolyline(routeMapPolyline!!)

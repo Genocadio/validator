@@ -21,8 +21,8 @@ package com.gocavgo.validator.navigator
 
 import android.content.Context
 import android.os.Bundle
-import android.util.Log
 import androidx.activity.ComponentActivity
+import com.gocavgo.validator.util.Logging
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
@@ -144,10 +144,10 @@ class NavigActivity: ComponentActivity() {
         showMap = intent.getBooleanExtra(EXTRA_SHOW_MAP, true)
         isSimulated = intent.getBooleanExtra(EXTRA_IS_SIMULATED, true)
 
-        Log.d(TAG, "NavigActivity started with tripId: $tripId, showMap: $showMap, isSimulated: $isSimulated")
+        Logging.d(TAG, "NavigActivity started with tripId: $tripId, showMap: $showMap, isSimulated: $isSimulated")
 
         if (tripId == -1) {
-            Log.e(TAG, "No trip ID provided. Cannot start navigation.")
+            Logging.e(TAG, "No trip ID provided. Cannot start navigation.")
             finish()
             return
         }
@@ -175,7 +175,7 @@ class NavigActivity: ComponentActivity() {
                 // Fetch trip from database
                 tripResponse = databaseManager.getTripById(tripId)
                 if (tripResponse == null) {
-                    Log.e(TAG, "Trip with ID $tripId not found in database. Cannot start navigation.")
+                    Logging.e(TAG, "Trip with ID $tripId not found in database. Cannot start navigation.")
                     withContext(Dispatchers.Main) {
                         finish()
                     }
@@ -196,7 +196,7 @@ class NavigActivity: ComponentActivity() {
                     updateTripDataWhenReady()
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Error during initialization: ${e.message}", e)
+                Logging.e(TAG, "Error during initialization: ${e.message}", e)
             }
         }
     }
@@ -234,11 +234,11 @@ class NavigActivity: ComponentActivity() {
         AndroidView(factory = { context ->
             // Ensure HERE SDK is initialized before creating MapView
             if (SDKNativeEngine.getSharedInstance() == null) {
-                Log.e(TAG, "HERE SDK not initialized, initializing now...")
+                Logging.e(TAG, "HERE SDK not initialized, initializing now...")
                 try {
                     initializeHERESDK()
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed to initialize HERE SDK: ${e.message}", e)
+                    Logging.e(TAG, "Failed to initialize HERE SDK: ${e.message}", e)
                     throw RuntimeException("HERE SDK initialization failed", e)
                 }
             }
@@ -418,7 +418,7 @@ class NavigActivity: ComponentActivity() {
         try {
             // Check if SDK is already initialized to avoid duplicate initialization
             if (SDKNativeEngine.getSharedInstance() != null) {
-                Log.d(TAG, "HERE SDK already initialized, skipping")
+                Logging.d(TAG, "HERE SDK already initialized, skipping")
                 return
             }
             
@@ -428,43 +428,43 @@ class NavigActivity: ComponentActivity() {
             val options = SDKOptions(authenticationMode)
             if(lowMEm) {
                 options.lowMemoryMode = true
-                Log.d(TAG, "Initialised in Low memory mode")
+                Logging.d(TAG, "Initialised in Low memory mode")
             }
             
             // Initialize SDK with timeout protection
             SDKNativeEngine.makeSharedInstance(this, options)
-            Log.d(TAG, "HERE SDK initialized successfully")
+            Logging.d(TAG, "HERE SDK initialized successfully")
             
             // Apply pending offline mode if any
             pendingOfflineMode?.let { offlineMode ->
                 try {
                     SDKNativeEngine.getSharedInstance()?.setOfflineMode(offlineMode)
-                    Log.d(TAG, "Applied pending HERE SDK offline mode: $offlineMode")
+                    Logging.d(TAG, "Applied pending HERE SDK offline mode: $offlineMode")
                     pendingOfflineMode = null
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed to apply pending offline mode: ${e.message}", e)
+                    Logging.e(TAG, "Failed to apply pending offline mode: ${e.message}", e)
                 }
             }
         } catch (e: InstantiationErrorException) {
-            Log.e(TAG, "Initialization of HERE SDK failed: ${e.error.name}", e)
+            Logging.e(TAG, "Initialization of HERE SDK failed: ${e.error.name}", e)
             // Don't throw RuntimeException to prevent ANR, just log and continue
             // The app can still function without HERE SDK in some cases
         } catch (e: Exception) {
-            Log.e(TAG, "Unexpected error during HERE SDK initialization: ${e.message}", e)
+            Logging.e(TAG, "Unexpected error during HERE SDK initialization: ${e.message}", e)
         }
     }
 
     private fun initializeNetworkMonitoring() {
-        Log.d(TAG, "Initializing network monitoring...")
+        Logging.d(TAG, "Initializing network monitoring...")
 
         // Check if we have network permissions
         if (!NetworkUtils.hasNetworkPermissions(this)) {
-            Log.w(TAG, "Network permissions not available, using basic monitoring")
+            Logging.w(TAG, "Network permissions not available, using basic monitoring")
             return
         }
 
         networkMonitor = NetworkMonitor(this) { connected, type, metered ->
-            Log.d(TAG, "Network state changed: connected=$connected, type=$type, metered=$metered")
+            Logging.d(TAG, "Network state changed: connected=$connected, type=$type, metered=$metered")
             
             // Update UI state
             isConnected = connected
@@ -476,7 +476,7 @@ class NavigActivity: ComponentActivity() {
         }
 
         networkMonitor?.startMonitoring()
-        Log.d(TAG, "Network monitoring started")
+        Logging.d(TAG, "Network monitoring started")
     }
 
 
@@ -487,11 +487,11 @@ class NavigActivity: ComponentActivity() {
                 MapScheme.NORMAL_DAY
             ) { mapError: MapError? ->
                 if (mapError == null) {
-                    Log.d(TAG, "Map scene loaded successfully")
+                    Logging.d(TAG, "Map scene loaded successfully")
                     
                     // Start the app that contains the logic to calculate routes & start TBT guidance.
                     app = App(applicationContext, mapView!!, messageViewUpdater!!, tripResponse)
-                    Log.d(TAG, "App instance created: $app")
+                    Logging.d(TAG, "App instance created: $app")
 
                     // Set up route calculation callback
                     app?.setOnRouteCalculatedCallback {
@@ -508,12 +508,12 @@ class NavigActivity: ComponentActivity() {
                     // Now that App is created, update it with trip data if available
                     updateTripDataWhenReady()
                 } else {
-                    Log.e(TAG, "Loading map failed: ${mapError.name}")
+                    Logging.e(TAG, "Loading map failed: ${mapError.name}")
                     messageViewUpdater?.updateText("Map loading failed: ${mapError.name}")
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error loading map scene: ${e.message}", e)
+            Logging.e(TAG, "Error loading map scene: ${e.message}", e)
             messageViewUpdater?.updateText("Error loading map: ${e.message}")
         }
     }
@@ -545,7 +545,7 @@ class NavigActivity: ComponentActivity() {
     }
 
     override fun onDestroy() {
-        Log.d(TAG, "NavigActivity onDestroy - starting cleanup")
+        Logging.d(TAG, "NavigActivity onDestroy - starting cleanup")
         
         // Stop network monitoring
         networkMonitor?.stopMonitoring()
@@ -565,7 +565,7 @@ class NavigActivity: ComponentActivity() {
         // Cancel coroutines
         coroutineScope.cancel()
         
-        Log.d(TAG, "NavigActivity onDestroy - cleanup completed")
+        Logging.d(TAG, "NavigActivity onDestroy - cleanup completed")
         super.onDestroy()
     }
 
@@ -580,18 +580,18 @@ class NavigActivity: ComponentActivity() {
             val sdkNativeEngine = SDKNativeEngine.getSharedInstance()
             if (sdkNativeEngine != null) {
                 sdkNativeEngine.setOfflineMode(!isConnected)
-                Log.d(TAG, "HERE SDK offline mode set to: ${!isConnected}")
+                Logging.d(TAG, "HERE SDK offline mode set to: ${!isConnected}")
             } else {
-                Log.d(TAG, "HERE SDK not yet initialized, will set offline mode when ready")
+                Logging.d(TAG, "HERE SDK not yet initialized, will set offline mode when ready")
                 // Store the desired offline mode state for when SDK is ready
                 pendingOfflineMode = !isConnected
             }
         } catch (e: UnsatisfiedLinkError) {
-            Log.d(TAG, "HERE SDK native library not loaded yet, will set offline mode when ready")
+            Logging.d(TAG, "HERE SDK native library not loaded yet, will set offline mode when ready")
             // Store the desired offline mode state for when SDK is ready
             pendingOfflineMode = !isConnected
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to update HERE SDK offline mode: ${e.message}", e)
+            Logging.e(TAG, "Failed to update HERE SDK offline mode: ${e.message}", e)
         }
     }
 
@@ -602,7 +602,7 @@ class NavigActivity: ComponentActivity() {
         try {
             val sdkNativeEngine = SDKNativeEngine.getSharedInstance()
             if (sdkNativeEngine != null) {
-                Log.d(TAG, "Disposing HERE SDK...")
+                Logging.d(TAG, "Disposing HERE SDK...")
                 
                 // Additional cleanup to ensure all service connections are released
                 try {
@@ -610,25 +610,25 @@ class NavigActivity: ComponentActivity() {
                     val locationEngine = com.here.sdk.location.LocationEngine()
                     if (locationEngine.isStarted) {
                         locationEngine.stop()
-                        Log.d(TAG, "Stopped remaining location engine before disposal")
+                        Logging.d(TAG, "Stopped remaining location engine before disposal")
                     }
                 } catch (e: Exception) {
-                    Log.w(TAG, "Error stopping location engine before disposal: ${e.message}")
+                    Logging.w(TAG, "Error stopping location engine before disposal: ${e.message}")
                 }
                 
                 // Dispose the SDK
                 sdkNativeEngine.dispose()
-                Log.d(TAG, "HERE SDK disposed successfully")
+                Logging.d(TAG, "HERE SDK disposed successfully")
                 
                 // For safety reasons, we explicitly set the shared instance to null to avoid situations,
                 // where a disposed instance is accidentally reused.
                 SDKNativeEngine.setSharedInstance(null)
-                Log.d(TAG, "HERE SDK shared instance cleared")
+                Logging.d(TAG, "HERE SDK shared instance cleared")
             } else {
-                Log.d(TAG, "HERE SDK not initialized, nothing to dispose")
+                Logging.d(TAG, "HERE SDK not initialized, nothing to dispose")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error disposing HERE SDK: ${e.message}", e)
+            Logging.e(TAG, "Error disposing HERE SDK: ${e.message}", e)
         }
     }
     
@@ -637,7 +637,7 @@ class NavigActivity: ComponentActivity() {
      */
     private fun stopAllLocationServices() {
         try {
-            Log.d(TAG, "Stopping all location services...")
+            Logging.d(TAG, "Stopping all location services...")
             
             // Set shutdown flag first to prevent starting new services during cleanup
             app?.getNavigationExample()?.setShuttingDown(true)
@@ -647,33 +647,33 @@ class NavigActivity: ComponentActivity() {
                 try {
                     // Stop headless navigation first (this will skip enabling device positioning due to shutdown flag)
                     navExample.stopHeadlessNavigation()
-                    Log.d(TAG, "Headless navigation stopped")
+                    Logging.d(TAG, "Headless navigation stopped")
                 } catch (e: Exception) {
-                    Log.w(TAG, "Error stopping headless navigation: ${e.message}")
+                    Logging.w(TAG, "Error stopping headless navigation: ${e.message}")
                 }
                 
                 try {
                     // Stop location services
                     navExample.stopLocating()
-                    Log.d(TAG, "Location services stopped")
+                    Logging.d(TAG, "Location services stopped")
                 } catch (e: Exception) {
-                    Log.w(TAG, "Error stopping location services: ${e.message}")
+                    Logging.w(TAG, "Error stopping location services: ${e.message}")
                 }
                 
                 try {
                     // Force disconnect HERE SDK location services to prevent leaks
                     navExample.getHerePositioningProvider().forceDisconnect()
-                    Log.d(TAG, "HERE SDK location services force disconnected")
+                    Logging.d(TAG, "HERE SDK location services force disconnected")
                 } catch (e: Exception) {
-                    Log.w(TAG, "Error force disconnecting location services: ${e.message}")
+                    Logging.w(TAG, "Error force disconnecting location services: ${e.message}")
                 }
                 
                 try {
                     // Stop rendering
                     navExample.stopRendering()
-                    Log.d(TAG, "Rendering stopped")
+                    Logging.d(TAG, "Rendering stopped")
                 } catch (e: Exception) {
-                    Log.w(TAG, "Error stopping rendering: ${e.message}")
+                    Logging.w(TAG, "Error stopping rendering: ${e.message}")
                 }
             }
             
@@ -685,16 +685,16 @@ class NavigActivity: ComponentActivity() {
                     val locationEngine = com.here.sdk.location.LocationEngine()
                     if (locationEngine.isStarted) {
                         locationEngine.stop()
-                        Log.d(TAG, "HERE SDK LocationEngine stopped")
+                        Logging.d(TAG, "HERE SDK LocationEngine stopped")
                     }
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "Error stopping HERE SDK LocationEngine: ${e.message}")
+                Logging.w(TAG, "Error stopping HERE SDK LocationEngine: ${e.message}")
             }
             
-            Log.d(TAG, "All location services stopped successfully")
+            Logging.d(TAG, "All location services stopped successfully")
         } catch (e: Exception) {
-            Log.e(TAG, "Error during location services cleanup: ${e.message}", e)
+            Logging.e(TAG, "Error during location services cleanup: ${e.message}", e)
         }
     }
     
@@ -712,7 +712,7 @@ class NavigActivity: ComponentActivity() {
      */
     fun updateRouteCalculationStatus(calculated: Boolean) {
         isRouteCalculated = calculated
-        Log.d(TAG, "Route calculation status updated: $calculated")
+        Logging.d(TAG, "Route calculation status updated: $calculated")
     }
     
     /**
@@ -720,7 +720,7 @@ class NavigActivity: ComponentActivity() {
      */
     fun updateTripDataWhenReady() {
         if (tripResponse != null && app != null) {
-            Log.d(TAG, "Updating App with trip data after both are ready")
+            Logging.d(TAG, "Updating App with trip data after both are ready")
             app?.updateTripData(tripResponse, isSimulated)
         }
     }

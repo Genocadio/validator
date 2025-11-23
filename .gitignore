@@ -53,3 +53,6 @@ lint-results-*.html
 .gradle/
 build/
 !gradle/wrapper/gradle-wrapper.jar # Keep the wrapper jar
+
+# Sentry Config File
+sentry.properties

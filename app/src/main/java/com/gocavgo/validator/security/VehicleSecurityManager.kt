@@ -4,7 +4,7 @@ import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
-import android.util.Log
+import com.gocavgo.validator.util.Logging
 import java.security.KeyPairGenerator
 import java.security.KeyStore
 import java.security.PrivateKey
@@ -22,7 +22,7 @@ class VehicleSecurityManager(private val context: Context) {
      */
     fun generateNewKeyPair(): Boolean {
         return try {
-            Log.d(TAG, "Generating new key pair...")
+            Logging.d(TAG, "Generating new key pair...")
 
             // Delete existing key if present
             deleteExistingKey()
@@ -43,13 +43,13 @@ class VehicleSecurityManager(private val context: Context) {
             keyPairGenerator.initialize(parameterSpec)
             val keyPair = keyPairGenerator.generateKeyPair()
 
-            Log.d(TAG, "Key pair generated successfully")
-            Log.d(TAG, "Public Key Algorithm: ${keyPair.public.algorithm}")
-            Log.d(TAG, "Public Key Format: ${keyPair.public.format}")
+            Logging.d(TAG, "Key pair generated successfully")
+            Logging.d(TAG, "Public Key Algorithm: ${keyPair.public.algorithm}")
+            Logging.d(TAG, "Public Key Format: ${keyPair.public.format}")
 
             true
         } catch (e: Exception) {
-            Log.e(TAG, "Error generating key pair", e)
+            Logging.e(TAG, "Error generating key pair", e)
             false
         }
     }
@@ -64,13 +64,13 @@ class VehicleSecurityManager(private val context: Context) {
             keyStore.load(null)
 
             if (!keyStore.containsAlias(KEY_ALIAS)) {
-                Log.w(TAG, "Private key not found in keystore")
+                Logging.w(TAG, "Private key not found in keystore")
                 return null
             }
 
             keyStore.getKey(KEY_ALIAS, null) as? PrivateKey
         } catch (e: Exception) {
-            Log.e(TAG, "Error retrieving private key", e)
+            Logging.e(TAG, "Error retrieving private key", e)
             null
         }
     }
@@ -85,13 +85,13 @@ class VehicleSecurityManager(private val context: Context) {
             keyStore.load(null)
 
             if (!keyStore.containsAlias(KEY_ALIAS)) {
-                Log.w(TAG, "Public key not found in keystore")
+                Logging.w(TAG, "Public key not found in keystore")
                 return null
             }
 
             keyStore.getCertificate(KEY_ALIAS).publicKey
         } catch (e: Exception) {
-            Log.e(TAG, "Error retrieving public key", e)
+            Logging.e(TAG, "Error retrieving public key", e)
             null
         }
     }
@@ -107,7 +107,7 @@ class VehicleSecurityManager(private val context: Context) {
                 Base64.encodeToString(it.encoded, Base64.NO_WRAP)
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error encoding public key to Base64", e)
+            Logging.e(TAG, "Error encoding public key to Base64", e)
             null
         }
     }
@@ -128,7 +128,7 @@ class VehicleSecurityManager(private val context: Context) {
             val signatureBytes = signature.sign()
             Base64.encodeToString(signatureBytes, Base64.NO_WRAP)
         } catch (e: Exception) {
-            Log.e(TAG, "Error signing data", e)
+            Logging.e(TAG, "Error signing data", e)
             null
         }
     }
@@ -150,7 +150,7 @@ class VehicleSecurityManager(private val context: Context) {
             val signatureBytes = Base64.decode(signatureBase64, Base64.NO_WRAP)
             signature.verify(signatureBytes)
         } catch (e: Exception) {
-            Log.e(TAG, "Error verifying signature", e)
+            Logging.e(TAG, "Error verifying signature", e)
             false
         }
     }
@@ -165,7 +165,7 @@ class VehicleSecurityManager(private val context: Context) {
             keyStore.load(null)
             keyStore.containsAlias(KEY_ALIAS)
         } catch (e: Exception) {
-            Log.e(TAG, "Error checking key pair existence", e)
+            Logging.e(TAG, "Error checking key pair existence", e)
             false
         }
     }
@@ -180,11 +180,11 @@ class VehicleSecurityManager(private val context: Context) {
             keyStore.load(null)
             if (keyStore.containsAlias(KEY_ALIAS)) {
                 keyStore.deleteEntry(KEY_ALIAS)
-                Log.d(TAG, "Key pair deleted successfully")
+                Logging.d(TAG, "Key pair deleted successfully")
             }
             true
         } catch (e: Exception) {
-            Log.e(TAG, "Error deleting key pair", e)
+            Logging.e(TAG, "Error deleting key pair", e)
             false
         }
     }
@@ -195,10 +195,10 @@ class VehicleSecurityManager(private val context: Context) {
             keyStore.load(null)
             if (keyStore.containsAlias(KEY_ALIAS)) {
                 keyStore.deleteEntry(KEY_ALIAS)
-                Log.d(TAG, "Existing key deleted")
+                Logging.d(TAG, "Existing key deleted")
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Error deleting existing key", e)
+            Logging.w(TAG, "Error deleting existing key", e)
         }
     }
 

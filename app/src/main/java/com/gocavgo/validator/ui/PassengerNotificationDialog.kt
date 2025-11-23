@@ -7,7 +7,7 @@ import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.os.Handler
 import android.os.Looper
-import android.util.Log
+import com.gocavgo.validator.util.Logging
 import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.ViewGroup
@@ -63,11 +63,11 @@ class PassengerNotificationDialog(private val context: Context) {
             dismissCurrentNotification()
             
             if (passengerCount <= 0) {
-                Log.d(TAG, "No passengers to board at $waypointName, skipping notification")
+                Logging.d(TAG, "No passengers to board at $waypointName, skipping notification")
                 return
             }
             
-            Log.d(TAG, "Showing passenger notification: $title - $passengerCount passengers at $waypointName")
+            Logging.d(TAG, "Showing passenger notification: $title - $passengerCount passengers at $waypointName")
             
             val dialog = Dialog(context)
             dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
@@ -130,7 +130,7 @@ class PassengerNotificationDialog(private val context: Context) {
             }, NOTIFICATION_DURATION_MS)
             
         } catch (e: Exception) {
-            Log.e(TAG, "Error showing passenger notification: ${e.message}", e)
+            Logging.e(TAG, "Error showing passenger notification: ${e.message}", e)
         }
     }
     
@@ -146,7 +146,7 @@ class PassengerNotificationDialog(private val context: Context) {
                 currentDialog = null
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error dismissing notification: ${e.message}", e)
+            Logging.e(TAG, "Error dismissing notification: ${e.message}", e)
         }
     }
 }

@@ -19,7 +19,7 @@
 
 package com.gocavgo.validator.navigator
 
-import android.util.Log
+import com.gocavgo.validator.util.Logging
 import com.here.sdk.core.Location
 import com.here.sdk.core.LocationListener
 import com.here.sdk.core.errors.InstantiationErrorException
@@ -37,12 +37,12 @@ class HEREPositioningProvider {
 
     private val locationStatusListener: LocationStatusListener = object : LocationStatusListener {
         override fun onStatusChanged(locationEngineStatus: LocationEngineStatus) {
-            Log.d(LOG_TAG, "Location engine status: " + locationEngineStatus.name)
+            Logging.d(LOG_TAG, "Location engine status: " + locationEngineStatus.name)
         }
 
         override fun onFeaturesNotAvailable(features: List<LocationFeature>) {
             for (feature in features) {
-                Log.d(LOG_TAG, "Location feature not available: " + feature.name)
+                Logging.d(LOG_TAG, "Location feature not available: " + feature.name)
             }
         }
     }
@@ -65,15 +65,15 @@ class HEREPositioningProvider {
 
     // Does nothing when engine is already running.
     fun startLocating(updateListener: LocationListener?, accuracy: LocationAccuracy?) {
-        Log.d(LOG_TAG, "startLocating called - engine initialized: ${this::locationEngine.isInitialized}, isStarted: ${if (this::locationEngine.isInitialized) locationEngine.isStarted else "N/A"}")
+        Logging.d(LOG_TAG, "startLocating called - engine initialized: ${this::locationEngine.isInitialized}, isStarted: ${if (this::locationEngine.isInitialized) locationEngine.isStarted else "N/A"}")
         
         if (!this::locationEngine.isInitialized) {
-            Log.e(LOG_TAG, "Location engine not initialized, cannot start")
+            Logging.e(LOG_TAG, "Location engine not initialized, cannot start")
             return
         }
         
         if (locationEngine.isStarted) {
-            Log.d(LOG_TAG, "Location engine already running, skipping start")
+            Logging.d(LOG_TAG, "Location engine already running, skipping start")
             return
         }
 
@@ -90,30 +90,30 @@ class HEREPositioningProvider {
             locationEngine.confirmHEREPrivacyNoticeInclusion()
 
             locationEngine.start(accuracy!!)
-            Log.d(LOG_TAG, "Location engine started successfully with accuracy: ${accuracy?.name}")
+            Logging.d(LOG_TAG, "Location engine started successfully with accuracy: ${accuracy?.name}")
         } catch (e: Exception) {
-            Log.e(LOG_TAG, "Failed to start location engine: ${e.message}", e)
+            Logging.e(LOG_TAG, "Failed to start location engine: ${e.message}", e)
             // Clean up listeners if start failed
             try {
                 locationEngine.removeLocationListener(updateListener!!)
                 locationEngine.removeLocationStatusListener(locationStatusListener)
             } catch (cleanupException: Exception) {
-                Log.w(LOG_TAG, "Error during cleanup after failed start: ${cleanupException.message}")
+                Logging.w(LOG_TAG, "Error during cleanup after failed start: ${cleanupException.message}")
             }
         }
     }
 
     // Does nothing when engine is already stopped.
     fun stopLocating() {
-        Log.d(LOG_TAG, "stopLocating called - engine initialized: ${this::locationEngine.isInitialized}, isStarted: ${if (this::locationEngine.isInitialized) locationEngine.isStarted else "N/A"}")
+        Logging.d(LOG_TAG, "stopLocating called - engine initialized: ${this::locationEngine.isInitialized}, isStarted: ${if (this::locationEngine.isInitialized) locationEngine.isStarted else "N/A"}")
         
         if (!this::locationEngine.isInitialized) {
-            Log.d(LOG_TAG, "Location engine not initialized, nothing to stop")
+            Logging.d(LOG_TAG, "Location engine not initialized, nothing to stop")
             return
         }
         
         if (!locationEngine.isStarted) {
-            Log.d(LOG_TAG, "Location engine not running, nothing to stop")
+            Logging.d(LOG_TAG, "Location engine not running, nothing to stop")
             return
         }
 
@@ -122,9 +122,9 @@ class HEREPositioningProvider {
             updateListener?.let { locationEngine.removeLocationListener(it) }
             locationEngine.removeLocationStatusListener(locationStatusListener)
             locationEngine.stop()
-            Log.d(LOG_TAG, "Location engine stopped successfully")
+            Logging.d(LOG_TAG, "Location engine stopped successfully")
         } catch (e: Exception) {
-            Log.e(LOG_TAG, "Error stopping location engine: ${e.message}", e)
+            Logging.e(LOG_TAG, "Error stopping location engine: ${e.message}", e)
         } finally {
             updateListener = null
         }
@@ -135,7 +135,7 @@ class HEREPositioningProvider {
      * This method ensures complete cleanup to prevent service connection leaks
      */
     fun forceDisconnect() {
-        Log.d(LOG_TAG, "Force disconnecting HERE SDK location services...")
+        Logging.d(LOG_TAG, "Force disconnecting HERE SDK location services...")
         
         try {
             if (this::locationEngine.isInitialized) {
@@ -143,26 +143,26 @@ class HEREPositioningProvider {
                 updateListener?.let { 
                     try {
                         locationEngine.removeLocationListener(it)
-                        Log.d(LOG_TAG, "Removed location listener")
+                        Logging.d(LOG_TAG, "Removed location listener")
                     } catch (e: Exception) {
-                        Log.w(LOG_TAG, "Error removing location listener: ${e.message}")
+                        Logging.w(LOG_TAG, "Error removing location listener: ${e.message}")
                     }
                 }
                 
                 try {
                     locationEngine.removeLocationStatusListener(locationStatusListener)
-                    Log.d(LOG_TAG, "Removed location status listener")
+                    Logging.d(LOG_TAG, "Removed location status listener")
                 } catch (e: Exception) {
-                    Log.w(LOG_TAG, "Error removing location status listener: ${e.message}")
+                    Logging.w(LOG_TAG, "Error removing location status listener: ${e.message}")
                 }
                 
                 // Stop the engine
                 if (locationEngine.isStarted) {
                     try {
                         locationEngine.stop()
-                        Log.d(LOG_TAG, "Location engine stopped")
+                        Logging.d(LOG_TAG, "Location engine stopped")
                     } catch (e: Exception) {
-                        Log.w(LOG_TAG, "Error stopping location engine: ${e.message}")
+                        Logging.w(LOG_TAG, "Error stopping location engine: ${e.message}")
                     }
                 }
                 
@@ -174,19 +174,19 @@ class HEREPositioningProvider {
                     if (sdkNativeEngine != null) {
                         // The SDK should handle service disconnection internally when LocationEngine is stopped
                         // But we can add additional safety measures here if needed
-                        Log.d(LOG_TAG, "SDK native engine available for additional cleanup")
+                        Logging.d(LOG_TAG, "SDK native engine available for additional cleanup")
                     }
                 } catch (e: Exception) {
-                    Log.w(LOG_TAG, "Error during additional SDK cleanup: ${e.message}")
+                    Logging.w(LOG_TAG, "Error during additional SDK cleanup: ${e.message}")
                 }
             }
             
             // Clear references
             updateListener = null
             
-            Log.d(LOG_TAG, "HERE SDK location services force disconnected")
+            Logging.d(LOG_TAG, "HERE SDK location services force disconnected")
         } catch (e: Exception) {
-            Log.e(LOG_TAG, "Error during force disconnect: ${e.message}", e)
+            Logging.e(LOG_TAG, "Error during force disconnect: ${e.message}", e)
         }
     }
 

@@ -9,11 +9,11 @@ import io.sentry.SentryOptions
 class ValidatorApp : Application() {
     override fun onCreate() {
         super.onCreate()
-        // In debug builds, rely on Logcat sink fallback only.
-        // In release/production, add Crashlytics sink.
-        if (!BuildConfig.DEBUG) {
+        // Initialize Sentry in both debug and release builds when DSN is available
+        val sentryDsn = BuildConfig.SENTRY_DSN
+        if (sentryDsn.isNotEmpty()) {
             SentryAndroid.init(this) { options: SentryOptions ->
-                options.dsn = BuildConfig.SENTRY_DSN
+                options.dsn = sentryDsn
                 // Keep performance disabled unless needed
                 options.tracesSampleRate = 0.0
             }

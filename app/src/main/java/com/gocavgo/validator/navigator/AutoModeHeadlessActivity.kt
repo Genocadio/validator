@@ -338,7 +338,7 @@ class AutoModeHeadlessActivity : ComponentActivity() {
                 val showMqttNotification by bookingNfcManager.showMqttNotification
                 val bookingSuccessData by bookingNfcManager.bookingSuccessData
                 val bookingFailureMessage by bookingNfcManager.bookingFailureMessage
-                val validationSuccessTicket by bookingNfcManager.validationSuccessTicket
+                val validationSuccessData by bookingNfcManager.validationSuccessData
                 val validationFailureMessage by bookingNfcManager.validationFailureMessage
                 val mqttNotificationData by bookingNfcManager.mqttNotificationData
                 val showPassengerListDialog by bookingNfcManager.showPassengerListDialog
@@ -366,7 +366,7 @@ class AutoModeHeadlessActivity : ComponentActivity() {
                     showMqttNotification = showMqttNotification,
                     bookingSuccessData = bookingSuccessData,
                     bookingFailureMessage = bookingFailureMessage,
-                    validationSuccessTicket = validationSuccessTicket,
+                    validationSuccessData = validationSuccessData,
                     validationFailureMessage = validationFailureMessage,
                     mqttNotificationData = mqttNotificationData,
                     showPassengerListDialog = showPassengerListDialog,
@@ -773,6 +773,10 @@ class AutoModeHeadlessActivity : ComponentActivity() {
         tripResponse = trip
         currentTrip = trip
         
+        // Fetch existing bookings from API when starting/resuming navigation
+        Logging.d(TAG, "Starting/resuming navigation - fetching existing bookings from API")
+        bookingNfcManager.fetchAndSyncBookings(trip.id)
+        
         // Don't stop Service navigation sync here - let it continue until Activity's Navigator has an active route
         // The sync will automatically stop when Activity's RouteProgressListener becomes active
         // This prevents a gap in updates during route calculation
@@ -961,7 +965,7 @@ class AutoModeHeadlessActivity : ComponentActivity() {
     private fun onNavigationComplete() {
         Logging.d(TAG, "=== NAVIGATION COMPLETE ===")
 
-        // Clear cache when navigation completes
+        // Clear all cache when navigation completes (including speed cache)
         lastKnownDistance = null
         lastKnownTime = null
         lastKnownWaypointName = null
@@ -972,6 +976,12 @@ class AutoModeHeadlessActivity : ComponentActivity() {
         isNavigating.set(false)
         currentTrip = null
         tripResponse = null
+        
+        // Clear waypoint progress data
+        waypointProgressData = emptyList()
+        
+        // Clear countdown
+        countdownText = ""
 
         // Read settings from DB on navigation completion (not from API)
         // Check devmode/deactivate/logout and route accordingly
@@ -1340,9 +1350,40 @@ class AutoModeHeadlessActivity : ComponentActivity() {
         }
 
     // Update waypoint progress data from App's TripSectionValidator (match HeadlessNavigActivity pattern)
+    // If Activity's TripSectionValidator has empty progress but navigation is active, reads from database
     private fun updateWaypointProgressData() {
+        val trip = tripResponse ?: currentTrip
+        if (trip == null) {
+            Logging.d(TAG, "No trip available for waypoint progress update")
+            return
+        }
+        
         app?.getTripSectionValidator()?.let { validator ->
-            val progress = validator.getCurrentWaypointProgress()
+            var progress = validator.getCurrentWaypointProgress()
+            
+            // Check if validator has empty progress but navigation is active
+            val validatorHasEmptyProgress = progress.isEmpty() || 
+                                           progress.none { it.remainingDistanceInMeters != null || it.remainingTimeInSeconds != null }
+            
+            if (validatorHasEmptyProgress && isNavigating.get() && trip.status.equals("IN_PROGRESS", ignoreCase = true)) {
+                Logging.d(TAG, "Validator has empty progress, reading from database")
+                try {
+                    // Try to get fresh trip data from database synchronously
+                    val freshTrip = runBlocking(Dispatchers.IO) {
+                        databaseManager.getTripById(trip.id)
+                    }
+                    if (freshTrip != null) {
+                        // Build waypoint progress from database
+                        val dbProgress = buildWaypointProgressFromDatabase(freshTrip)
+                        if (dbProgress.isNotEmpty()) {
+                            progress = dbProgress
+                            Logging.d(TAG, "Using waypoint progress from database: ${progress.size} waypoints")
+                        }
+                    }
+                } catch (e: Exception) {
+                    Logging.e(TAG, "Error reading waypoint progress from database: ${e.message}", e)
+                }
+            }
             
             // Apply cached values to items with null distance/time if waypoint matches
             val updatedProgress = progress.map { waypoint ->
@@ -1372,6 +1413,34 @@ class AutoModeHeadlessActivity : ComponentActivity() {
                 bookingNfcManager.nextWaypointName.value = waypointName
                 Logging.d(TAG, "Updated nextWaypointName from progress data: $waypointName")
             }
+        } ?: run {
+            // App or validator not available - try reading from database
+            if (isNavigating.get() && trip.status.equals("IN_PROGRESS", ignoreCase = true)) {
+                Logging.d(TAG, "App/validator not available, reading from database")
+                try {
+                    val freshTrip = runBlocking(Dispatchers.IO) {
+                        databaseManager.getTripById(trip.id)
+                    }
+                    if (freshTrip != null) {
+                        val dbProgress = buildWaypointProgressFromDatabase(freshTrip)
+                        if (dbProgress.isNotEmpty()) {
+                            waypointProgressData = dbProgress
+                            Logging.d(TAG, "Using waypoint progress from database: ${dbProgress.size} waypoints")
+                            
+                            // Update next waypoint name
+                            val nextWaypointProgress = dbProgress.find { it.isNext } 
+                                ?: dbProgress.firstOrNull { !it.isPassed }
+                            if (nextWaypointProgress != null) {
+                                val waypointName = extractWaypointName(nextWaypointProgress.waypointName)
+                                bookingNfcManager.nextWaypointName.value = waypointName
+                                Logging.d(TAG, "Updated nextWaypointName from database: $waypointName")
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    Logging.e(TAG, "Error reading waypoint progress from database: ${e.message}", e)
+                }
+            }
         }
     }
     
@@ -1389,8 +1458,33 @@ class AutoModeHeadlessActivity : ComponentActivity() {
     private fun updateNavigationDisplay() {
         if (!isNavigating.get()) return
         
-        val waypointProgress = getProgressFromApp()
         val trip = tripResponse ?: return
+        
+        // Check if Activity's TripSectionValidator has valid section progress
+        var waypointProgress = getProgressFromApp()
+        val validatorHasProgress = waypointProgress.isNotEmpty() && 
+                                   waypointProgress.any { it.remainingDistanceInMeters != null || it.remainingTimeInSeconds != null }
+        
+        // If validator has no valid progress but navigation is active, try reading from database
+        if (!validatorHasProgress && trip.status.equals("IN_PROGRESS", ignoreCase = true)) {
+            Logging.d(TAG, "Validator has no valid progress, reading from database")
+            try {
+                // Try to get fresh trip data from database synchronously (using runBlocking)
+                val freshTrip = runBlocking(Dispatchers.IO) {
+                    databaseManager.getTripById(trip.id)
+                }
+                if (freshTrip != null) {
+                    // Build waypoint progress from database
+                    val dbProgress = buildWaypointProgressFromDatabase(freshTrip)
+                    if (dbProgress.isNotEmpty()) {
+                        waypointProgress = dbProgress
+                        Logging.d(TAG, "Using waypoint progress from database: ${waypointProgress.size} waypoints")
+                    }
+                }
+            } catch (e: Exception) {
+                Logging.e(TAG, "Error reading waypoint progress from database: ${e.message}", e)
+            }
+        }
         
         Logging.d(TAG, "updateNavigationDisplay: waypointProgress size=${waypointProgress.size}")
         
@@ -1500,16 +1594,63 @@ class AutoModeHeadlessActivity : ComponentActivity() {
         }
     }
     
-    // Get current speed from App's NavigationExample (same as HeadlessNavigActivity)
+    // Get current speed from App's NavigationExample
+    // Matches NavigActivity/HeadlessNavigActivity pattern - relies on NavigationHandler's currentSpeedInMetersPerSecond
+    // Priority order:
+    // 1. TripSectionValidator's getLatestSpeed() (most accurate, directly from NavigableLocationListener)
+    // 2. NavigationHandler's currentSpeedInMetersPerSecond (same source NavigActivity uses, updated by NavigableLocationListener)
+    // 3. Service/database speed (only when Activity Navigator is inactive - Service is navigating)
+    // Note: When Activity Navigator is active, we don't fall back to database to avoid stale values.
+    //       NavigableLocationListener will update speed naturally within 1-2 seconds.
     private fun getCurrentSpeedFromApp(): Double {
-        return app?.getNavigationExample()?.let { navExample ->
-            try {
-                // Get speed from NavigationHandler's continuously updated speed (updated via NavigableLocationListener)
-                navExample.getNavigationHandler()?.currentSpeedInMetersPerSecond ?: 0.0
-        } catch (e: Exception) {
-                0.0
+        return try {
+            // PRIORITY 1: Get speed from TripSectionValidator (updated by NavigableLocationListener)
+            val validatorSpeed = app?.getTripSectionValidator()?.getLatestSpeed()
+            if (validatorSpeed != null) {
+                Logging.d(TAG, "Got speed from TripSectionValidator: ${validatorSpeed} m/s (${validatorSpeed * 3.6} km/h)")
+                return validatorSpeed
             }
-        } ?: 0.0
+            
+            // PRIORITY 2: Fallback to NavigationHandler's currentSpeedInMetersPerSecond
+            // This is the same source NavigActivity uses - updated by NavigableLocationListener
+            val activityHasActiveRoute = try {
+                val route = app?.getNavigationExample()?.getHeadlessNavigator()?.route
+                route != null
+            } catch (e: Exception) {
+                false
+            }
+            
+            if (activityHasActiveRoute) {
+                val activitySpeed = app?.getNavigationExample()?.let { navExample ->
+                    try {
+                        navExample.getNavigationHandler()?.currentSpeedInMetersPerSecond ?: 0.0
+                    } catch (e: Exception) {
+                        0.0
+                    }
+                } ?: 0.0
+                
+                if (activitySpeed > 0.0) {
+                    Logging.d(TAG, "Got speed from NavigationHandler: ${activitySpeed} m/s (${activitySpeed * 3.6} km/h)")
+                    return activitySpeed
+                }
+                
+                // Activity Navigator is active but no speed yet - return 0.0
+                // NavigableLocationListener will update speed naturally within 1-2 seconds
+                // Don't fall back to database to avoid stale values
+                Logging.d(TAG, "Activity Navigator active but no speed yet - returning 0.0 (NavigableLocationListener will update soon)")
+                return 0.0
+            }
+            
+            // PRIORITY 3: Activity Navigator is inactive - Service might be navigating
+            // Only use Service/database when Activity Navigator is not active
+            Logging.d(TAG, "Activity Navigator inactive - checking Service/database speed")
+                runBlocking {
+                    getCurrentSpeedFromServiceOrDatabase()
+            }
+        } catch (e: Exception) {
+            Logging.e(TAG, "Error getting speed from App: ${e.message}", e)
+            0.0
+        }
     }
     
     // Navigation is handled by App internally - no need for startHeadlessGuidance
@@ -1595,6 +1736,177 @@ class AutoModeHeadlessActivity : ComponentActivity() {
                 }
             }
             else -> waypointName
+        }
+    }
+
+    /**
+     * Builds waypoint progress from database trip data
+     * Reads waypoint remaining_time, remaining_distance, is_passed, is_next from database
+     * Maps to WaypointProgressInfo format
+     */
+    private fun buildWaypointProgressFromDatabase(trip: TripResponse): List<TripSectionValidator.WaypointProgressInfo> {
+        val progressList = mutableListOf<TripSectionValidator.WaypointProgressInfo>()
+        
+        try {
+            // Build waypoint names list (same structure as TripSectionValidator)
+            val waypointNames = mutableListOf<String>()
+            
+            // Add origin
+            waypointNames.add("Origin: ${trip.route.origin.custom_name}")
+            
+            // Add intermediate waypoints (sorted by order, only unpassed ones - matching TripSectionValidator)
+            val sortedWaypoints = trip.waypoints.sortedBy { it.order }
+            val unpassedWaypoints = sortedWaypoints.filter { !it.is_passed }
+            unpassedWaypoints.forEach { waypoint ->
+                waypointNames.add("Waypoint ${waypoint.order}: ${waypoint.location.custom_name}")
+            }
+            
+            // Add destination
+            waypointNames.add("Destination: ${trip.route.destination.custom_name}")
+            
+            // Build progress info from database data
+            waypointNames.forEachIndexed { index, waypointName ->
+                val isPassed = when {
+                    index == 0 -> {
+                        // Origin is passed if trip is IN_PROGRESS or any waypoint is passed
+                        trip.status.equals("IN_PROGRESS", ignoreCase = true) || sortedWaypoints.any { it.is_passed }
+                    }
+                    index == waypointNames.size - 1 -> false // Destination is never passed until reached
+                    else -> {
+                        // For intermediate waypoints in waypointNames (which only contains unpassed), they are never passed
+                        false
+                    }
+                }
+                
+                // Determine which waypoint is next
+                // Next waypoint is the first unpassed waypoint (which is index 1 if origin is passed, or index 0 if origin not passed)
+                val isNext = when {
+                    index == 0 -> false // Origin is never next
+                    index == waypointNames.size - 1 -> {
+                        // Destination is next if all intermediate waypoints are passed (no unpassed waypoints)
+                        unpassedWaypoints.isEmpty()
+                    }
+                    else -> {
+                        // Intermediate waypoint is next if it's the first unpassed waypoint
+                        // Since waypointNames only contains unpassed waypoints, index 1 is always the first unpassed
+                        index == 1
+                    }
+                }
+                
+                // Get remaining time and distance from database
+                val remainingTime: Long? = when {
+                    index == 0 -> null // Origin has no remaining
+                    index == waypointNames.size - 1 -> trip.remaining_time_to_destination
+                    else -> {
+                        // Get waypoint by matching order from unpassedWaypoints
+                        val waypointIndex = index - 1 // Subtract 1 for origin
+                        val waypoint = unpassedWaypoints.getOrNull(waypointIndex)
+                        waypoint?.remaining_time
+                    }
+                }
+                
+                val remainingDistance: Double? = when {
+                    index == 0 -> null // Origin has no remaining
+                    index == waypointNames.size - 1 -> trip.remaining_distance_to_destination
+                    else -> {
+                        // Get waypoint by matching order from unpassedWaypoints
+                        val waypointIndex = index - 1 // Subtract 1 for origin
+                        val waypoint = unpassedWaypoints.getOrNull(waypointIndex)
+                        waypoint?.remaining_distance
+                    }
+                }
+                
+                progressList.add(
+                    TripSectionValidator.WaypointProgressInfo(
+                        waypointIndex = index + 1,
+                        waypointName = waypointName,
+                        isPassed = isPassed,
+                        passedTimestamp = null, // Not available from database
+                        isNext = isNext,
+                        remainingDistanceInMeters = remainingDistance,
+                        remainingTimeInSeconds = remainingTime,
+                        trafficDelayInSeconds = null // Not available from database
+                    )
+                )
+            }
+            
+            Logging.d(TAG, "Built waypoint progress from database: ${progressList.size} waypoints")
+        } catch (e: Exception) {
+            Logging.e(TAG, "Error building waypoint progress from database: ${e.message}", e)
+        }
+        
+        return progressList
+    }
+
+    /**
+     * Gets current speed from Service or database
+     * First tries Service's NavigationHandler if available
+     * Fallback to VehicleLocationEntity from database
+     * Returns 0.0 if neither available
+     */
+    private suspend fun getCurrentSpeedFromServiceOrDatabase(): Double {
+        return try {
+            // First try Service's NavigationHandler
+            val serviceSpeed = foregroundService?.getCurrentSpeedForSync()
+            if (serviceSpeed != null && serviceSpeed > 0.0) {
+                Logging.d(TAG, "Got speed from Service: ${serviceSpeed} m/s")
+                return serviceSpeed
+            }
+            
+            // Fallback to database (VehicleLocationEntity)
+            val trip = currentTrip ?: tripResponse
+            if (trip != null) {
+                val vehicleLocation = databaseManager.getVehicleLocation(trip.vehicle_id)
+                if (vehicleLocation != null && vehicleLocation.speed > 0.0) {
+                    Logging.d(TAG, "Got speed from database: ${vehicleLocation.speed} m/s")
+                    return vehicleLocation.speed
+                }
+            }
+            
+            Logging.d(TAG, "No speed available from Service or database, returning 0.0")
+            0.0
+        } catch (e: Exception) {
+            Logging.e(TAG, "Error getting speed from Service or database: ${e.message}", e)
+            0.0
+        }
+    }
+
+    /**
+     * Syncs all current state to Service before going to background
+     * Ensures Service has complete state: speed, distance, waypoint name, navigation text
+     */
+    private fun syncAllStateToServiceOnPause() {
+        try {
+            if (!isNavigating.get()) {
+                Logging.d(TAG, "Not navigating, skipping state sync to Service")
+                return
+            }
+            
+            // Get current speed (from Activity's NavigationHandler or cache)
+            val currentSpeed = try {
+                app?.getNavigationExample()?.getNavigationHandler()?.currentSpeedInMetersPerSecond ?: 0.0
+            } catch (e: Exception) {
+                0.0
+            }
+            
+            // Sync cache (distance, time, waypoint name) - already done via syncCacheFromActivity
+            // But ensure it's synced here too
+            if (lastKnownDistance != null) {
+                foregroundService?.syncCacheFromActivity(lastKnownDistance, lastKnownTime, lastKnownWaypointName)
+                Logging.d(TAG, "Synced cache to Service on pause: distance=$lastKnownDistance, time=$lastKnownTime, waypoint=$lastKnownWaypointName")
+            }
+            
+            // Sync navigation text
+            if (messageViewText.isNotEmpty()) {
+                foregroundService?.updateNotification(messageViewText)
+                Logging.d(TAG, "Synced navigation text to Service on pause: $messageViewText")
+            }
+            
+            // Sync speed to Service (if Service has a method for it)
+            // Note: Service will read speed from its own NavigationHandler, but we can log it here
+            Logging.d(TAG, "State synced to Service on pause: speed=${currentSpeed} m/s, distance=$lastKnownDistance, text=$messageViewText")
+        } catch (e: Exception) {
+            Logging.e(TAG, "Error syncing state to Service on pause: ${e.message}", e)
         }
     }
 
@@ -1917,29 +2229,91 @@ class AutoModeHeadlessActivity : ComponentActivity() {
                             break
                     }
                     
-                    // Get current navigation text from Service
-                    val serviceNavigationText = service.getCurrentNavigationTextForSync()
-                    if (serviceNavigationText.isNotEmpty() && (serviceNavigationText.contains("Next:") || serviceNavigationText.contains("km/h"))) {
-                        // Update Activity UI with Service's navigation text (distance/speed)
-                        if (messageViewText != serviceNavigationText) {
+                    // Always refresh from database first (authoritative source)
+                    val trip = currentTrip
+                    if (trip != null) {
+                        try {
+                            // Refresh trip data from database to get latest waypoint remaining data
+                            val freshTrip = withContext(Dispatchers.IO) {
+                                databaseManager.getTripById(trip.id)
+                            }
+                            if (freshTrip != null) {
+                                // Update trip data with fresh data from database
+                                currentTrip = freshTrip
+                                tripResponse = freshTrip
+                                
+                                // Update waypoint progress data from database
+                                updateWaypointProgressData()
+                                
+                                // Get speed from TripSectionValidator first (most accurate), then fallback to Service/database
+                                val speed = getCurrentSpeedFromApp()
+                                val speedInKmh = speed * 3.6
+                                
+                                // Get next waypoint from database
+                                val nextWaypoint = freshTrip.waypoints.filter { !it.is_passed }.minByOrNull { it.order }
+                                
+                                // Build navigation text from database data
+                                val navigationText = if (nextWaypoint != null) {
+                                    val waypointName = nextWaypoint.location.custom_name ?: nextWaypoint.location.google_place_name
+                                    val remainingDistance = nextWaypoint.remaining_distance
+                                    
+                                    // Update cache
+                                    if (remainingDistance != null && remainingDistance > 0) {
+                                        lastKnownDistance = remainingDistance
+                                        lastKnownTime = nextWaypoint.remaining_time
+                                        lastKnownWaypointName = waypointName
+                                    }
+                                    
+                                    // Build navigation text
+                                    if (remainingDistance != null && remainingDistance > 0) {
+                                        val distanceKm = remainingDistance / 1000.0
+                                        if (distanceKm < 0.01) {
+                                            "Speed: ${String.format("%.1f", speedInKmh)} km/h"
+                                        } else {
+                                            "Next: ${String.format("%.1f", distanceKm)} km | Speed: ${String.format("%.1f", speedInKmh)} km/h"
+                                        }
+                                    } else {
+                                        "Speed: ${String.format("%.1f", speedInKmh)} km/h"
+                                    }
+                                } else {
+                                    // No next waypoint - show speed only
+                                    "Speed: ${String.format("%.1f", speedInKmh)} km/h"
+                                }
+                                
+                                // Update UI with fresh data from database
+                                messageViewText = navigationText
+                                foregroundService?.updateNotification(navigationText)
+                                Logging.d(TAG, "ACTIVITY: Updated UI from database: $navigationText")
+                                
+                                // Update booking manager with fresh trip data
+                                bookingNfcManager.updateTrip(freshTrip)
+                            } else {
+                                // Trip not found in database - fall back to Service navigation text
+                                val serviceNavigationText = service.getCurrentNavigationTextForSync()
+                                if (serviceNavigationText.isNotEmpty() && (serviceNavigationText.contains("Next:") || serviceNavigationText.contains("km/h"))) {
+                                    messageViewText = serviceNavigationText
+                                    foregroundService?.updateNotification(serviceNavigationText)
+                                    Logging.d(TAG, "ACTIVITY: Updated messageViewText from Service (trip not in DB): $serviceNavigationText")
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Logging.e(TAG, "Error refreshing from database in Service sync: ${e.message}", e)
+                            // Fall back to Service navigation text
+                            val serviceNavigationText = service.getCurrentNavigationTextForSync()
+                            if (serviceNavigationText.isNotEmpty() && (serviceNavigationText.contains("Next:") || serviceNavigationText.contains("km/h"))) {
+                                messageViewText = serviceNavigationText
+                                foregroundService?.updateNotification(serviceNavigationText)
+                                Logging.d(TAG, "ACTIVITY: Updated messageViewText from Service (fallback): $serviceNavigationText")
+                            }
+                        }
+                    } else {
+                        // No trip - get navigation text from Service
+                        val serviceNavigationText = service.getCurrentNavigationTextForSync()
+                        if (serviceNavigationText.isNotEmpty() && (serviceNavigationText.contains("Next:") || serviceNavigationText.contains("km/h"))) {
                             messageViewText = serviceNavigationText
-                            Logging.d(TAG, "ACTIVITY: Updated messageViewText from Service: $serviceNavigationText")
+                            foregroundService?.updateNotification(serviceNavigationText)
+                            Logging.d(TAG, "ACTIVITY: Updated messageViewText from Service (no trip): $serviceNavigationText")
                         }
-                        
-                        // Update waypoint progress data and nextWaypointName from progress data if available
-                        // This ensures waypoint name and overlay stay in sync even when using Service sync
-                        // If Activity's App is initialized and has route data, use progress data
-                        // Otherwise, fall back to trip data
-                        updateWaypointProgressData()
-                        
-                        // Also update trip in booking manager for passenger counts
-                        val trip = currentTrip
-                        if (trip != null) {
-                            bookingNfcManager.updateTrip(trip)
-                        }
-                        
-                        // Update notification (Activity is active, so it should update notification)
-                        foregroundService?.updateNotification(serviceNavigationText)
                     }
                 } catch (e: Exception) {
                     Logging.e(TAG, "Error in Service navigation sync: ${e.message}", e)
@@ -2060,6 +2434,30 @@ class AutoModeHeadlessActivity : ComponentActivity() {
                 countdownText = ""
                 messageViewText = "Auto Mode: Waiting for trip..."
                 foregroundService?.updateNotification("Auto Mode: Waiting for trip...")
+            }
+            
+            // CASE 6: Trip is COMPLETED - clear all navigation state
+            if (dbTrip != null && dbTrip.status.equals("COMPLETED", ignoreCase = true)) {
+                Logging.d(TAG, "TRIP COMPLETED: Database shows trip ${dbTrip.id} is COMPLETED - clearing all navigation state")
+                
+                // Clear all navigation state
+                isNavigating.set(false)
+                currentTrip = null
+                tripResponse = null
+                countdownText = ""
+                
+                // Clear all cache (including speed cache)
+                lastKnownDistance = null
+                lastKnownTime = null
+                lastKnownWaypointName = null
+                waypointProgressData = emptyList()
+                isRouteCalculated = false
+                
+                // Update UI to waiting state
+                messageViewText = "Auto Mode: Waiting for trip..."
+                foregroundService?.updateNotification("Auto Mode: Waiting for trip...")
+                
+                Logging.d(TAG, "All navigation state cleared after trip completion")
             }
             
             Logging.d(TAG, "=== END DATABASE VERIFICATION ===")
@@ -2352,6 +2750,14 @@ class AutoModeHeadlessActivity : ComponentActivity() {
 
         // Notify booking manager of resume
         bookingNfcManager.onActivityResume(this)
+        
+        // Fetch bookings from API if navigating (resuming navigation)
+        if (isNavigating.get()) {
+            currentTrip?.let { trip ->
+                Logging.d(TAG, "Resuming navigation - fetching existing bookings from API")
+                bookingNfcManager.fetchAndSyncBookings(trip.id)
+            }
+        }
 
         // Always verify MQTT connection and re-register callbacks
         // This ensures MQTT is connected and callbacks are active whenever Activity is resumed
@@ -2405,6 +2811,83 @@ class AutoModeHeadlessActivity : ComponentActivity() {
                 // PRIORITY 2: Sync from Service state (secondary source)
                 // Only after database verification is complete
                 syncStateFromService(dbTrip)
+                
+                // PRIORITY 3: Populate UI from verified state
+                // Refresh trip data from database to get latest waypoint remaining data
+                if (dbTrip != null && isNavigating.get()) {
+                    try {
+                        // Refresh trip data from database to get latest waypoint remaining data
+                        val freshTrip = withContext(Dispatchers.IO) {
+                            databaseManager.getTripById(dbTrip.id)
+                        }
+                        if (freshTrip != null) {
+                            // Update trip data
+                            currentTrip = freshTrip
+                            tripResponse = freshTrip
+                            
+                            // Populate waypoint progress from database
+                            updateWaypointProgressData()
+                            
+                            // Update booking manager with fresh trip data
+                            bookingNfcManager.updateTrip(freshTrip)
+                            
+                            // If Activity Navigator is not active but Service is navigating, populate UI from database
+                            val activityHasActiveRoute = try {
+                                val route = app?.getNavigationExample()?.getHeadlessNavigator()?.route
+                                route != null
+                            } catch (e: Exception) {
+                                false
+                            }
+                            
+                            if (!activityHasActiveRoute && (service?.isNavigatingForSync() == true || service?.hasActiveRouteForSync() == true)) {
+                                // Activity Navigator not active but Service is navigating - populate UI from database
+                                Logging.d(TAG, "Populating UI from database (Activity Navigator inactive, Service navigating)")
+                                
+                                // Get speed from TripSectionValidator first (most accurate), then fallback to Service/database
+                                val speed = getCurrentSpeedFromApp()
+                                val speedInKmh = speed * 3.6
+                                
+                                // Get next waypoint from database
+                                val nextWaypoint = freshTrip.waypoints.filter { !it.is_passed }.minByOrNull { it.order }
+                                if (nextWaypoint != null) {
+                                    val waypointName = nextWaypoint.location.custom_name ?: nextWaypoint.location.google_place_name
+                                    val remainingDistance = nextWaypoint.remaining_distance
+                                    val remainingTime = nextWaypoint.remaining_time
+                                    
+                                    // Update cache
+                                    if (remainingDistance != null && remainingDistance > 0) {
+                                        lastKnownDistance = remainingDistance
+                                        lastKnownTime = remainingTime
+                                        lastKnownWaypointName = waypointName
+                                    }
+                                    
+                                    // Build navigation text
+                                    val navigationText = if (remainingDistance != null && remainingDistance > 0) {
+                                        val distanceKm = remainingDistance / 1000.0
+                                        if (distanceKm < 0.01) {
+                                            "Speed: ${String.format("%.1f", speedInKmh)} km/h"
+                                        } else {
+                                            "Next: ${String.format("%.1f", distanceKm)} km | Speed: ${String.format("%.1f", speedInKmh)} km/h"
+                                        }
+                                    } else {
+                                        "Speed: ${String.format("%.1f", speedInKmh)} km/h"
+                                    }
+                                    
+                                    messageViewText = navigationText
+                                    foregroundService?.updateNotification(navigationText)
+                                    Logging.d(TAG, "Populated UI from database: $navigationText")
+                                } else {
+                                    // No next waypoint - show speed only
+                                    val navigationText = "Speed: ${String.format("%.1f", speedInKmh)} km/h"
+                                    messageViewText = navigationText
+                                    foregroundService?.updateNotification(navigationText)
+                                }
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Logging.e(TAG, "Error populating UI from database on resume: ${e.message}", e)
+                    }
+                }
             }
         }
 
@@ -2503,6 +2986,10 @@ class AutoModeHeadlessActivity : ComponentActivity() {
         
         // Mark Activity as inactive
         isActivityActive.set(false)
+        
+        // Sync all state to Service before going to background
+        // This ensures Service has complete state: speed, distance, waypoint name, navigation text
+        syncAllStateToServiceOnPause()
         
         // Sync countdown to Service before pausing (so Service can continue it in background)
         syncCountdownToService()

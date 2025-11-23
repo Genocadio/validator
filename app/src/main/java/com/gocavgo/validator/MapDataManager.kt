@@ -1,7 +1,7 @@
 package com.gocavgo.validator
 
 import android.os.Handler
-import android.util.Log
+import com.gocavgo.validator.util.Logging
 import com.here.sdk.core.LanguageCode
 import com.here.sdk.core.engine.SDKNativeEngine
 import com.here.sdk.maploader.DownloadRegionsStatusListener
@@ -58,7 +58,7 @@ class MapDataManager(
 
         MapDownloader.fromEngineAsync(sdkNativeEngine) { mapDownloader ->
             this@MapDataManager.mapDownloader = mapDownloader
-            Log.d(TAG, "MapDownloader initialized successfully")
+            Logging.d(TAG, "MapDownloader initialized successfully")
 
             checkExistingMapData()
 
@@ -96,11 +96,11 @@ class MapDataManager(
 
     fun triggerMapUpdate() {
         rwandaRegion?.let { region ->
-            Log.d(TAG, "Manually triggering map update download")
+            Logging.d(TAG, "Manually triggering map update download")
             downloadRetryCount = 0
             downloadRwandaMapWithRetry(region)
         } ?: run {
-            Log.w(TAG, "No updated region available for download")
+            Logging.w(TAG, "No updated region available for download")
         }
     }
 
@@ -119,19 +119,19 @@ class MapDataManager(
         for (task in mapDownloaderTasks) {
             task.cancel()
         }
-        Log.d(TAG, "Cancelled ${mapDownloaderTasks.size} download tasks")
+        Logging.d(TAG, "Cancelled ${mapDownloaderTasks.size} download tasks")
         mapDownloaderTasks.clear()
         isDownloadInProgress = false
     }
 
     fun onNetworkAvailable() {
         if (!isNetworkConnected()) {
-            Log.d(TAG, "Network not available, skipping map update check")
+            Logging.d(TAG, "Network not available, skipping map update check")
             return
         }
 
         if (!isMapDataReady && rwandaRegion != null && !isDownloadInProgress) {
-            Log.d(TAG, "Network available and no map data, starting download")
+            Logging.d(TAG, "Network available and no map data, starting download")
             downloadRwandaMapWithRetry(rwandaRegion!!)
             return
         }
@@ -144,13 +144,13 @@ class MapDataManager(
                 }
 
                 if (rwandaInstalled != null) {
-                    Log.d(TAG, "Found installed Rwanda region, checking for updates")
+                    Logging.d(TAG, "Found installed Rwanda region, checking for updates")
                     checkForMapUpdates(rwandaInstalled)
                 } else {
-                    Log.d(TAG, "No installed Rwanda region found")
+                    Logging.d(TAG, "No installed Rwanda region found")
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Error checking installed regions on network available: ${e.message}", e)
+                Logging.e(TAG, "Error checking installed regions on network available: ${e.message}", e)
             }
         }
     }
@@ -159,18 +159,18 @@ class MapDataManager(
     fun checkForMapUpdates(installedRegion: com.here.sdk.maploader.InstalledRegion) {
         val currentTime = System.currentTimeMillis()
         if (currentTime - lastUpdateCheckTime < UPDATE_CHECK_INTERVAL_MS) {
-            Log.d(TAG, "Map update check skipped - last check was ${(currentTime - lastUpdateCheckTime) / (1000 * 60 * 60)} hours ago")
+            Logging.d(TAG, "Map update check skipped - last check was ${(currentTime - lastUpdateCheckTime) / (1000 * 60 * 60)} hours ago")
             return
         }
 
-        Log.d(TAG, "=== CHECKING FOR MAP UPDATES ===")
-        Log.d(TAG, "Checking updates for region: ${installedRegion.regionId.id}")
+        Logging.d(TAG, "=== CHECKING FOR MAP UPDATES ===")
+        Logging.d(TAG, "Checking updates for region: ${installedRegion.regionId.id}")
 
         mapDownloader?.let { downloader ->
             try {
                 downloader.getDownloadableRegions(LanguageCode.EN_US) { error, regions ->
                     if (error != null) {
-                        Log.e(TAG, "Error checking for updates: $error")
+                        Logging.e(TAG, "Error checking for updates: $error")
                         return@getDownloadableRegions
                     }
 
@@ -183,19 +183,19 @@ class MapDataManager(
                             val sizeDifferenceMB = sizeDifference / (1024 * 1024)
 
                             if (sizeDifferenceMB > 10) {
-                                Log.d(TAG, "Map update available! Size difference: ${sizeDifferenceMB}MB")
+                                Logging.d(TAG, "Map update available! Size difference: ${sizeDifferenceMB}MB")
                                 handleMapUpdateAvailable(updatedRegion, installedRegion)
                             } else {
-                                Log.d(TAG, "No significant map updates available")
+                                Logging.d(TAG, "No significant map updates available")
                             }
                         }
                     }
 
                     lastUpdateCheckTime = currentTime
-                    Log.d(TAG, "===============================")
+                    Logging.d(TAG, "===============================")
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Error during map update check: ${e.message}", e)
+                Logging.e(TAG, "Error during map update check: ${e.message}", e)
             }
         }
     }
@@ -204,36 +204,36 @@ class MapDataManager(
         mapDownloader?.let { downloader ->
             try {
                 val installedRegions = downloader.installedRegions
-                Log.d(TAG, "=== INSTALLED REGIONS CHECK ===")
-                Log.d(TAG, "Total installed regions: ${installedRegions.size}")
+                Logging.d(TAG, "=== INSTALLED REGIONS CHECK ===")
+                Logging.d(TAG, "Total installed regions: ${installedRegions.size}")
 
                 var rwandaFound = false
                 var rwandaRegionInstalled: com.here.sdk.maploader.InstalledRegion? = null
 
                 for (region in installedRegions) {
                     val sizeInMB = region.sizeOnDiskInBytes / (1024 * 1024)
-                    Log.d(TAG, "Installed region: ${region.regionId.id}, Size: ${sizeInMB}MB, Status: ${region.status}")
+                    Logging.d(TAG, "Installed region: ${region.regionId.id}, Size: ${sizeInMB}MB, Status: ${region.status}")
 
                     if (region.regionId.id.toString().contains("25726922", ignoreCase = true)) {
                         rwandaFound = true
                         rwandaRegionInstalled = region
-                        Log.d(TAG, "Found existing Rwanda map data!")
+                        Logging.d(TAG, "Found existing Rwanda map data!")
                     }
                 }
 
                 if (rwandaFound && rwandaRegionInstalled != null) {
-                    Log.d(TAG, "Rwanda map data already available")
+                    Logging.d(TAG, "Rwanda map data already available")
                     checkForMapUpdates(rwandaRegionInstalled)
                     isMapDataReady = true
                     onReadyCallback?.invoke()
                 } else {
-                    Log.d(TAG, "No Rwanda map data found, will download after region list")
+                    Logging.d(TAG, "No Rwanda map data found, will download after region list")
                     onShowDialog?.invoke()
                 }
 
-                Log.d(TAG, "==============================")
+                Logging.d(TAG, "==============================")
             } catch (e: MapLoaderException) {
-                Log.e(TAG, "Error checking installed regions: ${e.error}")
+                Logging.e(TAG, "Error checking installed regions: ${e.error}")
                 proceedWithMapDownload()
             }
         }
@@ -241,22 +241,22 @@ class MapDataManager(
 
     private fun downloadRegionsList() {
         mapDownloader?.let { downloader ->
-            Log.d(TAG, "Downloading list of available regions...")
+            Logging.d(TAG, "Downloading list of available regions...")
 
             downloader.getDownloadableRegions(LanguageCode.EN_US, object : DownloadableRegionsCallback {
                 override fun onCompleted(mapLoaderError: MapLoaderError?, regions: MutableList<Region>?) {
                     if (mapLoaderError != null) {
-                        Log.e(TAG, "Error downloading regions list: $mapLoaderError")
+                        Logging.e(TAG, "Error downloading regions list: $mapLoaderError")
                         return
                     }
 
                     if (regions != null) {
                         downloadableRegions = regions
-                        Log.d(TAG, "Found ${regions.size} top-level regions")
+                        Logging.d(TAG, "Found ${regions.size} top-level regions")
 
                         val rwandaRegion = findRwandaRegion(regions)
                         if (rwandaRegion != null) {
-                            Log.d(TAG, "Found Rwanda region!")
+                            Logging.d(TAG, "Found Rwanda region!")
                             this@MapDataManager.rwandaRegion = rwandaRegion
                             if (!isMapDataReady) {
                                 downloadRwandaMapWithRetry(rwandaRegion)
@@ -264,7 +264,7 @@ class MapDataManager(
                                 onReadyCallback?.invoke()
                             }
                         } else {
-                            Log.e(TAG, "Rwanda region not found in available regions!")
+                            Logging.e(TAG, "Rwanda region not found in available regions!")
                             onReadyCallback?.invoke()
                         }
                     }
@@ -283,7 +283,7 @@ class MapDataManager(
         for (region in regions) {
             for (name in rwandaNames) {
                 if (region.name.equals(name, ignoreCase = true) || region.name.contains(name, ignoreCase = true)) {
-                    Log.d(TAG, "Found Rwanda at top level: ${region.name}")
+                    Logging.d(TAG, "Found Rwanda at top level: ${region.name}")
                     return region
                 }
             }
@@ -292,7 +292,7 @@ class MapDataManager(
                 for (childRegion in childRegions) {
                     for (name in rwandaNames) {
                         if (childRegion.name.equals(name, ignoreCase = true) || childRegion.name.contains(name, ignoreCase = true)) {
-                            Log.d(TAG, "Found Rwanda in ${region.name}: ${childRegion.name}")
+                            Logging.d(TAG, "Found Rwanda in ${region.name}: ${childRegion.name}")
                             return childRegion
                         }
                     }
@@ -301,7 +301,7 @@ class MapDataManager(
                         for (subRegion in subRegions) {
                             for (name in rwandaNames) {
                                 if (subRegion.name.equals(name, ignoreCase = true) || subRegion.name.contains(name, ignoreCase = true)) {
-                                    Log.d(TAG, "Found Rwanda in ${childRegion.name}: ${subRegion.name}")
+                                    Logging.d(TAG, "Found Rwanda in ${childRegion.name}: ${subRegion.name}")
                                     return subRegion
                                 }
                             }
@@ -316,18 +316,18 @@ class MapDataManager(
 
     private fun downloadRwandaMapWithRetry(rwandaRegion: Region) {
         if (isDownloadInProgress) {
-            Log.w(TAG, "Download already in progress, skipping retry")
+            Logging.w(TAG, "Download already in progress, skipping retry")
             return
         }
 
         if (downloadRetryCount >= MAX_DOWNLOAD_RETRIES) {
-            Log.e(TAG, "Maximum download retries reached ($MAX_DOWNLOAD_RETRIES), proceeding without offline maps")
+            Logging.e(TAG, "Maximum download retries reached ($MAX_DOWNLOAD_RETRIES), proceeding without offline maps")
             onReadyCallback?.invoke()
             return
         }
 
         downloadRetryCount++
-        Log.d(TAG, "Starting Rwanda map download (attempt $downloadRetryCount/$MAX_DOWNLOAD_RETRIES)")
+        Logging.d(TAG, "Starting Rwanda map download (attempt $downloadRetryCount/$MAX_DOWNLOAD_RETRIES)")
         
         if (downloadRetryCount > 1) {
             onShowRetrying?.invoke(downloadRetryCount, MAX_DOWNLOAD_RETRIES)
@@ -341,11 +341,11 @@ class MapDataManager(
     private fun downloadRwandaMap(rwandaRegion: Region) {
         mapDownloader?.let { downloader ->
             val sizeInMB: Int = (rwandaRegion.sizeOnDiskInBytes / (1024 * 1024)).toInt()
-            Log.d(TAG, "=== DOWNLOADING RWANDA MAP ===")
-            Log.d(TAG, "Region: ${rwandaRegion.name}")
-            Log.d(TAG, "Size: ${sizeInMB}MB")
-            Log.d(TAG, "Attempt: $downloadRetryCount/$MAX_DOWNLOAD_RETRIES")
-            Log.d(TAG, "==============================")
+            Logging.d(TAG, "=== DOWNLOADING RWANDA MAP ===")
+            Logging.d(TAG, "Region: ${rwandaRegion.name}")
+            Logging.d(TAG, "Size: ${sizeInMB}MB")
+            Logging.d(TAG, "Attempt: $downloadRetryCount/$MAX_DOWNLOAD_RETRIES")
+            Logging.d(TAG, "==============================")
 
             isDownloadInProgress = true
             val regionIds = listOf(rwandaRegion.regionId)
@@ -354,16 +354,16 @@ class MapDataManager(
                     isDownloadInProgress = false
 
                     if (mapLoaderError != null) {
-                        Log.e(TAG, "Rwanda map download failed: $mapLoaderError")
+                        Logging.e(TAG, "Rwanda map download failed: $mapLoaderError")
                         handleDownloadError(mapLoaderError, rwandaRegion)
                         return
                     }
 
                     if (regionIds != null) {
-                        Log.d(TAG, "=== DOWNLOAD COMPLETED ===")
-                        Log.d(TAG, "Successfully downloaded Rwanda map!")
-                        Log.d(TAG, "Downloaded regions: ${regionIds.map { it.id }}")
-                        Log.d(TAG, "==========================")
+                        Logging.d(TAG, "=== DOWNLOAD COMPLETED ===")
+                        Logging.d(TAG, "Successfully downloaded Rwanda map!")
+                        Logging.d(TAG, "Downloaded regions: ${regionIds.map { it.id }}")
+                        Logging.d(TAG, "==========================")
 
                         downloadRetryCount = 0
                         isMapDataReady = true
@@ -373,22 +373,22 @@ class MapDataManager(
                 }
 
                 override fun onProgress(regionId: RegionId, percentage: Int) {
-                    Log.d(TAG, "Downloading Rwanda map: ${percentage}% (Region: ${regionId.id})")
+                    Logging.d(TAG, "Downloading Rwanda map: ${percentage}% (Region: ${regionId.id})")
                     downloadProgressCallback?.invoke(percentage)
                     onUpdateProgress?.invoke(percentage, sizeInMB)
                 }
 
                 override fun onPause(mapLoaderError: MapLoaderError?) {
                     if (mapLoaderError == null) {
-                        Log.d(TAG, "Rwanda map download paused by user")
+                        Logging.d(TAG, "Rwanda map download paused by user")
                     } else {
-                        Log.e(TAG, "Rwanda map download paused due to error: $mapLoaderError")
+                        Logging.e(TAG, "Rwanda map download paused due to error: $mapLoaderError")
                         handleDownloadError(mapLoaderError, rwandaRegion)
                     }
                 }
 
                 override fun onResume() {
-                    Log.d(TAG, "Rwanda map download resumed")
+                    Logging.d(TAG, "Rwanda map download resumed")
                 }
             })
 
@@ -397,41 +397,41 @@ class MapDataManager(
     }
 
     private fun handleDownloadError(error: MapLoaderError, rwandaRegion: Region) {
-        Log.e(TAG, "=== DOWNLOAD ERROR HANDLING ===")
-        Log.e(TAG, "Error: $error")
-        Log.e(TAG, "Retry count: $downloadRetryCount/$MAX_DOWNLOAD_RETRIES")
+        Logging.e(TAG, "=== DOWNLOAD ERROR HANDLING ===")
+        Logging.e(TAG, "Error: $error")
+        Logging.e(TAG, "Retry count: $downloadRetryCount/$MAX_DOWNLOAD_RETRIES")
 
         when (error) {
             MapLoaderError.NETWORK_CONNECTION_ERROR -> {
-                Log.w(TAG, "Network error detected, will retry when network is available")
+                Logging.w(TAG, "Network error detected, will retry when network is available")
                 onShowNetworkWaiting?.invoke()
                 scheduleRetryOnNetworkAvailable(rwandaRegion)
             }
             MapLoaderError.NOT_ENOUGH_SPACE -> {
-                Log.e(TAG, "Insufficient storage for map download")
+                Logging.e(TAG, "Insufficient storage for map download")
                 onShowError?.invoke("Insufficient storage space for map download")
             }
             MapLoaderError.INVALID_ARGUMENT -> {
-                Log.e(TAG, "Invalid parameters for download")
+                Logging.e(TAG, "Invalid parameters for download")
                 onShowError?.invoke("Invalid download parameters")
             }
             MapLoaderError.INTERNAL_ERROR, MapLoaderError.NOT_READY -> {
-                Log.w(TAG, "Recoverable error, will retry")
+                Logging.w(TAG, "Recoverable error, will retry")
                 scheduleRetryWithDelay(rwandaRegion)
             }
             else -> {
-                Log.w(TAG, "Unknown error, will retry")
+                Logging.w(TAG, "Unknown error, will retry")
                 onShowError?.invoke("Download failed: ${error.name}")
                 scheduleRetryWithDelay(rwandaRegion)
             }
         }
-        Log.e(TAG, "===============================")
+        Logging.e(TAG, "===============================")
     }
 
     private fun scheduleRetryWithDelay(rwandaRegion: Region) {
         if (downloadRetryCount < MAX_DOWNLOAD_RETRIES) {
             val delay = DOWNLOAD_RETRY_DELAY_MS * downloadRetryCount
-            Log.d(TAG, "Scheduling retry in ${delay}ms")
+            Logging.d(TAG, "Scheduling retry in ${delay}ms")
 
             handler.postDelayed({
                 if (!isMapDataReady) {
@@ -439,7 +439,7 @@ class MapDataManager(
                 }
             }, delay)
         } else {
-            Log.e(TAG, "Maximum retries reached, proceeding without offline maps")
+            Logging.e(TAG, "Maximum retries reached, proceeding without offline maps")
             onReadyCallback?.invoke()
         }
     }
@@ -448,7 +448,7 @@ class MapDataManager(
         val networkCheckRunnable = object : Runnable {
             override fun run() {
                 if (isNetworkConnected() && !isMapDataReady) {
-                    Log.d(TAG, "Network available, retrying download")
+                    Logging.d(TAG, "Network available, retrying download")
                     downloadRwandaMapWithRetry(rwandaRegion)
                 } else if (!isMapDataReady) {
                     handler.postDelayed(this, 10000)
@@ -461,11 +461,11 @@ class MapDataManager(
     private fun proceedWithMapDownload() {
         rwandaRegion?.let { region ->
             if (!isMapDataReady && !isDownloadInProgress) {
-                Log.d(TAG, "Proceeding with map download as fallback")
+                Logging.d(TAG, "Proceeding with map download as fallback")
                 downloadRwandaMapWithRetry(region)
             }
         } ?: run {
-            Log.w(TAG, "No Rwanda region available for download")
+            Logging.w(TAG, "No Rwanda region available for download")
             onReadyCallback?.invoke()
         }
     }
@@ -473,13 +473,13 @@ class MapDataManager(
     
 
     private fun handleMapUpdateAvailable(updatedRegion: Region, installedRegion: com.here.sdk.maploader.InstalledRegion) {
-        Log.d(TAG, "=== MAP UPDATE AVAILABLE ===")
-        Log.d(TAG, "Current version size: ${installedRegion.sizeOnDiskInBytes / (1024 * 1024)}MB")
-        Log.d(TAG, "Updated version size: ${updatedRegion.sizeOnDiskInBytes / (1024 * 1024)}MB")
+        Logging.d(TAG, "=== MAP UPDATE AVAILABLE ===")
+        Logging.d(TAG, "Current version size: ${installedRegion.sizeOnDiskInBytes / (1024 * 1024)}MB")
+        Logging.d(TAG, "Updated version size: ${updatedRegion.sizeOnDiskInBytes / (1024 * 1024)}MB")
 
         rwandaRegion = updatedRegion
-        Log.d(TAG, "Map update will be downloaded on next app restart or manual trigger")
-        Log.d(TAG, "=============================")
+        Logging.d(TAG, "Map update will be downloaded on next app restart or manual trigger")
+        Logging.d(TAG, "=============================")
     }
 }
 

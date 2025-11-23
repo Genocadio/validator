@@ -416,7 +416,7 @@ fun BookingFailurePrompt(
  */
 @Composable
 fun ValidationSuccessPrompt(
-    ticketNumber: String,
+    validationData: com.gocavgo.validator.booking.BookingNfcManager.ValidationSuccessData,
     isVisible: Boolean,
     onDismiss: () -> Unit
 ) {
@@ -449,13 +449,32 @@ fun ValidationSuccessPrompt(
                     color = Color.White
                 )
                 
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                Text(
+                    text = "Ticket: ${validationData.ticketNumber}",
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White,
+                    textAlign = TextAlign.Center
+                )
+                
                 Spacer(modifier = Modifier.height(12.dp))
                 
                 Text(
-                    text = ticketNumber,
+                    text = "Passenger: ${validationData.passengerName}",
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Medium,
                     color = Color.White,
+                    textAlign = TextAlign.Center
+                )
+                
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                Text(
+                    text = "${validationData.pickupLocation} → ${validationData.dropoffLocation}",
+                    fontSize = 14.sp,
+                    color = Color.White.copy(alpha = 0.9f),
                     textAlign = TextAlign.Center
                 )
             }
@@ -761,7 +780,7 @@ fun AutoModeHeadlessScreen(
     showMqttNotification: Boolean,
     bookingSuccessData: BookingNfcManager.BookingSuccessData,
     bookingFailureMessage: String,
-    validationSuccessTicket: String,
+    validationSuccessData: BookingNfcManager.ValidationSuccessData,
     validationFailureMessage: String,
     mqttNotificationData: BookingNfcManager.MqttNotificationData,
     showPassengerListDialog: Boolean,
@@ -933,7 +952,7 @@ fun AutoModeHeadlessScreen(
         )
 
         ValidationSuccessPrompt(
-            ticketNumber = validationSuccessTicket,
+            validationData = validationSuccessData,
             isVisible = showValidationSuccess,
             onDismiss = onValidationSuccessDismiss
         )

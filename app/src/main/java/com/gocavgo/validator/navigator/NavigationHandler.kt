@@ -20,7 +20,7 @@
 package com.gocavgo.validator.navigator
 
 import android.content.Context
-import android.util.Log
+import com.gocavgo.validator.util.Logging
 import com.here.sdk.core.LanguageCode
 import com.here.sdk.core.UnitSystem
 import com.here.sdk.core.errors.InstantiationErrorException
@@ -97,7 +97,7 @@ class NavigationHandler(
         isNetworkConnected = isConnected
         
         if (previousState != isConnected) {
-            Log.d(TAG, "Network state changed: $previousState -> $isConnected")
+            Logging.d(TAG, "Network state changed: $previousState -> $isConnected")
             showRoutingModeToast(isConnected)
         }
     }
@@ -139,7 +139,7 @@ class NavigationHandler(
                 if (sectionProgressList.isNotEmpty()) {
                     val totalSections = sectionProgressList.size
                     tripSectionValidator.processSectionProgress(sectionProgressList, totalSections)
-                    Log.d(TAG, "Processed section progress: ${sectionProgressList.size} sections")
+                    Logging.d(TAG, "Processed section progress: ${sectionProgressList.size} sections")
                 }
                 
                 // Contains the progress for the next maneuver ahead and the next-next maneuvers, if any.
@@ -147,7 +147,7 @@ class NavigationHandler(
 
                 val nextManeuverProgress = nextManeuverList[0]
                 if (nextManeuverProgress == null) {
-                    Log.d(TAG, "No next maneuver available (but section progress was processed).")
+                    Logging.d(TAG, "No next maneuver available (but section progress was processed).")
                     return@RouteProgressListener
                 }
 
@@ -164,11 +164,11 @@ class NavigationHandler(
                 val turnAngle = nextManeuver.turnAngleInDegrees
                 if (turnAngle != null) {
                     if (turnAngle > 10) {
-                        Log.d(TAG, "At the next maneuver: Make a right turn of $turnAngle degrees.")
+                        Logging.d(TAG, "At the next maneuver: Make a right turn of $turnAngle degrees.")
                     } else if (turnAngle < -10) {
-                        Log.d(TAG, "At the next maneuver: Make a left turn of $turnAngle degrees.")
+                        Logging.d(TAG, "At the next maneuver: Make a left turn of $turnAngle degrees.")
                     } else {
-                        Log.d(TAG, "At the next maneuver: Go straight.")
+                        Logging.d(TAG, "At the next maneuver: Go straight.")
                     }
                 }
 
@@ -176,7 +176,7 @@ class NavigationHandler(
                 val roundaboutAngle = nextManeuver.roundaboutAngleInDegrees
                 if (roundaboutAngle != null) {
                     // Note that the value is negative only for left-driving countries such as UK.
-                    Log.d(TAG, "At the next maneuver: Follow the roundabout for " + roundaboutAngle + " degrees to reach the exit."
+                    Logging.d(TAG, "At the next maneuver: Follow the roundabout for " + roundaboutAngle + " degrees to reach the exit."
                     )
                 }
 
@@ -206,17 +206,17 @@ class NavigationHandler(
         // Notifies on the current map-matched location and other useful information while driving or walking.
         visualNavigator.navigableLocationListener =
             NavigableLocationListener { currentNavigableLocation: NavigableLocation ->
-                Log.d(TAG, "Received navigable location update")
+                Logging.d(TAG, "Received navigable location update")
                 lastMapMatchedLocation = currentNavigableLocation.mapMatchedLocation
                 if (lastMapMatchedLocation == null) {
-                    Log.d(TAG, "The currentNavigableLocation could not be map-matched. Are you off-road?")
+                    Logging.d(TAG, "The currentNavigableLocation could not be map-matched. Are you off-road?")
                     return@NavigableLocationListener
                 }
-                Log.d(TAG, "Location successfully map-matched")
+                Logging.d(TAG, "Location successfully map-matched")
 
                 if (lastMapMatchedLocation!!.isDrivingInTheWrongWay) {
                     // For two-way streets, this value is always false. This feature is supported in tracking mode and when deviating from a route.
-                    Log.d(
+                    Logging.d(
                         TAG,
                         "This is a one way road. User is driving against the allowed traffic direction."
                     )
@@ -226,7 +226,7 @@ class NavigationHandler(
                 val accuracy =
                     currentNavigableLocation.originalLocation.speedAccuracyInMetersPerSecond
                 currentSpeedInMetersPerSecond = speed ?: 0.0
-                Log.d(
+                Logging.d(
                     TAG,
                     "Driving speed (m/s): " + speed + "plus/minus an accuracy of: " + accuracy
                 )
@@ -247,7 +247,7 @@ class NavigationHandler(
             try {
                 handleRouteDeviation(routeDeviation, visualNavigator)
             } catch (e: Exception) {
-                Log.e(TAG, "Error in route deviation listener: ${e.message}", e)
+                Logging.e(TAG, "Error in route deviation listener: ${e.message}", e)
             }
         }
 
@@ -271,20 +271,20 @@ class NavigationHandler(
                     // milestoneIndex 0 = first trip waypoint (order=1), milestoneIndex 1 = second trip waypoint (order=2)
                     val waypointOrder = milestone.waypointIndex!!
                     val waypoiCord = milestone.originalCoordinates!!
-                    Log.d(TAG, "Waypoint reached via milestone: milestoneIndex=${milestone.waypointIndex}, waypointOrder=$waypointOrder")
+                    Logging.d(TAG, "Waypoint reached via milestone: milestoneIndex=${milestone.waypointIndex}, waypointOrder=$waypointOrder")
                     tripSectionValidator.markWaypointAsPassedByMilestone(waypointOrder, waypoiCord)
                 } else if (milestone.waypointIndex != null && milestoneStatus == MilestoneStatus.MISSED) {
-                    Log.w(TAG, "Waypoint missed: index=${milestone.waypointIndex}")
+                    Logging.w(TAG, "Waypoint missed: index=${milestone.waypointIndex}")
                 } else if (milestone.waypointIndex == null && milestoneStatus == MilestoneStatus.REACHED) {
-                    Log.d(TAG, "System waypoint reached at: ${milestone.mapMatchedCoordinates}")
+                    Logging.d(TAG, "System waypoint reached at: ${milestone.mapMatchedCoordinates}")
                 } else if (milestone.waypointIndex == null && milestoneStatus == MilestoneStatus.MISSED) {
-                    Log.w(TAG, "System waypoint missed at: ${milestone.mapMatchedCoordinates}")
+                    Logging.w(TAG, "System waypoint missed at: ${milestone.mapMatchedCoordinates}")
                 }
             }
 
         // Notifies when the destination of the route is reached.
         visualNavigator.destinationReachedListener = DestinationReachedListener {
-            Log.d(TAG, "Destination reached!")
+            Logging.d(TAG, "Destination reached!")
             tripSectionValidator.handleDestinationReached()
         }
     }
@@ -313,9 +313,9 @@ class NavigationHandler(
                 }
                 
                 // GPS STATUS LOGGING: Track RouteProgress updates for headless navigation
-                Log.d(TAG, "=== HEADLESS ROUTE PROGRESS UPDATE ===")
-                Log.d(TAG, "Section index: ${routeProgress.sectionIndex}")
-                Log.d(TAG, "Current speed: ${currentSpeedInMetersPerSecond} m/s (${currentSpeedInMetersPerSecond * 3.6} km/h)")
+                Logging.d(TAG, "=== HEADLESS ROUTE PROGRESS UPDATE ===")
+                Logging.d(TAG, "Section index: ${routeProgress.sectionIndex}")
+                Logging.d(TAG, "Current speed: ${currentSpeedInMetersPerSecond} m/s (${currentSpeedInMetersPerSecond * 3.6} km/h)")
                 
                 // CRITICAL: Process section progress FIRST, before checking maneuver progress
                 // Section progress is always available and needed for TripSectionValidator tracking
@@ -326,19 +326,19 @@ class NavigationHandler(
                     val lastSection = sectionProgressList.lastOrNull()
                     val remainingDistance = lastSection?.remainingDistanceInMeters ?: 0
                     val remainingDuration = lastSection?.remainingDuration?.toSeconds() ?: 0
-                    Log.d(TAG, "Section progress: ${sectionProgressList.size} sections, remaining: ${remainingDistance}m, ETA: ${remainingDuration}s")
+                    Logging.d(TAG, "Section progress: ${sectionProgressList.size} sections, remaining: ${remainingDistance}m, ETA: ${remainingDuration}s")
                     tripSectionValidator.processSectionProgress(sectionProgressList, totalSections)
                 } else {
-                    Log.w(TAG, "⚠️ No section progress available in headless navigation")
+                    Logging.w(TAG, "⚠️ No section progress available in headless navigation")
                 }
-                Log.d(TAG, "======================================")
+                Logging.d(TAG, "======================================")
                 
                 // Contains the progress for the next maneuver ahead and the next-next maneuvers, if any.
                 val nextManeuverList = routeProgress.maneuverProgress
 
                 val nextManeuverProgress = nextManeuverList[0]
                 if (nextManeuverProgress == null) {
-                    Log.d(TAG, "No next maneuver available (but section progress was processed).")
+                    Logging.d(TAG, "No next maneuver available (but section progress was processed).")
                     return@RouteProgressListener
                 }
 
@@ -355,11 +355,11 @@ class NavigationHandler(
                 val turnAngle = nextManeuver.turnAngleInDegrees
                 if (turnAngle != null) {
                     if (turnAngle > 10) {
-                        Log.d(TAG, "At the next maneuver: Make a right turn of $turnAngle degrees.")
+                        Logging.d(TAG, "At the next maneuver: Make a right turn of $turnAngle degrees.")
                     } else if (turnAngle < -10) {
-                        Log.d(TAG, "At the next maneuver: Make a left turn of $turnAngle degrees.")
+                        Logging.d(TAG, "At the next maneuver: Make a left turn of $turnAngle degrees.")
                     } else {
-                        Log.d(TAG, "At the next maneuver: Go straight.")
+                        Logging.d(TAG, "At the next maneuver: Go straight.")
                     }
                 }
 
@@ -367,7 +367,7 @@ class NavigationHandler(
                 val roundaboutAngle = nextManeuver.roundaboutAngleInDegrees
                 if (roundaboutAngle != null) {
                     // Note that the value is negative only for left-driving countries such as UK.
-                    Log.d(TAG, "At the next maneuver: Follow the roundabout for " + roundaboutAngle + " degrees to reach the exit."
+                    Logging.d(TAG, "At the next maneuver: Follow the roundabout for " + roundaboutAngle + " degrees to reach the exit."
                     )
                 }
 
@@ -403,28 +403,28 @@ class NavigationHandler(
                 val accuracy = originalLocation.speedAccuracyInMetersPerSecond ?: 0.0
                 val mapMatched = currentNavigableLocation.mapMatchedLocation
                 
-                Log.d(TAG, "=== GPS LOCATION UPDATE ===")
-                Log.d(TAG, "Speed: ${speed} m/s (${speed * 3.6} km/h), Accuracy: ±${accuracy} m/s")
+                Logging.d(TAG, "=== GPS LOCATION UPDATE ===")
+                Logging.d(TAG, "Speed: ${speed} m/s (${speed * 3.6} km/h), Accuracy: ±${accuracy} m/s")
                 if (mapMatched != null) {
-                    Log.d(TAG, "Map-matched: lat=${mapMatched.coordinates.latitude}, lng=${mapMatched.coordinates.longitude}")
-                    Log.d(TAG, "Bearing: ${mapMatched.bearingInDegrees}°, Wrong way: ${mapMatched.isDrivingInTheWrongWay}")
+                    Logging.d(TAG, "Map-matched: lat=${mapMatched.coordinates.latitude}, lng=${mapMatched.coordinates.longitude}")
+                    Logging.d(TAG, "Bearing: ${mapMatched.bearingInDegrees}°, Wrong way: ${mapMatched.isDrivingInTheWrongWay}")
                 } else {
-                    Log.w(TAG, "⚠️ Location not map-matched - may be off-road or GPS issue")
+                    Logging.w(TAG, "⚠️ Location not map-matched - may be off-road or GPS issue")
                 }
-                Log.d(TAG, "==========================")
+                Logging.d(TAG, "==========================")
                 
                 // Update stored location and speed
                 lastMapMatchedLocation = currentNavigableLocation.mapMatchedLocation
                 currentSpeedInMetersPerSecond = speed
                 
                 if (lastMapMatchedLocation == null) {
-                    Log.w(TAG, "⚠️ Location could not be map-matched - may be off-road or GPS issue")
+                    Logging.w(TAG, "⚠️ Location could not be map-matched - may be off-road or GPS issue")
                     return@NavigableLocationListener
                 }
 
                 if (lastMapMatchedLocation!!.isDrivingInTheWrongWay) {
                     // For two-way streets, this value is always false. This feature is supported in tracking mode and when deviating from a route.
-                    Log.w(
+                    Logging.w(
                         TAG,
                         "⚠️ Driving against traffic direction on one-way road"
                     )
@@ -436,7 +436,7 @@ class NavigationHandler(
             try {
                 handleRouteDeviationHeadless(routeDeviation, navigator)
             } catch (e: Exception) {
-                Log.e(TAG, "Error in route deviation listener: ${e.message}", e)
+                Logging.e(TAG, "Error in route deviation listener: ${e.message}", e)
             }
         }
 
@@ -447,20 +447,20 @@ class NavigationHandler(
                     // milestoneIndex 0 = first trip waypoint (order=1), milestoneIndex 1 = second trip waypoint (order=2)
                     val waypointOrder = milestone.waypointIndex!!
                     val waypoiCord = milestone.originalCoordinates!!
-                    Log.d(TAG, "Headless waypoint reached via milestone: milestoneIndex=${milestone.waypointIndex}, waypointOrder=$waypointOrder")
+                    Logging.d(TAG, "Headless waypoint reached via milestone: milestoneIndex=${milestone.waypointIndex}, waypointOrder=$waypointOrder")
                     tripSectionValidator.markWaypointAsPassedByMilestone(waypointOrder, waypoiCord)
                 } else if (milestone.waypointIndex != null && milestoneStatus == MilestoneStatus.MISSED) {
-                    Log.w(TAG, "Headless waypoint missed: index=${milestone.waypointIndex}")
+                    Logging.w(TAG, "Headless waypoint missed: index=${milestone.waypointIndex}")
                 } else if (milestone.waypointIndex == null && milestoneStatus == MilestoneStatus.REACHED) {
-                    Log.d(TAG, "Headless system waypoint reached at: ${milestone.mapMatchedCoordinates}")
+                    Logging.d(TAG, "Headless system waypoint reached at: ${milestone.mapMatchedCoordinates}")
                 } else if (milestone.waypointIndex == null && milestoneStatus == MilestoneStatus.MISSED) {
-                    Log.w(TAG, "Headless system waypoint missed at: ${milestone.mapMatchedCoordinates}")
+                    Logging.w(TAG, "Headless system waypoint missed at: ${milestone.mapMatchedCoordinates}")
                 }
             }
 
         // Notifies when the destination of the route is reached (headless).
         navigator.destinationReachedListener = DestinationReachedListener {
-            Log.d(TAG, "Headless destination reached!")
+            Logging.d(TAG, "Headless destination reached!")
             tripSectionValidator.handleDestinationReached()
         }
     }
@@ -497,26 +497,26 @@ class NavigationHandler(
             if (sectionProgress.remainingDistanceInMeters < 10) {
                 for (j in sectionProgressList.indices) {
                     val section = sectionProgressList[j]
-                    Log.d(TAG, "Section $j/$totalSections:")
-                    Log.d(TAG, "  Remaining distance: ${section.remainingDistanceInMeters} meters")
-                    Log.d(TAG, "  Remaining duration: ${section.remainingDuration.toSeconds()} seconds")
-                    Log.d(TAG, "  Traffic delay: ${section.trafficDelay.seconds} seconds")
+                    Logging.d(TAG, "Section $j/$totalSections:")
+                    Logging.d(TAG, "  Remaining distance: ${section.remainingDistanceInMeters} meters")
+                    Logging.d(TAG, "  Remaining duration: ${section.remainingDuration.toSeconds()} seconds")
+                    Logging.d(TAG, "  Traffic delay: ${section.trafficDelay.seconds} seconds")
                 }
 
-                Log.d(TAG, "  *** Reached waypoint for section $sectionNumber! ***")
+                Logging.d(TAG, "  *** Reached waypoint for section $sectionNumber! ***")
             }
         }
 
         val speedInKmh = currentSpeedInMetersPerSecond * 3.6
         val currentSpeedString = "Speed: ${String.format("%.1f", speedInKmh)} km/h"
 
-        Log.d(
+        Logging.d(
             TAG,
             "Distance to destination in meters: " + lastSectionProgress.remainingDistanceInMeters
         )
-        Log.d(TAG, "Traffic delay ahead in seconds: " + lastSectionProgress.trafficDelay.seconds)
+        Logging.d(TAG, "Traffic delay ahead in seconds: " + lastSectionProgress.trafficDelay.seconds)
         // Logs current speed.
-        Log.d(TAG, currentSpeedString)
+        Logging.d(TAG, currentSpeedString)
         return currentSpeedString
     }
 
@@ -529,7 +529,7 @@ class NavigationHandler(
         // Set the measurement system used for distances.
         maneuverNotificationOptions.unitSystem = UnitSystem.METRIC
         visualNavigator.maneuverNotificationOptions = maneuverNotificationOptions
-        Log.d(
+        Logging.d(
             TAG,
             "LanguageCode for maneuver notifications: $ttsLanguageCode"
         )
@@ -537,12 +537,12 @@ class NavigationHandler(
         // Set language to our TextToSpeech engine.
         val locale = LanguageCodeConverter.getLocale(ttsLanguageCode)
         if (voiceAssistant.setLanguage(locale)) {
-            Log.d(
+            Logging.d(
                 TAG,
                 "TextToSpeech engine uses this language: $locale"
             )
         } else {
-            Log.e(
+            Logging.e(
                 TAG,
                 "TextToSpeech engine does not support this language: $locale"
             )
@@ -555,7 +555,7 @@ class NavigationHandler(
 
         var localeForCurrenDevice = Locale.getDefault()
         if (!voiceAssistant.isLanguageAvailable(localeForCurrenDevice)) {
-            Log.e(
+            Logging.e(
                 TAG,
                 "TextToSpeech engine does not support: $localeForCurrenDevice, falling back to EN_US."
             )
@@ -566,7 +566,7 @@ class NavigationHandler(
         var languageCodeForCurrenDevice =
             LanguageCodeConverter.getLanguageCode(localeForCurrenDevice)
         if (!supportedVoiceSkins.contains(languageCodeForCurrenDevice)) {
-            Log.e(
+            Logging.e(
                 TAG,
                 "No voice skins available for $languageCodeForCurrenDevice, falling back to EN_US."
             )
@@ -644,13 +644,13 @@ class NavigationHandler(
             traveledDistanceOnLastSectionInMeters,
             CalculateTrafficOnRouteCallback { routingError: RoutingError?, trafficOnRoute: TrafficOnRoute? ->
                 if (routingError != null) {
-                    Log.d(TAG, "CalculateTrafficOnRoute error: " + routingError.name)
+                    Logging.d(TAG, "CalculateTrafficOnRoute error: " + routingError.name)
                     return@CalculateTrafficOnRouteCallback
                 }
                 // Sets traffic data for the current route, affecting RouteProgress duration in SectionProgress,
                 // while preserving route distance and geometry.
                 visualNavigator.trafficOnRoute = trafficOnRoute
-                Log.d(TAG, "Updated traffic on route.")
+                Logging.d(TAG, "Updated traffic on route.")
             })
     }
 
@@ -670,21 +670,21 @@ class NavigationHandler(
                 val nextWaypoint = waypointProgressList.find { it.isNext }
                 
                 if (nextWaypoint != null) {
-                    Log.d(TAG, "Updating next waypoint: ${nextWaypoint.waypointName}")
-                    Log.d(TAG, "  - Remaining time: ${remainingTimeToNextWaypoint}s")
-                    Log.d(TAG, "  - Remaining distance: ${String.format("%.1f", remainingDistanceToNextWaypoint)}m")
+                    Logging.d(TAG, "Updating next waypoint: ${nextWaypoint.waypointName}")
+                    Logging.d(TAG, "  - Remaining time: ${remainingTimeToNextWaypoint}s")
+                    Logging.d(TAG, "  - Remaining distance: ${String.format("%.1f", remainingDistanceToNextWaypoint)}m")
                     
                     // Here you can add any additional waypoint update logic
                     // For example, updating UI, sending MQTT messages, etc.
                     
                 } else {
-                    Log.d(TAG, "No next waypoint found - all waypoints may be passed")
+                    Logging.d(TAG, "No next waypoint found - all waypoints may be passed")
                 }
             } else {
-                Log.d(TAG, "No waypoint progress data available")
+                Logging.d(TAG, "No waypoint progress data available")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error updating waypoint with first section data: ${e.message}", e)
+            Logging.e(TAG, "Error updating waypoint with first section data: ${e.message}", e)
         }
     }
 
@@ -718,13 +718,13 @@ class NavigationHandler(
             traveledDistanceOnLastSectionInMeters,
             CalculateTrafficOnRouteCallback { routingError: RoutingError?, trafficOnRoute: TrafficOnRoute? ->
                 if (routingError != null) {
-                    Log.d(TAG, "CalculateTrafficOnRoute error: " + routingError.name)
+                    Logging.d(TAG, "CalculateTrafficOnRoute error: " + routingError.name)
                     return@CalculateTrafficOnRouteCallback
                 }
                 // Sets traffic data for the current route, affecting RouteProgress duration in SectionProgress,
                 // while preserving route distance and geometry.
                 navigator.trafficOnRoute = trafficOnRoute
-                Log.d(TAG, "Updated traffic on route.")
+                Logging.d(TAG, "Updated traffic on route.")
             })
     }
 
@@ -748,12 +748,12 @@ class NavigationHandler(
         deviationCounter++
         
         if (isReturningToRoute) {
-            Log.d(TAG, "Rerouting already in progress")
+            Logging.d(TAG, "Rerouting already in progress")
             return
         }
         
         if (distanceInMeters > DEVIATION_THRESHOLD_METERS && deviationCounter >= MIN_DEVIATION_EVENTS) {
-            Log.d(TAG, "Route deviation: ${distanceInMeters}m - starting reroute")
+            Logging.d(TAG, "Route deviation: ${distanceInMeters}m - starting reroute")
             isReturningToRoute = true
             
             val newStartingPoint = Waypoint(currentGeoCoordinates)
@@ -771,9 +771,9 @@ newStartingPoint.headingInDegrees = it
                 if (routingError == null && routes != null && routes.isNotEmpty()) {
                     val newRoute = routes[0]
                     visualNavigator.route = newRoute
-                    Log.d(TAG, "Rerouting successful using ${if (isNetworkConnected) "online" else "offline"} engine")
+                    Logging.d(TAG, "Rerouting successful using ${if (isNetworkConnected) "online" else "offline"} engine")
                 } else {
-                    Log.e(TAG, "Rerouting failed: ${routingError?.name}")
+                    Logging.e(TAG, "Rerouting failed: ${routingError?.name}")
                 }
                 isReturningToRoute = false
                 deviationCounter = 0
@@ -801,12 +801,12 @@ newStartingPoint.headingInDegrees = it
         deviationCounter++
         
         if (isReturningToRoute) {
-            Log.d(TAG, "Rerouting already in progress")
+            Logging.d(TAG, "Rerouting already in progress")
             return
         }
         
         if (distanceInMeters > DEVIATION_THRESHOLD_METERS && deviationCounter >= MIN_DEVIATION_EVENTS) {
-            Log.d(TAG, "Route deviation: ${distanceInMeters}m - starting reroute")
+            Logging.d(TAG, "Route deviation: ${distanceInMeters}m - starting reroute")
             isReturningToRoute = true
             
             val newStartingPoint = Waypoint(currentGeoCoordinates)
@@ -824,9 +824,9 @@ newStartingPoint.headingInDegrees = it
                 if (routingError == null && routes != null && routes.isNotEmpty()) {
                     val newRoute = routes[0]
                     navigator.route = newRoute
-                    Log.d(TAG, "Headless rerouting successful using ${if (isNetworkConnected) "online" else "offline"} engine")
+                    Logging.d(TAG, "Headless rerouting successful using ${if (isNetworkConnected) "online" else "offline"} engine")
                 } else {
-                    Log.e(TAG, "Headless rerouting failed: ${routingError?.name}")
+                    Logging.e(TAG, "Headless rerouting failed: ${routingError?.name}")
                 }
                 isReturningToRoute = false
                 deviationCounter = 0

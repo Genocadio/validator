@@ -19,7 +19,7 @@
 
 package com.gocavgo.validator.navigator
 
-import android.util.Log
+import com.gocavgo.validator.util.Logging
 import com.here.sdk.core.errors.InstantiationErrorException
 import com.here.sdk.routing.CalculateRouteCallback
 import com.here.sdk.routing.CarOptions
@@ -52,7 +52,7 @@ class RouteCalculator {
         isNetworkConnected = isConnected
         
         if (previousState != isConnected) {
-            Log.d("RouteCalculator", "Network state changed: $previousState -> $isConnected")
+            Logging.d("RouteCalculator", "Network state changed: $previousState -> $isConnected")
         }
     }
 
@@ -74,16 +74,16 @@ class RouteCalculator {
         waypoints: List<Waypoint>,
         calculateRouteCallback: CalculateRouteCallback?
     ) {
-        Log.d("RouteCalculator", "=== calculateRouteWithWaypoints called ===")
-        Log.d("RouteCalculator", "Waypoints count: ${waypoints.size}")
+        Logging.d("RouteCalculator", "=== calculateRouteWithWaypoints called ===")
+        Logging.d("RouteCalculator", "Waypoints count: ${waypoints.size}")
         
         if (waypoints.size < 2) {
-            Log.e("RouteCalculator", "Need at least 2 waypoints, got ${waypoints.size}")
+            Logging.e("RouteCalculator", "Need at least 2 waypoints, got ${waypoints.size}")
             return
         }
 
         waypoints.forEachIndexed { index, waypoint ->
-            Log.d("RouteCalculator", "Waypoint $index: ${waypoint.coordinates.latitude}, ${waypoint.coordinates.longitude}")
+            Logging.d("RouteCalculator", "Waypoint $index: ${waypoint.coordinates.latitude}, ${waypoint.coordinates.longitude}")
         }
 
         // A route handle is required for the DynamicRoutingEngine to get updates on traffic-optimized routes.
@@ -92,7 +92,7 @@ class RouteCalculator {
         // Keep original waypoint order from trip data
         routingOptions.routeOptions.optimizeWaypointsOrder = false
 
-        Log.d("RouteCalculator", "Starting route calculation with ${waypoints.size} waypoints...")
+        Logging.d("RouteCalculator", "Starting route calculation with ${waypoints.size} waypoints...")
         calculateRouteWithEngine(waypoints, routingOptions, calculateRouteCallback)
     }
 
@@ -107,28 +107,28 @@ class RouteCalculator {
         val primaryEngine = getSelectedRoutingEngine()
         val engineName = if (isNetworkConnected) "online" else "offline"
         
-        Log.d("RouteCalculator", "Using $engineName routing engine for calculation")
+        Logging.d("RouteCalculator", "Using $engineName routing engine for calculation")
 
         primaryEngine.calculateRoute(waypoints, routingOptions) { routingError, routes ->
             if (routingError == null && routes != null && routes.isNotEmpty()) {
                 // Success with primary engine
-                Log.d("RouteCalculator", "Route calculated successfully using $engineName engine")
+                Logging.d("RouteCalculator", "Route calculated successfully using $engineName engine")
                 calculateRouteCallback?.onRouteCalculated(null, routes)
             } else if (isNetworkConnected && routingError != null) {
                 // Online routing failed, try offline fallback
-                Log.w("RouteCalculator", "Online routing failed: ${routingError?.name}, trying offline fallback")
+                Logging.w("RouteCalculator", "Online routing failed: ${routingError?.name}, trying offline fallback")
                 offlineRoutingEngine?.calculateRoute(waypoints, routingOptions) { offlineError, offlineRoutes ->
                     if (offlineError == null && offlineRoutes != null && offlineRoutes.isNotEmpty()) {
-                        Log.d("RouteCalculator", "Route calculated successfully using offline engine (fallback)")
+                        Logging.d("RouteCalculator", "Route calculated successfully using offline engine (fallback)")
                         calculateRouteCallback?.onRouteCalculated(null, offlineRoutes)
                     } else {
-                        Log.e("RouteCalculator", "Both online and offline routing failed")
+                        Logging.e("RouteCalculator", "Both online and offline routing failed")
                         calculateRouteCallback?.onRouteCalculated(offlineError ?: routingError, null)
                     }
                 }
             } else {
                 // Offline routing failed or no fallback needed
-                Log.e("RouteCalculator", "Route calculation failed: ${routingError?.name}")
+                Logging.e("RouteCalculator", "Route calculation failed: ${routingError?.name}")
                 calculateRouteCallback?.onRouteCalculated(routingError, null)
             }
         }

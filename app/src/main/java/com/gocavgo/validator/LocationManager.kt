@@ -1,6 +1,6 @@
 package com.gocavgo.validator
 
-import android.util.Log
+import com.gocavgo.validator.util.Logging
 import android.os.Handler
 import com.here.sdk.core.errors.InstantiationErrorException
 import com.here.sdk.core.Location
@@ -25,9 +25,9 @@ class LocationManager(private val handler: Handler) {
     fun initialize() {
         try {
             locationEngine = LocationEngine()
-            Log.d(TAG, "LocationEngine initialized successfully")
+            Logging.d(TAG, "LocationEngine initialized successfully")
         } catch (e: InstantiationErrorException) {
-            Log.e(TAG, "Initialization of LocationEngine failed: ${e.error.name}")
+            Logging.e(TAG, "Initialization of LocationEngine failed: ${e.error.name}")
         }
     }
 
@@ -43,16 +43,16 @@ class LocationManager(private val handler: Handler) {
     ) {
         if (!isSimulator) {
             locationEngine?.let { engine ->
-                Log.d(TAG, "Setting up location source for real-time navigation")
+                Logging.d(TAG, "Setting up location source for real-time navigation")
 
                 val locationStatusListener = object : com.here.sdk.location.LocationStatusListener {
                     override fun onStatusChanged(locationEngineStatus: LocationEngineStatus) {
-                        Log.d(TAG, "Location engine status: ${locationEngineStatus.name}")
+                        Logging.d(TAG, "Location engine status: ${locationEngineStatus.name}")
                     }
 
                     override fun onFeaturesNotAvailable(features: List<LocationFeature>) {
                         for (feature in features) {
-                            Log.w(TAG, "Location feature not available: ${feature.name}")
+                            Logging.w(TAG, "Location feature not available: ${feature.name}")
                         }
                     }
                 }
@@ -62,27 +62,27 @@ class LocationManager(private val handler: Handler) {
                     engine.addLocationStatusListener(locationStatusListener)
                     engine.confirmHEREPrivacyNoticeInclusion()
                     engine.start(LocationAccuracy.NAVIGATION)
-                    Log.d(TAG, "Added navigation location listener and started engine")
+                    Logging.d(TAG, "Added navigation location listener and started engine")
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed to add/start location engine: ${e.message}", e)
+                    Logging.e(TAG, "Failed to add/start location engine: ${e.message}", e)
                     onSimulatedFallback()
                 }
             } ?: run {
-                Log.w(TAG, "Location engine not available, falling back to simulated navigation")
+                Logging.w(TAG, "Location engine not available, falling back to simulated navigation")
                 onSimulatedFallback()
             }
         } else {
             try {
                 locationSimulator = LocationSimulator(route, LocationSimulatorOptions())
             } catch (e: InstantiationErrorException) {
-                Log.e(TAG, "Initialization of LocationSimulator failed: ${e.error.name}")
+                Logging.e(TAG, "Initialization of LocationSimulator failed: ${e.error.name}")
                 throw RuntimeException("Initialization of LocationSimulator failed: " + e.error.name)
             }
 
             locationSimulator?.let { simulator ->
                 simulator.listener = locationListener
                 simulator.start()
-                Log.d(TAG, "Location simulation started")
+                Logging.d(TAG, "Location simulation started")
             }
         }
     }

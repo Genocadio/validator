@@ -11,7 +11,7 @@ import android.os.Binder
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
-import android.util.Log
+import com.gocavgo.validator.util.Logging
 import androidx.core.app.NotificationCompat
 import com.gocavgo.validator.MainActivity
 import com.gocavgo.validator.R
@@ -20,6 +20,8 @@ import com.gocavgo.validator.network.NetworkMonitor
 import com.gocavgo.validator.database.DatabaseManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import java.util.concurrent.atomic.AtomicBoolean
@@ -58,6 +60,7 @@ class MqttForegroundService : Service() {
     private var networkMonitor: NetworkMonitor? = null
     private val serviceScope = CoroutineScope(Dispatchers.IO)
     private var databaseManager: DatabaseManager? = null
+    private var connectionMonitorJob: Job? = null // Periodic connection verification
     
     inner class MqttServiceBinder : Binder() {
         fun getService(): MqttForegroundService = this@MqttForegroundService
@@ -65,7 +68,7 @@ class MqttForegroundService : Service() {
     
     override fun onCreate() {
         super.onCreate()
-        Log.d(TAG, "MqttForegroundService created")
+        Logging.d(TAG, "MqttForegroundService created")
         
         // Create notification channel
         createNotificationChannel()
@@ -93,7 +96,7 @@ class MqttForegroundService : Service() {
     }
     
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.d(TAG, "MqttForegroundService started with action: ${intent?.action}")
+        Logging.d(TAG, "MqttForegroundService started with action: ${intent?.action}")
         
         when (intent?.action) {
             ACTION_START_SERVICE -> {
@@ -114,7 +117,10 @@ class MqttForegroundService : Service() {
     override fun onBind(intent: Intent?): IBinder = binder
     
     override fun onDestroy() {
-        Log.d(TAG, "=== MqttForegroundService DESTROY STARTED ===")
+        Logging.d(TAG, "=== MqttForegroundService DESTROY STARTED ===")
+        
+        // Stop periodic connection verification
+        stopPeriodicConnectionVerification()
         
         // Release wake lock
         releaseWakeLock()
@@ -132,7 +138,7 @@ class MqttForegroundService : Service() {
         INSTANCE = null
         isServiceRunning.set(false)
         
-        Log.d(TAG, "=== MqttForegroundService DESTROY COMPLETE ===")
+        Logging.d(TAG, "=== MqttForegroundService DESTROY COMPLETE ===")
         super.onDestroy()
     }
     
@@ -144,27 +150,30 @@ class MqttForegroundService : Service() {
             val notification = createForegroundNotification()
             startForeground(NOTIFICATION_ID, notification)
             
-            Log.d(TAG, "Foreground service started with notification")
+            Logging.d(TAG, "Foreground service started with notification")
             
             // Ensure MQTT service is connected
             serviceScope.launch {
                 try {
                     mqttService?.let { mqtt ->
                         if (!mqtt.isConnected()) {
-                            Log.d(TAG, "MQTT not connected, attempting connection...")
+                            Logging.d(TAG, "MQTT not connected, attempting connection...")
                             // MQTT service should already be initialized, just ensure connection
                             mqtt.checkAndFixInconsistentState()
                         } else {
-                            Log.d(TAG, "MQTT already connected")
+                            Logging.d(TAG, "MQTT already connected")
                         }
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "Error ensuring MQTT connection: ${e.message}", e)
+                    Logging.e(TAG, "Error ensuring MQTT connection: ${e.message}", e)
                 }
             }
             
+            // Start periodic connection verification (every 30 seconds)
+            startPeriodicConnectionVerification()
+            
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to start foreground service: ${e.message}", e)
+            Logging.e(TAG, "Failed to start foreground service: ${e.message}", e)
         }
     }
     
@@ -172,7 +181,7 @@ class MqttForegroundService : Service() {
      * Stop the foreground service
      */
     private fun stopForegroundService() {
-        Log.d(TAG, "Stopping foreground service")
+        Logging.d(TAG, "Stopping foreground service")
         
         // Release wake lock
         releaseWakeLock()
@@ -181,7 +190,7 @@ class MqttForegroundService : Service() {
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
         
-        Log.d(TAG, "Foreground service stopped and removed")
+        Logging.d(TAG, "Foreground service stopped and removed")
     }
     
     /**
@@ -203,7 +212,7 @@ class MqttForegroundService : Service() {
             val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             notificationManager.createNotificationChannel(channel)
             
-            Log.d(TAG, "Created notification channel: $SERVICE_CHANNEL_ID")
+            Logging.d(TAG, "Created notification channel: $SERVICE_CHANNEL_ID")
         }
     }
     
@@ -252,9 +261,9 @@ class MqttForegroundService : Service() {
             val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             notificationManager.notify(NOTIFICATION_ID, notification)
             
-            Log.d(TAG, "Updated foreground notification")
+            Logging.d(TAG, "Updated foreground notification")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to update notification: ${e.message}", e)
+            Logging.e(TAG, "Failed to update notification: ${e.message}", e)
         }
     }
     
@@ -269,9 +278,9 @@ class MqttForegroundService : Service() {
                 "GoCavGo:MqttForegroundService"
             )
             wakeLock?.acquire(10 * 60 * 1000L /*10 minutes*/)
-            Log.d(TAG, "Wake lock acquired")
+            Logging.d(TAG, "Wake lock acquired")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to acquire wake lock: ${e.message}", e)
+            Logging.e(TAG, "Failed to acquire wake lock: ${e.message}", e)
         }
     }
     
@@ -282,10 +291,10 @@ class MqttForegroundService : Service() {
         try {
             if (wakeLock?.isHeld == true) {
                 wakeLock?.release()
-                Log.d(TAG, "Wake lock released")
+                Logging.d(TAG, "Wake lock released")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to release wake lock: ${e.message}", e)
+            Logging.e(TAG, "Failed to release wake lock: ${e.message}", e)
         }
     }
     
@@ -309,14 +318,14 @@ class MqttForegroundService : Service() {
      */
     private fun initializeNetworkMonitoring() {
         try {
-            Log.d(TAG, "Initializing background network monitoring...")
+            Logging.d(TAG, "Initializing background network monitoring...")
             
             networkMonitor = NetworkMonitor(this) { connected, type, metered ->
-                Log.d(TAG, "=== BACKGROUND NETWORK STATE CHANGED ===")
-                Log.d(TAG, "Connected: $connected")
-                Log.d(TAG, "Connection Type: $type")
-                Log.d(TAG, "Is Metered: $metered")
-                Log.d(TAG, "=========================================")
+                Logging.d(TAG, "=== BACKGROUND NETWORK STATE CHANGED ===")
+                Logging.d(TAG, "Connected: $connected")
+                Logging.d(TAG, "Connection Type: $type")
+                Logging.d(TAG, "Is Metered: $metered")
+                Logging.d(TAG, "=========================================")
                 
                 // Notify MQTT service of network changes
                 mqttService?.onNetworkStateChanged(connected, type, metered)
@@ -329,9 +338,9 @@ class MqttForegroundService : Service() {
             }
             
             networkMonitor?.startMonitoring()
-            Log.d(TAG, "Background network monitoring started successfully")
+            Logging.d(TAG, "Background network monitoring started successfully")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to initialize background network monitoring: ${e.message}", e)
+            Logging.e(TAG, "Failed to initialize background network monitoring: ${e.message}", e)
         }
     }
     
@@ -348,9 +357,9 @@ class MqttForegroundService : Service() {
                 putLong("last_updated", System.currentTimeMillis())
                 apply()
             }
-            Log.d(TAG, "Network state stored: connected=$connected, type=$type, metered=$metered")
+            Logging.d(TAG, "Network state stored: connected=$connected, type=$type, metered=$metered")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to store network state: ${e.message}", e)
+            Logging.e(TAG, "Failed to store network state: ${e.message}", e)
         }
     }
     
@@ -367,14 +376,75 @@ class MqttForegroundService : Service() {
             
             // Consider state stale if older than 5 minutes
             if (System.currentTimeMillis() - lastUpdated > 5 * 60 * 1000) {
-                Log.w(TAG, "Stored network state is stale, ignoring")
+                Logging.w(TAG, "Stored network state is stale, ignoring")
                 null
             } else {
                 NetworkMonitor.NetworkState(connected, type, metered)
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to get stored network state: ${e.message}", e)
+            Logging.e(TAG, "Failed to get stored network state: ${e.message}", e)
             null
         }
+    }
+    
+    /**
+     * Start periodic connection verification (every 30 seconds)
+     */
+    private fun startPeriodicConnectionVerification() {
+        stopPeriodicConnectionVerification() // Stop any existing monitoring
+        
+        connectionMonitorJob = serviceScope.launch {
+            try {
+                while (isActive) {
+                    delay(30000) // Check every 30 seconds
+                    
+                    try {
+                        mqttService?.let { mqtt ->
+                            val isConnected = mqtt.isConnected()
+                            val isActive = mqtt.isServiceActive()
+                            val isHealthy = mqtt.isHealthy()
+                            
+                            Logging.d(TAG, "Periodic connection check: connected=$isConnected, active=$isActive, healthy=$isHealthy")
+                            
+                            // If service is active but not connected, try to fix
+                            if (isActive && !isConnected) {
+                                Logging.w(TAG, "Periodic check: Service active but not connected, attempting fix")
+                                mqtt.checkAndFixInconsistentState()
+                            }
+                            
+                            // If unhealthy for >2 minutes, trigger full restart
+                            if (!isHealthy && isActive) {
+                                val status = mqtt.getServiceStatus()
+                                val lastConnectionTime = status["lastConnectionTime"] as? Long ?: 0L
+                                val currentTime = System.currentTimeMillis()
+                                val timeSinceConnection = if (lastConnectionTime > 0) currentTime - lastConnectionTime else Long.MAX_VALUE
+                                
+                                if (timeSinceConnection > 120000) { // 2 minutes
+                                    Logging.w(TAG, "Periodic check: MQTT unhealthy for >2 minutes, triggering full restart")
+                                    mqtt.fullRestart()
+                                }
+                            }
+                            
+                            // Update notification with connection status
+                            updateNotification()
+                        }
+                    } catch (e: Exception) {
+                        Logging.e(TAG, "Error in periodic connection verification: ${e.message}", e)
+                    }
+                }
+            } catch (e: Exception) {
+                Logging.e(TAG, "Periodic connection verification error: ${e.message}", e)
+            }
+        }
+        
+        Logging.d(TAG, "Periodic connection verification started (every 30 seconds)")
+    }
+    
+    /**
+     * Stop periodic connection verification
+     */
+    private fun stopPeriodicConnectionVerification() {
+        connectionMonitorJob?.cancel()
+        connectionMonitorJob = null
     }
 }

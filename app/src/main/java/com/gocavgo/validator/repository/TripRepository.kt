@@ -8,7 +8,7 @@ import com.gocavgo.validator.service.RemoteDataManager
 import com.gocavgo.validator.service.RemoteResult
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
-import android.util.Log
+import com.gocavgo.validator.util.Logging
 
 class TripRepository(context: Context) {
     
@@ -75,7 +75,7 @@ class TripRepository(context: Context) {
         val entity = TripEntity.fromTripResponse(trip)
         // Use insertTrip to handle both new and existing trips (REPLACE on conflict)
         tripDao.insertTrip(entity)
-        Log.d("TripRepository", "Saved trip in database: ID=${trip.id}, remaining_time=${trip.remaining_time_to_destination}, remaining_distance=${trip.remaining_distance_to_destination}")
+        Logging.d("TripRepository", "Saved trip in database: ID=${trip.id}, remaining_time=${trip.remaining_time_to_destination}, remaining_distance=${trip.remaining_distance_to_destination}")
     }
     
     // Update trip in database
@@ -160,7 +160,7 @@ class TripRepository(context: Context) {
             
             // Save updated trip to database
             saveTrip(updatedTrip)
-            Log.d("TripRepository", "Updated waypoint $waypointId is_next status to $isNext in trip $tripId")
+            Logging.d("TripRepository", "Updated waypoint $waypointId is_next status to $isNext in trip $tripId")
         }
     }
 
@@ -186,7 +186,7 @@ class TripRepository(context: Context) {
 
             val updatedTrip = trip.copy(waypoints = updatedWaypoints)
             saveTrip(updatedTrip)
-            Log.d("TripRepository", "Saved remaining progress to DB: trip=$tripId, waypoint=$waypointId, time=${remainingTimeSeconds}, distance=${remainingDistanceMeters}")
+            Logging.d("TripRepository", "Saved remaining progress to DB: trip=$tripId, waypoint=$waypointId, time=${remainingTimeSeconds}, distance=${remainingDistanceMeters}")
         }
     }
 
@@ -212,7 +212,7 @@ class TripRepository(context: Context) {
 
             val updatedTrip = trip.copy(waypoints = updatedWaypoints)
             saveTrip(updatedTrip)
-            Log.d("TripRepository", "Saved original waypoint data to DB: trip=$tripId, waypoint=$waypointId, length=${waypointLengthMeters}m, time=${waypointTimeSeconds}s")
+            Logging.d("TripRepository", "Saved original waypoint data to DB: trip=$tripId, waypoint=$waypointId, length=${waypointLengthMeters}m, time=${waypointTimeSeconds}s")
         }
     }
 
@@ -237,7 +237,7 @@ class TripRepository(context: Context) {
 
             val updatedTrip = trip.copy(waypoints = updatedWaypoints)
             saveTrip(updatedTrip)
-            Log.d("TripRepository", "Saved waypoint passed timestamp to DB: trip=$tripId, waypoint=$waypointId, timestamp=$passedTimestamp")
+            Logging.d("TripRepository", "Saved waypoint passed timestamp to DB: trip=$tripId, waypoint=$waypointId, timestamp=$passedTimestamp")
         }
     }
 
@@ -253,7 +253,7 @@ class TripRepository(context: Context) {
                 completion_timestamp = completionTimestamp
             )
             saveTrip(updatedTrip)
-            Log.d("TripRepository", "Saved trip completion timestamp to DB: trip=$tripId, timestamp=$completionTimestamp")
+            Logging.d("TripRepository", "Saved trip completion timestamp to DB: trip=$tripId, timestamp=$completionTimestamp")
         }
     }
 
@@ -265,35 +265,35 @@ class TripRepository(context: Context) {
     ) {
         val trip = getTripById(tripId)
         if (trip != null) {
-            Log.d("TripRepository", "=== BEFORE UPDATE ===")
-            Log.d("TripRepository", "Current trip remaining_time_to_destination: ${trip.remaining_time_to_destination}")
-            Log.d("TripRepository", "Current trip remaining_distance_to_destination: ${trip.remaining_distance_to_destination}")
-            Log.d("TripRepository", "New remainingTimeToDestination: $remainingTimeToDestination")
-            Log.d("TripRepository", "New remainingDistanceToDestination: $remainingDistanceToDestination")
+            Logging.d("TripRepository", "=== BEFORE UPDATE ===")
+            Logging.d("TripRepository", "Current trip remaining_time_to_destination: ${trip.remaining_time_to_destination}")
+            Logging.d("TripRepository", "Current trip remaining_distance_to_destination: ${trip.remaining_distance_to_destination}")
+            Logging.d("TripRepository", "New remainingTimeToDestination: $remainingTimeToDestination")
+            Logging.d("TripRepository", "New remainingDistanceToDestination: $remainingDistanceToDestination")
             
             val updatedTrip = trip.copy(
                 remaining_time_to_destination = remainingTimeToDestination ?: trip.remaining_time_to_destination,
                 remaining_distance_to_destination = remainingDistanceToDestination ?: trip.remaining_distance_to_destination
             )
             
-            Log.d("TripRepository", "=== AFTER COPY ===")
-            Log.d("TripRepository", "Updated trip remaining_time_to_destination: ${updatedTrip.remaining_time_to_destination}")
-            Log.d("TripRepository", "Updated trip remaining_distance_to_destination: ${updatedTrip.remaining_distance_to_destination}")
+            Logging.d("TripRepository", "=== AFTER COPY ===")
+            Logging.d("TripRepository", "Updated trip remaining_time_to_destination: ${updatedTrip.remaining_time_to_destination}")
+            Logging.d("TripRepository", "Updated trip remaining_distance_to_destination: ${updatedTrip.remaining_distance_to_destination}")
             
             saveTrip(updatedTrip)
-            Log.d("TripRepository", "Saved trip remaining progress to DB: trip=$tripId, time=${remainingTimeToDestination}, distance=${remainingDistanceToDestination}")
+            Logging.d("TripRepository", "Saved trip remaining progress to DB: trip=$tripId, time=${remainingTimeToDestination}, distance=${remainingDistanceToDestination}")
             
             // Verify the save by immediately fetching the trip again
             val verifyTrip = getTripById(tripId)
             if (verifyTrip != null) {
-                Log.d("TripRepository", "=== VERIFICATION AFTER SAVE ===")
-                Log.d("TripRepository", "Verified trip remaining_time_to_destination: ${verifyTrip.remaining_time_to_destination}")
-                Log.d("TripRepository", "Verified trip remaining_distance_to_destination: ${verifyTrip.remaining_distance_to_destination}")
+                Logging.d("TripRepository", "=== VERIFICATION AFTER SAVE ===")
+                Logging.d("TripRepository", "Verified trip remaining_time_to_destination: ${verifyTrip.remaining_time_to_destination}")
+                Logging.d("TripRepository", "Verified trip remaining_distance_to_destination: ${verifyTrip.remaining_distance_to_destination}")
             } else {
-                Log.e("TripRepository", "Failed to fetch trip for verification after save")
+                Logging.e("TripRepository", "Failed to fetch trip for verification after save")
             }
         } else {
-            Log.e("TripRepository", "Trip not found for ID: $tripId")
+            Logging.e("TripRepository", "Trip not found for ID: $tripId")
         }
     }
     
@@ -320,7 +320,7 @@ class TripRepository(context: Context) {
                 timestamp = timestamp
             )
             vehicleLocationDao.upsertVehicleLocation(vehicleLocation)
-            Log.d("TripRepository", "Vehicle location stored in VehicleLocationEntity: $latitude, $longitude, speed: $speed, accuracy: $accuracy, bearing: $bearing")
+            Logging.d("TripRepository", "Vehicle location stored in VehicleLocationEntity: $latitude, $longitude, speed: $speed, accuracy: $accuracy, bearing: $bearing")
             
             // Update the vehicle location in the active trip (for MQTT)
             val activeTrip = getActiveTripByVehicle(vehicleId)
@@ -336,12 +336,12 @@ class TripRepository(context: Context) {
                 val updatedTrip = activeTrip.copy(vehicle = updatedVehicle)
                 saveTrip(updatedTrip)
                 
-                Log.d("TripRepository", "Vehicle location updated in trip: $latitude, $longitude, speed: $speed")
+                Logging.d("TripRepository", "Vehicle location updated in trip: $latitude, $longitude, speed: $speed")
             } else {
-                Log.w("TripRepository", "No active trip found for vehicle $vehicleId, but location stored in VehicleLocationEntity")
+                Logging.w("TripRepository", "No active trip found for vehicle $vehicleId, but location stored in VehicleLocationEntity")
             }
         } catch (e: Exception) {
-            Log.e("TripRepository", "Failed to update vehicle location: ${e.message}", e)
+            Logging.e("TripRepository", "Failed to update vehicle location: ${e.message}", e)
         }
     }
     
@@ -357,12 +357,12 @@ class TripRepository(context: Context) {
             val beforeCount = tripDao.getTripCountByVehicle(vehicleId)
             val currentTripIds = getAllTripIdsByVehicle(vehicleId)
             
-            Log.d("TripRepository", "=== CLEANUP DEBUG ===")
-            Log.d("TripRepository", "Vehicle ID: $vehicleId")
-            Log.d("TripRepository", "Available trip IDs from remote: $availableTripIds")
-            Log.d("TripRepository", "Current trip IDs in database: $currentTripIds")
-            Log.d("TripRepository", "Trips to keep: ${currentTripIds.intersect(availableTripIds.toSet())}")
-            Log.d("TripRepository", "Trips to delete: ${currentTripIds.filter { it !in availableTripIds }}")
+            Logging.d("TripRepository", "=== CLEANUP DEBUG ===")
+            Logging.d("TripRepository", "Vehicle ID: $vehicleId")
+            Logging.d("TripRepository", "Available trip IDs from remote: $availableTripIds")
+            Logging.d("TripRepository", "Current trip IDs in database: $currentTripIds")
+            Logging.d("TripRepository", "Trips to keep: ${currentTripIds.intersect(availableTripIds.toSet())}")
+            Logging.d("TripRepository", "Trips to delete: ${currentTripIds.filter { it !in availableTripIds }}")
             
             // Delete trips that are not in the available list
             tripDao.deleteTripsNotInList(vehicleId, availableTripIds)
@@ -371,10 +371,10 @@ class TripRepository(context: Context) {
             val afterCount = tripDao.getTripCountByVehicle(vehicleId)
             val deletedCount = beforeCount - afterCount
             
-            Log.d("TripRepository", "Cleanup result: $deletedCount trips deleted (before: $beforeCount, after: $afterCount)")
-            Log.d("TripRepository", "=== END CLEANUP DEBUG ===")
+            Logging.d("TripRepository", "Cleanup result: $deletedCount trips deleted (before: $beforeCount, after: $afterCount)")
+            Logging.d("TripRepository", "=== END CLEANUP DEBUG ===")
         } catch (e: Exception) {
-            Log.e("TripRepository", "Failed to cleanup unavailable trips: ${e.message}", e)
+            Logging.e("TripRepository", "Failed to cleanup unavailable trips: ${e.message}", e)
         }
     }
     

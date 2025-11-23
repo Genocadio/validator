@@ -43,6 +43,7 @@ import com.here.sdk.routing.Route
 import com.here.sdk.routing.Waypoint
 import com.here.sdk.routing.WaypointType
 import kotlinx.coroutines.*
+import kotlinx.coroutines.isActive
 import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.TimeUnit
@@ -80,6 +81,19 @@ class AutoModeHeadlessForegroundService : Service() {
      * This contains the latest navigation state (distance, speed) that Service is displaying
      */
     fun getCurrentNavigationTextForSync(): String = notificationMessage
+    
+    /**
+     * Get current speed from Service's NavigationHandler
+     * Returns speed in meters per second, or 0.0 if not available
+     */
+    fun getCurrentSpeedForSync(): Double {
+        return try {
+            app?.getNavigationExample()?.getNavigationHandler()?.currentSpeedInMetersPerSecond ?: 0.0
+        } catch (e: Exception) {
+            Logging.e(TAG, "Error getting speed from Service NavigationHandler: ${e.message}", e)
+            0.0
+        }
+    }
     
     /**
      * Sync cache from Activity to Service
@@ -130,6 +144,7 @@ class AutoModeHeadlessForegroundService : Service() {
     // Background coroutines
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var periodicFetchJob: Job? = null
+    private var mqttHealthCheckJob: Job? = null // Periodic MQTT health check
     
     // Confirmation receiver
     private var confirmationReceiver: BroadcastReceiver? = null
@@ -324,6 +339,9 @@ class AutoModeHeadlessForegroundService : Service() {
                 // Start periodic backend fetch
                 startPeriodicBackendFetch()
                 
+                // Start periodic MQTT health check
+                startPeriodicMqttHealthCheck()
+                
                 // Restore state from database if Activity is not active
                 if (!isActivityActive()) {
                     restoreStateFromDatabase()
@@ -393,6 +411,9 @@ class AutoModeHeadlessForegroundService : Service() {
         
         // Cancel periodic fetch job
         periodicFetchJob?.cancel()
+        
+        // Stop periodic MQTT health check
+        stopPeriodicMqttHealthCheck()
         
         // Unregister receivers
         try {
@@ -586,6 +607,14 @@ class AutoModeHeadlessForegroundService : Service() {
                 mqttService?.let { mqtt: com.gocavgo.validator.service.MqttService ->
                     validator.initializeMqttService(mqtt)
                     Logging.d(TAG, "MQTT service initialized in App's trip section validator")
+                }
+                
+                // Set callback for destination reached - when navigation completes, call onNavigationComplete
+                validator.setDestinationReachedCallback {
+                    Logging.d(TAG, "SERVICE: Destination reached callback triggered - completing navigation")
+                    serviceScope.launch {
+                        onNavigationComplete()
+                    }
                 }
                 
                 // Set callback for trip deletion - when trip is not found in DB, transition to waiting state
@@ -985,7 +1014,12 @@ class AutoModeHeadlessForegroundService : Service() {
     
     // Update navigation display using App's progress data (same pattern as HeadlessNavigActivity)
     private fun updateNavigationDisplay() {
-        if (!isNavigating.get()) return
+        // Don't update navigation display if navigation is not active
+        // This prevents stale speed/distance from being shown after navigation completes
+        if (!isNavigating.get()) {
+            Logging.d(TAG, "SERVICE: updateNavigationDisplay called but not navigating, skipping")
+            return
+        }
         
         val waypointProgress = getProgressFromApp()
         val trip = currentTrip ?: return
@@ -1389,6 +1423,68 @@ class AutoModeHeadlessForegroundService : Service() {
         }
         
         Logging.d(TAG, "=== SERVICE: END PERIODIC FETCH ===")
+    }
+    
+    /**
+     * Start periodic MQTT health check (every 60 seconds)
+     */
+    private fun startPeriodicMqttHealthCheck() {
+        stopPeriodicMqttHealthCheck() // Stop any existing check
+        
+        mqttHealthCheckJob = serviceScope.launch {
+            try {
+                while (isActive) {
+                    delay(60000) // Check every 60 seconds
+                    
+                    try {
+                        mqttService?.let { mqtt ->
+                            val isConnected = mqtt.isConnected()
+                            val isActive = mqtt.isServiceActive()
+                            val isHealthy = mqtt.isHealthy()
+                            
+                            Logging.d(TAG, "SERVICE: Periodic MQTT health check: connected=$isConnected, active=$isActive, healthy=$isHealthy")
+                            
+                            // If service is active but not connected, try to fix
+                            if (isActive && !isConnected) {
+                                Logging.w(TAG, "SERVICE: MQTT active but not connected, attempting fix")
+                                mqtt.checkAndFixInconsistentState()
+                            }
+                            
+                            // If unhealthy for >1 minute, trigger full restart
+                            if (!isHealthy && isActive) {
+                                val status = mqtt.getServiceStatus()
+                                val lastConnectionTime = status["lastConnectionTime"] as? Long ?: 0L
+                                val currentTime = System.currentTimeMillis()
+                                val timeSinceConnection = if (lastConnectionTime > 0) currentTime - lastConnectionTime else Long.MAX_VALUE
+                                
+                                if (timeSinceConnection > 60000) { // 1 minute
+                                    Logging.w(TAG, "SERVICE: MQTT unhealthy for >1 minute, triggering full restart")
+                                    mqtt.fullRestart()
+                                }
+                            }
+                        } ?: run {
+                            // MQTT service is null, try to initialize
+                            Logging.w(TAG, "SERVICE: MQTT service is null in health check, attempting initialization")
+                            initializeMqttService()
+                        }
+                    } catch (e: Exception) {
+                        Logging.e(TAG, "SERVICE: Error in periodic MQTT health check: ${e.message}", e)
+                    }
+                }
+            } catch (e: Exception) {
+                Logging.e(TAG, "SERVICE: Periodic MQTT health check error: ${e.message}", e)
+            }
+        }
+        
+        Logging.d(TAG, "SERVICE: Periodic MQTT health check started (every 60 seconds)")
+    }
+    
+    /**
+     * Stop periodic MQTT health check
+     */
+    private fun stopPeriodicMqttHealthCheck() {
+        mqttHealthCheckJob?.cancel()
+        mqttHealthCheckJob = null
     }
     
     /**

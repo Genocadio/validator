@@ -3,7 +3,6 @@ package com.gocavgo.validator.security
 import android.content.Intent
 import android.os.Bundle
 import com.gocavgo.validator.R
-import android.util.Log
 import android.widget.Button
 import com.gocavgo.validator.util.Logging
 import android.widget.EditText
@@ -95,7 +94,7 @@ class VehicleAuthActivity : AppCompatActivity() {
     }
 
     private fun loadSavedVehicleData() {
-        Log.d(TAG, "Loading saved vehicle data...")
+        Logging.d(TAG, "Loading saved vehicle data...")
 
         // Hide input fields and buttons
         containerInputFields?.visibility = View.GONE
@@ -119,12 +118,12 @@ class VehicleAuthActivity : AppCompatActivity() {
                 Toast.LENGTH_LONG
             ).show()
 
-            Log.d(
+            Logging.d(
                 TAG,
                 "Loaded vehicle ID: ${vehicleInfo.vehicleId}, Company ID: ${vehicleInfo.companyId}"
             )
         } else {
-            Log.e(TAG, "Failed to load vehicle data")
+            Logging.e(TAG, "Failed to load vehicle data")
             Toast.makeText(this, "Error loading vehicle data", Toast.LENGTH_SHORT).show()
         }
     }
@@ -228,18 +227,18 @@ class VehicleAuthActivity : AppCompatActivity() {
     private fun generateKeyPair() {
         if (securityManager.generateNewKeyPair()) {
             val publicKeyBase64 = securityManager.getPublicKeyBase64()
-            Log.d(TAG, "Key pair generated successfully")
-            Log.d(TAG, "Public Key (Base64): $publicKeyBase64")
+            Logging.d(TAG, "Key pair generated successfully")
+            Logging.d(TAG, "Public Key (Base64): $publicKeyBase64")
             Toast.makeText(this, "Key pair generated successfully", Toast.LENGTH_SHORT).show()
         } else {
-            Log.e(TAG, "Failed to generate key pair")
+            Logging.e(TAG, "Failed to generate key pair")
             Toast.makeText(this, "Error generating key pair", Toast.LENGTH_LONG).show()
         }
     }
 
     private fun logoutVehicle() {
         try {
-            Log.d(TAG, "Logging out vehicle and clearing credentials...")
+            Logging.d(TAG, "Logging out vehicle and clearing credentials...")
             
             // Clear vehicle data from preferences
             securityManager.clearVehicleData()
@@ -262,10 +261,10 @@ class VehicleAuthActivity : AppCompatActivity() {
                 Toast.LENGTH_LONG
             ).show()
             
-            Log.d(TAG, "Vehicle logout completed successfully")
+            Logging.d(TAG, "Vehicle logout completed successfully")
             
         } catch (e: Exception) {
-            Log.e(TAG, "Error during vehicle logout", e)
+            Logging.e(TAG, "Error during vehicle logout", e)
             Toast.makeText(this, "Error during logout: ${e.message}", Toast.LENGTH_LONG).show()
         }
     }
@@ -299,7 +298,7 @@ class VehicleAuthActivity : AppCompatActivity() {
 
             sendLoginToBackend(loginData)
         } catch (e: Exception) {
-            Log.e(TAG, "Error during vehicle login", e)
+            Logging.e(TAG, "Error during vehicle login", e)
             Toast.makeText(this, "Login failed: ${e.message}", Toast.LENGTH_LONG).show()
             btnLoginVehicle?.isEnabled = true
         }
@@ -308,7 +307,7 @@ class VehicleAuthActivity : AppCompatActivity() {
     private fun sendLoginToBackend(loginData: VehicleLoginRequestDto) {
         try {
             val json = gson.toJson(loginData)
-            Log.d(TAG, "Sending login data: $json")
+            Logging.d(TAG, "Sending login data: $json")
 
             val requestBody = json.toRequestBody("application/json".toMediaType())
 
@@ -320,7 +319,7 @@ class VehicleAuthActivity : AppCompatActivity() {
 
             httpClient.newCall(request).enqueue(object : Callback {
                 override fun onFailure(call: Call, e: IOException) {
-                    Log.e(TAG, "API call failed", e)
+                    Logging.e(TAG, "API call failed", e)
                     runOnUiThread {
                         val errorMessage = "Login failed: ${e.message ?: "Network error"}"
                         Toast.makeText(
@@ -334,7 +333,7 @@ class VehicleAuthActivity : AppCompatActivity() {
 
                 override fun onResponse(call: Call, response: Response) {
                     val responseBody = response.body?.string()
-                    Log.d(TAG, "API Login Response: ${response.code} - $responseBody")
+                    Logging.d(TAG, "API Login Response: ${response.code} - $responseBody")
 
                     runOnUiThread {
                         if (response.isSuccessful && responseBody != null) {
@@ -365,7 +364,7 @@ class VehicleAuthActivity : AppCompatActivity() {
                                     finish()
                                 }
                             } catch (e: Exception) {
-                                Log.e(TAG, "Error parsing login response", e)
+                                Logging.e(TAG, "Error parsing login response", e)
                                 Toast.makeText(
                                     this@VehicleAuthActivity,
                                     "Login successful but error saving data",
@@ -386,7 +385,7 @@ class VehicleAuthActivity : AppCompatActivity() {
                 }
             })
         } catch (e: Exception) {
-            Log.e(TAG, "Error sending login to backend", e)
+            Logging.e(TAG, "Error sending login to backend", e)
             Toast.makeText(this, "Error sending data: ${e.message}", Toast.LENGTH_LONG).show()
             btnLoginVehicle?.isEnabled = true
         }
@@ -476,7 +475,7 @@ class VehicleAuthActivity : AppCompatActivity() {
             sendRegistrationToBackend(registrationData)
 
         } catch (e: Exception) {
-            Log.e(TAG, "Error during vehicle registration", e)
+            Logging.e(TAG, "Error during vehicle registration", e)
             Toast.makeText(this, "Registration failed: ${e.message}", Toast.LENGTH_LONG).show()
             btnRegisterVehicle?.isEnabled = true
         }
@@ -485,7 +484,7 @@ class VehicleAuthActivity : AppCompatActivity() {
     private fun sendRegistrationToBackend(registrationData: VehicleRequestDto) {
         try {
             val json = gson.toJson(registrationData)
-            Log.d(TAG, "Sending registration data: $json")
+            Logging.d(TAG, "Sending registration data: $json")
 
             val requestBody = json.toRequestBody("application/json".toMediaType())
 
@@ -497,7 +496,7 @@ class VehicleAuthActivity : AppCompatActivity() {
 
             httpClient.newCall(request).enqueue(object : Callback {
                 override fun onFailure(call: Call, e: IOException) {
-                    Log.e(TAG, "API call failed", e)
+                    Logging.e(TAG, "API call failed", e)
                     runOnUiThread {
                         val errorMessage = "Registration failed: ${e.message ?: "Network error"}"
                         Toast.makeText(
@@ -511,7 +510,7 @@ class VehicleAuthActivity : AppCompatActivity() {
 
                 override fun onResponse(call: Call, response: Response) {
                     val responseBody = response.body?.string()
-                    Log.d(TAG, "API Response: ${response.code} - $responseBody")
+                    Logging.d(TAG, "API Response: ${response.code} - $responseBody")
 
                     runOnUiThread {
                         if (response.isSuccessful && responseBody != null) {
@@ -545,7 +544,7 @@ class VehicleAuthActivity : AppCompatActivity() {
                                 }
 
                             } catch (e: Exception) {
-                                Log.e(TAG, "Error parsing response", e)
+                                Logging.e(TAG, "Error parsing response", e)
                                 Toast.makeText(
                                     this@VehicleAuthActivity,
                                     "Registration successful but error saving data",
@@ -567,7 +566,7 @@ class VehicleAuthActivity : AppCompatActivity() {
             })
 
         } catch (e: Exception) {
-            Log.e(TAG, "Error sending registration to backend", e)
+            Logging.e(TAG, "Error sending registration to backend", e)
             Toast.makeText(this, "Error sending data: ${e.message}", Toast.LENGTH_LONG).show()
             btnRegisterVehicle?.isEnabled = true
         }
@@ -699,7 +698,7 @@ class VehicleAuthActivity : AppCompatActivity() {
             // Fall back to main message field
             errorResponse.message ?: "Unknown error occurred"
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to parse error response", e)
+            Logging.e(TAG, "Failed to parse error response", e)
             // If parsing fails, return the raw response or a generic message
             responseBody.takeIf { it.length < 200 } ?: "An error occurred. Please try again."
         }
@@ -711,25 +710,25 @@ class VehicleAuthActivity : AppCompatActivity() {
     private fun fetchAndApplySettings(vehicleId: Int, onComplete: () -> Unit) {
         settingsScope.launch {
             try {
-                Log.d(TAG, "Fetching settings after authentication for vehicle $vehicleId")
+                Logging.d(TAG, "Fetching settings after authentication for vehicle $vehicleId")
                 val result = settingsManager.fetchSettingsFromApi(vehicleId)
                 
                 result.onSuccess { settings ->
-                    Log.d(TAG, "Settings fetched successfully after authentication")
+                    Logging.d(TAG, "Settings fetched successfully after authentication")
                     // Apply settings (check logout/deactivate)
                     runOnUiThread {
                         settingsManager.applySettings(this@VehicleAuthActivity, settings)
                         onComplete()
                     }
                 }.onFailure { error ->
-                    Log.e(TAG, "Failed to fetch settings after authentication: ${error.message}")
+                    Logging.e(TAG, "Failed to fetch settings after authentication: ${error.message}")
                     // Continue without settings - they'll be fetched on next app launch
                     runOnUiThread {
                         onComplete()
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Exception fetching settings after authentication: ${e.message}", e)
+                Logging.e(TAG, "Exception fetching settings after authentication: ${e.message}", e)
                 runOnUiThread {
                     onComplete()
                 }

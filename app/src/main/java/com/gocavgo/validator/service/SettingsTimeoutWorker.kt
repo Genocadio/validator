@@ -2,7 +2,7 @@ package com.gocavgo.validator.service
 
 import android.content.Context
 import android.content.Intent
-import android.util.Log
+import com.gocavgo.validator.util.Logging
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
@@ -49,9 +49,9 @@ class SettingsTimeoutWorker(
                     workRequest
                 )
                 
-                Log.d(TAG, "Settings timeout worker scheduled (checks every $CHECK_INTERVAL_HOURS hours, timeout after $TIMEOUT_DAYS days)")
+                Logging.d(TAG, "Settings timeout worker scheduled (checks every $CHECK_INTERVAL_HOURS hours, timeout after $TIMEOUT_DAYS days)")
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to schedule settings timeout worker: ${e.message}", e)
+                Logging.e(TAG, "Failed to schedule settings timeout worker: ${e.message}", e)
             }
         }
         
@@ -61,26 +61,26 @@ class SettingsTimeoutWorker(
         fun cancel(context: Context) {
             try {
                 WorkManager.getInstance(context).cancelUniqueWork(WORK_NAME)
-                Log.d(TAG, "Settings timeout worker cancelled")
+                Logging.d(TAG, "Settings timeout worker cancelled")
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to cancel settings timeout worker: ${e.message}", e)
+                Logging.e(TAG, "Failed to cancel settings timeout worker: ${e.message}", e)
             }
         }
     }
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         try {
-            Log.d(TAG, "=== SETTINGS TIMEOUT CHECK ===")
+            Logging.d(TAG, "=== SETTINGS TIMEOUT CHECK ===")
             
             // Check if vehicle is registered
             val securityManager = VehicleSecurityManager(applicationContext)
             if (!securityManager.isVehicleRegistered()) {
-                Log.d(TAG, "Vehicle not registered, skipping timeout check")
+                Logging.d(TAG, "Vehicle not registered, skipping timeout check")
                 return@withContext Result.success()
             }
             
             val vehicleId = securityManager.getVehicleId().toInt()
-            Log.d(TAG, "Checking timeout for vehicle ID: $vehicleId")
+            Logging.d(TAG, "Checking timeout for vehicle ID: $vehicleId")
             
             // Get settings from database
             val database = AppDatabase.getDatabase(applicationContext)
@@ -88,7 +88,7 @@ class SettingsTimeoutWorker(
             val settingsEntity = settingsDao.getSettings(vehicleId)
             
             if (settingsEntity == null) {
-                Log.d(TAG, "No settings found in database, skipping timeout check")
+                Logging.d(TAG, "No settings found in database, skipping timeout check")
                 return@withContext Result.success()
             }
             
@@ -96,44 +96,44 @@ class SettingsTimeoutWorker(
             val currentTime = System.currentTimeMillis()
             val timeSinceUpdate = currentTime - lastUpdated
             
-            Log.d(TAG, "Last settings update: $lastUpdated (${formatTime(lastUpdated)})")
-            Log.d(TAG, "Current time: $currentTime (${formatTime(currentTime)})")
-            Log.d(TAG, "Time since update: ${timeSinceUpdate / (24 * 60 * 60 * 1000)} days")
+            Logging.d(TAG, "Last settings update: $lastUpdated (${formatTime(lastUpdated)})")
+            Logging.d(TAG, "Current time: $currentTime (${formatTime(currentTime)})")
+            Logging.d(TAG, "Time since update: ${timeSinceUpdate / (24 * 60 * 60 * 1000)} days")
             
             if (timeSinceUpdate >= TIMEOUT_MILLIS) {
-                Log.w(TAG, "=== SETTINGS TIMEOUT DETECTED ===")
-                Log.w(TAG, "No settings update for ${timeSinceUpdate / (24 * 60 * 60 * 1000)} days (threshold: $TIMEOUT_DAYS days)")
-                Log.w(TAG, "Triggering automatic logout...")
+                Logging.w(TAG, "=== SETTINGS TIMEOUT DETECTED ===")
+                Logging.w(TAG, "No settings update for ${timeSinceUpdate / (24 * 60 * 60 * 1000)} days (threshold: $TIMEOUT_DAYS days)")
+                Logging.w(TAG, "Triggering automatic logout...")
                 
                 // Clear vehicle data
                 securityManager.clearVehicleData()
-                Log.d(TAG, "Vehicle data cleared")
+                Logging.d(TAG, "Vehicle data cleared")
                 
                 // Delete key pair
                 securityManager.deleteKeyPair()
-                Log.d(TAG, "Key pair deleted")
+                Logging.d(TAG, "Key pair deleted")
                 
                 // Clear settings from database
                 settingsDao.deleteSettings(vehicleId)
-                Log.d(TAG, "Settings deleted from database")
+                Logging.d(TAG, "Settings deleted from database")
                 
                 // Launch VehicleAuthActivity
                 val intent = Intent(applicationContext, VehicleAuthActivity::class.java).apply {
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
                 }
                 applicationContext.startActivity(intent)
-                Log.d(TAG, "VehicleAuthActivity launched")
+                Logging.d(TAG, "VehicleAuthActivity launched")
                 
-                Log.w(TAG, "=== AUTOMATIC LOGOUT COMPLETE ===")
+                Logging.w(TAG, "=== AUTOMATIC LOGOUT COMPLETE ===")
             } else {
                 val daysRemaining = (TIMEOUT_MILLIS - timeSinceUpdate) / (24 * 60 * 60 * 1000)
-                Log.d(TAG, "Settings are fresh. Timeout in ${daysRemaining} days")
+                Logging.d(TAG, "Settings are fresh. Timeout in ${daysRemaining} days")
             }
             
-            Log.d(TAG, "=== END SETTINGS TIMEOUT CHECK ===")
+            Logging.d(TAG, "=== END SETTINGS TIMEOUT CHECK ===")
             Result.success()
         } catch (e: Exception) {
-            Log.e(TAG, "Settings timeout check failed: ${e.message}", e)
+            Logging.e(TAG, "Settings timeout check failed: ${e.message}", e)
             Result.retry()
         }
     }

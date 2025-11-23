@@ -7,7 +7,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.Build
-import android.util.Log
+import com.gocavgo.validator.util.Logging
 import androidx.compose.ui.text.toLowerCase
 import androidx.core.app.NotificationCompat
 import com.gocavgo.validator.R
@@ -82,7 +82,7 @@ class MqttNotificationManager(private val context: Context) {
             notificationManager.createNotificationChannel(tripChannel)
             notificationManager.createNotificationChannel(bookingChannel)
             
-            Log.d(TAG, "Created notification channels")
+            Logging.d(TAG, "Created notification channels")
         }
     }
     
@@ -91,16 +91,16 @@ class MqttNotificationManager(private val context: Context) {
      */
     fun showTripUpdateNotification(tripEvent: TripEventMessage) {
         try {
-            Log.d(TAG, "Showing trip update notification for event: ${tripEvent.event}")
+            Logging.d(TAG, "Showing trip update notification for event: ${tripEvent.event}")
             
             val tripData = tripEvent.data
             val notification = createTripUpdateNotification(tripData, tripEvent.event)
             
             notificationManager.notify(TRIP_UPDATE_NOTIFICATION_ID, notification)
             
-            Log.d(TAG, "Trip update notification shown successfully")
+            Logging.d(TAG, "Trip update notification shown successfully")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to show trip update notification: ${e.message}", e)
+            Logging.e(TAG, "Failed to show trip update notification: ${e.message}", e)
         }
     }
     
@@ -116,7 +116,7 @@ class MqttNotificationManager(private val context: Context) {
         isPaid: Boolean
     ) {
         try {
-            Log.d(TAG, "Showing booking update notification for trip: $tripId")
+            Logging.d(TAG, "Showing booking update notification for trip: $tripId")
             
             val notification = createBookingUpdateNotification(
                 tripId, passengerName, pickup, dropoff, numTickets, isPaid
@@ -124,9 +124,9 @@ class MqttNotificationManager(private val context: Context) {
             
             notificationManager.notify(BOOKING_UPDATE_NOTIFICATION_ID, notification)
             
-            Log.d(TAG, "Booking update notification shown successfully")
+            Logging.d(TAG, "Booking update notification shown successfully")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to show booking update notification: ${e.message}", e)
+            Logging.e(TAG, "Failed to show booking update notification: ${e.message}", e)
         }
     }
     
@@ -280,7 +280,7 @@ class MqttNotificationManager(private val context: Context) {
             val outputFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
             outputFormat.format(date)
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to format departure time: $departureTime", e)
+            Logging.w(TAG, "Failed to format departure time: $departureTime", e)
             ""
         }
     }
@@ -291,9 +291,9 @@ class MqttNotificationManager(private val context: Context) {
     fun cancelTripUpdateNotification() {
         try {
             notificationManager.cancel(TRIP_UPDATE_NOTIFICATION_ID)
-            Log.d(TAG, "Cancelled trip update notification")
+            Logging.d(TAG, "Cancelled trip update notification")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to cancel trip update notification: ${e.message}", e)
+            Logging.e(TAG, "Failed to cancel trip update notification: ${e.message}", e)
         }
     }
     
@@ -303,9 +303,9 @@ class MqttNotificationManager(private val context: Context) {
     fun cancelBookingUpdateNotification() {
         try {
             notificationManager.cancel(BOOKING_UPDATE_NOTIFICATION_ID)
-            Log.d(TAG, "Cancelled booking update notification")
+            Logging.d(TAG, "Cancelled booking update notification")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to cancel booking update notification: ${e.message}", e)
+            Logging.e(TAG, "Failed to cancel booking update notification: ${e.message}", e)
         }
     }
     
@@ -315,9 +315,9 @@ class MqttNotificationManager(private val context: Context) {
     fun cancelAllNotifications() {
         try {
             notificationManager.cancelAll()
-            Log.d(TAG, "Cancelled all notifications")
+            Logging.d(TAG, "Cancelled all notifications")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to cancel all notifications: ${e.message}", e)
+            Logging.e(TAG, "Failed to cancel all notifications: ${e.message}", e)
         }
     }
 }
@@ -336,10 +336,10 @@ class NotificationDismissReceiver : android.content.BroadcastReceiver() {
             if (notificationId != -1) {
                 val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                 notificationManager.cancel(notificationId)
-                Log.d(TAG, "Dismissed notification with ID: $notificationId")
+                Logging.d(TAG, "Dismissed notification with ID: $notificationId")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to dismiss notification: ${e.message}", e)
+            Logging.e(TAG, "Failed to dismiss notification: ${e.message}", e)
         }
     }
 }

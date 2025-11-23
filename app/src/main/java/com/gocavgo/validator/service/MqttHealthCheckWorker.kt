@@ -1,7 +1,7 @@
 package com.gocavgo.validator.service
 
 import android.content.Context
-import android.util.Log
+import com.gocavgo.validator.util.Logging
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
@@ -42,9 +42,9 @@ class MqttHealthCheckWorker(
                     workRequest
                 )
                 
-                Log.d(TAG, "Scheduled MQTT health check every $HEALTH_CHECK_INTERVAL_MINUTES minutes")
+                Logging.d(TAG, "Scheduled MQTT health check every $HEALTH_CHECK_INTERVAL_MINUTES minutes")
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to schedule MQTT health check: ${e.message}", e)
+                Logging.e(TAG, "Failed to schedule MQTT health check: ${e.message}", e)
             }
         }
         
@@ -54,9 +54,9 @@ class MqttHealthCheckWorker(
         fun cancel(context: Context) {
             try {
                 WorkManager.getInstance(context).cancelUniqueWork(WORK_NAME)
-                Log.d(TAG, "Cancelled MQTT health check work")
+                Logging.d(TAG, "Cancelled MQTT health check work")
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to cancel MQTT health check: ${e.message}", e)
+                Logging.e(TAG, "Failed to cancel MQTT health check: ${e.message}", e)
             }
         }
         
@@ -71,7 +71,7 @@ class MqttHealthCheckWorker(
                 
                 workInfos.any { !it.state.isFinished }
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to check if health check is scheduled: ${e.message}", e)
+                Logging.e(TAG, "Failed to check if health check is scheduled: ${e.message}", e)
                 false
             }
         }
@@ -79,22 +79,26 @@ class MqttHealthCheckWorker(
     
     override suspend fun doWork(): Result {
         return try {
-            Log.d(TAG, "Starting MQTT health check...")
+            Logging.d(TAG, "Starting MQTT health check...")
             
             // Get MQTT service instance
             val mqttService = MqttService.getInstance()
             
             if (mqttService == null) {
-                Log.w(TAG, "MQTT service instance is null, skipping health check")
+                Logging.w(TAG, "MQTT service instance is null, skipping health check")
                 return Result.success()
             }
             
             // Check if service is healthy
             val isHealthy = mqttService.isHealthy()
-            Log.d(TAG, "MQTT service health status: $isHealthy")
+            Logging.d(TAG, "MQTT service health status: $isHealthy")
+            
+            // Track consecutive unhealthy checks
+            val prefs = applicationContext.getSharedPreferences("mqtt_health", Context.MODE_PRIVATE)
+            val consecutiveUnhealthy = prefs.getInt("consecutive_unhealthy", 0)
             
             if (!isHealthy) {
-                Log.w(TAG, "MQTT service is unhealthy, attempting to fix...")
+                Logging.w(TAG, "MQTT service is unhealthy, attempting to fix...")
                 
                 // Try to fix inconsistent state
                 mqttService.checkAndFixInconsistentState()
@@ -104,27 +108,41 @@ class MqttHealthCheckWorker(
                 
                 // Check again
                 val isHealthyAfterFix = mqttService.isHealthy()
-                Log.d(TAG, "MQTT service health after fix attempt: $isHealthyAfterFix")
+                Logging.d(TAG, "MQTT service health after fix attempt: $isHealthyAfterFix")
                 
                 if (!isHealthyAfterFix) {
-                    Log.w(TAG, "MQTT service still unhealthy after fix attempt")
-                    // Don't fail the work - it will retry on next interval
+                    val newConsecutiveUnhealthy = consecutiveUnhealthy + 1
+                    prefs.edit().putInt("consecutive_unhealthy", newConsecutiveUnhealthy).apply()
+                    Logging.w(TAG, "MQTT service still unhealthy after fix attempt (consecutive: $newConsecutiveUnhealthy)")
+                    
+                    // If unhealthy for 2+ consecutive checks (>10 minutes), trigger full restart
+                    if (newConsecutiveUnhealthy >= 2) {
+                        Logging.w(TAG, "MQTT service unhealthy for 2+ consecutive checks, triggering full restart")
+                        mqttService.fullRestart()
+                        // Reset counter after full restart
+                        prefs.edit().putInt("consecutive_unhealthy", 0).apply()
+                    }
+                } else {
+                    // Reset counter on successful recovery
+                    prefs.edit().putInt("consecutive_unhealthy", 0).apply()
                 }
             } else {
-                Log.d(TAG, "MQTT service is healthy")
+                Logging.d(TAG, "MQTT service is healthy")
+                // Reset counter on healthy check
+                prefs.edit().putInt("consecutive_unhealthy", 0).apply()
             }
             
             // Update foreground service notification if running
             val foregroundService = MqttForegroundService.isRunning()
             if (foregroundService) {
-                Log.d(TAG, "Foreground service is running, health check complete")
+                Logging.d(TAG, "Foreground service is running, health check complete")
             }
             
-            Log.d(TAG, "MQTT health check completed successfully")
+            Logging.d(TAG, "MQTT health check completed successfully")
             Result.success()
             
         } catch (e: Exception) {
-            Log.e(TAG, "MQTT health check failed: ${e.message}", e)
+            Logging.e(TAG, "MQTT health check failed: ${e.message}", e)
             // Return retry result to try again on next interval
             Result.retry()
         }

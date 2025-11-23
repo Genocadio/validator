@@ -1,8 +1,8 @@
 package com.gocavgo.validator.trip
 
 import android.annotation.SuppressLint
-import android.util.Log
 import com.gocavgo.validator.database.DatabaseManager
+import com.gocavgo.validator.util.Logging
 import com.gocavgo.validator.dataclass.TripResponse
 import com.gocavgo.validator.dataclass.WaypointProgress
 import com.gocavgo.validator.dataclass.TripWaypoint
@@ -68,7 +68,7 @@ class TripProgressTracker(
         try {
             loadTripData()
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to initialize TripProgressTracker: ${e.message}", e)
+            Logging.e(TAG, "Failed to initialize TripProgressTracker: ${e.message}", e)
         }
     }
 
@@ -78,27 +78,27 @@ class TripProgressTracker(
                 currentTrip = databaseManager.getTripById(tripId)
                 if (currentTrip != null) {
                     val trip = currentTrip!!
-                    Log.d(TAG, "=== TRIP PROGRESS TRACKER INITIALIZED ===")
-                    Log.d(TAG, "Trip ID: ${trip.id}")
-                    Log.d(TAG, "Vehicle: ${trip.vehicle.license_plate}")
-                    Log.d(TAG, "Route Type: ${if (trip.waypoints.isEmpty()) "Single Destination" else "Multi-Waypoint"}")
-                    Log.d(TAG, "Origin: ${trip.route.origin.google_place_name}")
-                    Log.d(TAG, "Destination: ${trip.route.destination.google_place_name}")
-                    Log.d(TAG, "Total waypoints: ${trip.waypoints.size}")
+                    Logging.d(TAG, "=== TRIP PROGRESS TRACKER INITIALIZED ===")
+                    Logging.d(TAG, "Trip ID: ${trip.id}")
+                    Logging.d(TAG, "Vehicle: ${trip.vehicle.license_plate}")
+                    Logging.d(TAG, "Route Type: ${if (trip.waypoints.isEmpty()) "Single Destination" else "Multi-Waypoint"}")
+                    Logging.d(TAG, "Origin: ${trip.route.origin.google_place_name}")
+                    Logging.d(TAG, "Destination: ${trip.route.destination.google_place_name}")
+                    Logging.d(TAG, "Total waypoints: ${trip.waypoints.size}")
                     if (trip.waypoints.isNotEmpty()) {
-                        Log.d(TAG, "Waypoints:")
+                        Logging.d(TAG, "Waypoints:")
                         trip.waypoints.sortedBy { it.order }.forEach { waypoint ->
-                            Log.d(TAG, "  ${waypoint.order}. ${waypoint.location.google_place_name}")
+                            Logging.d(TAG, "  ${waypoint.order}. ${waypoint.location.google_place_name}")
                         }
                     }
-                    Log.d(TAG, "Status: ${trip.status}")
-                    Log.d(TAG, "================================")
+                    Logging.d(TAG, "Status: ${trip.status}")
+                    Logging.d(TAG, "================================")
                     isInitialized = true
                 } else {
-                    Log.e(TAG, "Failed to load trip data for ID: $tripId")
+                    Logging.e(TAG, "Failed to load trip data for ID: $tripId")
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Error loading trip data: ${e.message}", e)
+                Logging.e(TAG, "Error loading trip data: ${e.message}", e)
             }
         }
     }
@@ -106,34 +106,34 @@ class TripProgressTracker(
     fun setCurrentRoute(route: Route?) {
         try {
             if (route == null) {
-                Log.w(TAG, "Attempted to set null route")
+                Logging.w(TAG, "Attempted to set null route")
                 return
             }
 
             currentRoute = route
-            Log.d(TAG, "=== ROUTE SET FOR PROGRESS TRACKING ===")
-            Log.d(TAG, "Route sections: ${route.sections.size}")
-            Log.d(TAG, "Total distance: ${String.format("%.1f", route.lengthInMeters / 1000.0)}km")
-            Log.d(TAG, "Estimated duration: ${formatDuration(route.duration.seconds)}")
+            Logging.d(TAG, "=== ROUTE SET FOR PROGRESS TRACKING ===")
+            Logging.d(TAG, "Route sections: ${route.sections.size}")
+            Logging.d(TAG, "Total distance: ${String.format("%.1f", route.lengthInMeters / 1000.0)}km")
+            Logging.d(TAG, "Estimated duration: ${formatDuration(route.duration.seconds)}")
 
             currentTrip?.let { trip ->
                 if (trip.waypoints.isEmpty()) {
-                    Log.d(TAG, "Route Type: Single Destination")
-                    Log.d(TAG, "From: ${trip.route.origin.google_place_name}")
-                    Log.d(TAG, "To: ${trip.route.destination.google_place_name}")
+                    Logging.d(TAG, "Route Type: Single Destination")
+                    Logging.d(TAG, "From: ${trip.route.origin.google_place_name}")
+                    Logging.d(TAG, "To: ${trip.route.destination.google_place_name}")
                 } else {
-                    Log.d(TAG, "Route Type: Multi-Waypoint")
-                    Log.d(TAG, "From: ${trip.route.origin.google_place_name}")
-                    Log.d(TAG, "To: ${trip.route.destination.google_place_name}")
-                    Log.d(TAG, "Waypoints: ${trip.waypoints.size}")
+                    Logging.d(TAG, "Route Type: Multi-Waypoint")
+                    Logging.d(TAG, "From: ${trip.route.origin.google_place_name}")
+                    Logging.d(TAG, "To: ${trip.route.destination.google_place_name}")
+                    Logging.d(TAG, "Waypoints: ${trip.waypoints.size}")
                 }
                 
                 // Initialize remaining data for waypoints to prevent null values
                 initializeWaypointRemainingData(route.lengthInMeters.toDouble(), route.duration.seconds)
             }
-            Log.d(TAG, "================================")
+            Logging.d(TAG, "================================")
         } catch (e: Exception) {
-            Log.e(TAG, "Error setting current route: ${e.message}", e)
+            Logging.e(TAG, "Error setting current route: ${e.message}", e)
         }
     }
 
@@ -145,16 +145,16 @@ class TripProgressTracker(
     private fun initializeWaypointRemainingData(totalDistanceMeters: Double, totalTimeSeconds: Long) {
         try {
             currentTrip?.let { trip ->
-                Log.d(TAG, "=== INITIALIZING WAYPOINT REMAINING DATA ===")
-                Log.d(TAG, "Total route distance: ${String.format("%.1f", totalDistanceMeters)}m")
-                Log.d(TAG, "Total route time: ${formatDuration(totalTimeSeconds)}")
+                Logging.d(TAG, "=== INITIALIZING WAYPOINT REMAINING DATA ===")
+                Logging.d(TAG, "Total route distance: ${String.format("%.1f", totalDistanceMeters)}m")
+                Logging.d(TAG, "Total route time: ${formatDuration(totalTimeSeconds)}")
                 
                 val unpassedWaypoints = trip.waypoints
                     .filter { !it.is_passed }
                     .sortedBy { it.order }
                 
                 if (unpassedWaypoints.isNotEmpty()) {
-                    Log.d(TAG, "Initializing ${unpassedWaypoints.size} unpassed waypoints with baseline remaining data")
+                    Logging.d(TAG, "Initializing ${unpassedWaypoints.size} unpassed waypoints with baseline remaining data")
                     
                     // Calculate proper initial values for each waypoint based on order
                     // Higher order waypoints should have more remaining time/distance
@@ -177,10 +177,10 @@ class TripProgressTracker(
                             val initialTime = waypoint.remaining_time ?: (baseTime + timeBuffer)
                             val initialDistance = waypoint.remaining_distance ?: (baseDistance + distanceBuffer)
                             
-                            Log.d(TAG, "Initializing waypoint ${waypoint.order} (${waypoint.location.google_place_name}):")
-                            Log.d(TAG, "  - Order ratio: ${String.format("%.2f", orderRatio)}")
-                            Log.d(TAG, "  - Base time: ${formatDuration(baseTime)}, Base distance: ${String.format("%.1f", baseDistance)}m")
-                            Log.d(TAG, "  - Final time: ${formatDuration(initialTime)}, Final distance: ${String.format("%.1f", initialDistance)}m")
+                            Logging.d(TAG, "Initializing waypoint ${waypoint.order} (${waypoint.location.google_place_name}):")
+                            Logging.d(TAG, "  - Order ratio: ${String.format("%.2f", orderRatio)}")
+                            Logging.d(TAG, "  - Base time: ${formatDuration(baseTime)}, Base distance: ${String.format("%.1f", baseDistance)}m")
+                            Logging.d(TAG, "  - Final time: ${formatDuration(initialTime)}, Final distance: ${String.format("%.1f", initialDistance)}m")
                             
                             coroutineScope.launch {
                                 try {
@@ -204,23 +204,23 @@ class TripProgressTracker(
                                         currentTrip = trip.copy(waypoints = updatedWaypoints)
                                     }
                                     
-                                    Log.d(TAG, "Initialized waypoint ${waypoint.id} (Order: ${waypoint.order}) with baseline remaining data")
+                                    Logging.d(TAG, "Initialized waypoint ${waypoint.id} (Order: ${waypoint.order}) with baseline remaining data")
                                 } catch (e: Exception) {
-                                    Log.e(TAG, "Failed to initialize waypoint ${waypoint.id}: ${e.message}", e)
+                                    Logging.e(TAG, "Failed to initialize waypoint ${waypoint.id}: ${e.message}", e)
                                 }
                             }
                         } else {
-                            Log.d(TAG, "Waypoint ${waypoint.order} already has remaining data: time=${waypoint.remaining_time?.let { formatDuration(it) } ?: "null"}, distance=${waypoint.remaining_distance?.let { String.format("%.1f", it) } ?: "null"}m")
+                            Logging.d(TAG, "Waypoint ${waypoint.order} already has remaining data: time=${waypoint.remaining_time?.let { formatDuration(it) } ?: "null"}, distance=${waypoint.remaining_distance?.let { String.format("%.1f", it) } ?: "null"}m")
                         }
                     }
                 } else {
-                    Log.d(TAG, "No unpassed waypoints to initialize")
+                    Logging.d(TAG, "No unpassed waypoints to initialize")
                 }
                 
-                Log.d(TAG, "=============================================")
+                Logging.d(TAG, "=============================================")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error initializing waypoint remaining data: ${e.message}", e)
+            Logging.e(TAG, "Error initializing waypoint remaining data: ${e.message}", e)
         }
     }
 
@@ -237,11 +237,11 @@ class TripProgressTracker(
             speedAccuracy = speedAccuracyInMetersPerSecond
             currentLocation = location
 
-            Log.d(TAG, "=== SPEED & POSITION UPDATE ===")
-            Log.d(TAG, "Speed: ${speedInMetersPerSecond?.let { String.format("%.2f", it) } ?: "Unknown"} m/s")
-            Log.d(TAG, "Speed accuracy: ${speedAccuracyInMetersPerSecond?.let { String.format("%.2f", it) } ?: "Unknown"} m/s")
-            Log.d(TAG, "Location: ${location?.coordinates?.let { "${it.latitude}, ${it.longitude}" } ?: "Unknown"}")
-            Log.d(TAG, "==============================")
+            Logging.d(TAG, "=== SPEED & POSITION UPDATE ===")
+            Logging.d(TAG, "Speed: ${speedInMetersPerSecond?.let { String.format("%.2f", it) } ?: "Unknown"} m/s")
+            Logging.d(TAG, "Speed accuracy: ${speedAccuracyInMetersPerSecond?.let { String.format("%.2f", it) } ?: "Unknown"} m/s")
+            Logging.d(TAG, "Location: ${location?.coordinates?.let { "${it.latitude}, ${it.longitude}" } ?: "Unknown"}")
+            Logging.d(TAG, "==============================")
 
             // Update vehicle location in database
             currentTrip?.let { trip ->
@@ -258,12 +258,12 @@ class TripProgressTracker(
                             )
                         }
                     } catch (e: Exception) {
-                        Log.e(TAG, "Failed to update vehicle location in database: ${e.message}", e)
+                        Logging.e(TAG, "Failed to update vehicle location in database: ${e.message}", e)
                     }
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error updating speed and position: ${e.message}", e)
+            Logging.e(TAG, "Error updating speed and position: ${e.message}", e)
         }
     }
 
@@ -271,12 +271,12 @@ class TripProgressTracker(
     fun onRouteProgressUpdate(routeProgress: RouteProgress?) {
         try {
             if (routeProgress == null) {
-                Log.w(TAG, "Received null route progress update")
+                Logging.w(TAG, "Received null route progress update")
                 return
             }
 
             if (!isInitialized) {
-                Log.w(TAG, "TripProgressTracker not yet initialized, skipping progress update")
+                Logging.w(TAG, "TripProgressTracker not yet initialized, skipping progress update")
                 return
             }
 
@@ -289,21 +289,21 @@ class TripProgressTracker(
                 val remainingDistance = try {
                     currentSectionProgress.remainingDistanceInMeters.toDouble()
                 } catch (e: Exception) {
-                    Log.w(TAG, "Error getting remaining distance: ${e.message}")
+                    Logging.w(TAG, "Error getting remaining distance: ${e.message}")
                     0.0
                 }
 
                 val remainingDuration = try {
                     currentSectionProgress.remainingDuration.seconds
                 } catch (e: Exception) {
-                    Log.w(TAG, "Error getting remaining duration: ${e.message}")
+                    Logging.w(TAG, "Error getting remaining duration: ${e.message}")
                     0L
                 }
 
                 val trafficDelay = try {
                     currentSectionProgress.trafficDelay.seconds
                 } catch (e: Exception) {
-                    Log.w(TAG, "Error getting traffic delay: ${e.message}")
+                    Logging.w(TAG, "Error getting traffic delay: ${e.message}")
                     0L
                 }
 
@@ -339,12 +339,12 @@ class TripProgressTracker(
                                         } else waypoint
                                     }
                                     currentTrip = trip.copy(waypoints = updatedWaypoints)
-                                    Log.d(TAG, "Updated in-memory currentTrip with destination remaining data for waypoint ${wp.id}")
+                                    Logging.d(TAG, "Updated in-memory currentTrip with destination remaining data for waypoint ${wp.id}")
                                 }
                             }
                         }
                     } catch (e: Exception) {
-                        Log.e(TAG, "Failed to persist destination remaining metrics: ${e.message}", e)
+                        Logging.e(TAG, "Failed to persist destination remaining metrics: ${e.message}", e)
                     }
                 }
 
@@ -354,15 +354,15 @@ class TripProgressTracker(
                 val nextWaypointIndex = getNextWaypointIndex()
                 val nextWaypoint = getWaypointByIndex(nextWaypointIndex)
 
-                Log.d(TAG, "=== ROUTE PROGRESS UPDATE ===")
+                Logging.d(TAG, "=== ROUTE PROGRESS UPDATE ===")
 
                 if (currentTrip?.waypoints?.isEmpty() == true) {
                     // Single destination route (no intermediate waypoints)
-                    Log.d(TAG, "🚗 SINGLE DESTINATION ROUTE")
-                    Log.d(TAG, "Destination: ${currentTrip?.route?.destination?.google_place_name ?: "Unknown"}")
-                    Log.d(TAG, "Remaining distance: ${String.format("%.1f", remainingDistance)}m")
-                    Log.d(TAG, "Remaining time: ${formatDuration(remainingDuration)}")
-                    Log.d(TAG, "Traffic delay: ${formatDuration(trafficDelay)}")
+                    Logging.d(TAG, "🚗 SINGLE DESTINATION ROUTE")
+                    Logging.d(TAG, "Destination: ${currentTrip?.route?.destination?.google_place_name ?: "Unknown"}")
+                    Logging.d(TAG, "Remaining distance: ${String.format("%.1f", remainingDistance)}m")
+                    Logging.d(TAG, "Remaining time: ${formatDuration(remainingDuration)}")
+                    Logging.d(TAG, "Traffic delay: ${formatDuration(trafficDelay)}")
                     
                     // Store progress for single destination route
                     currentTrip?.let { trip ->
@@ -383,16 +383,16 @@ class TripProgressTracker(
                             speedAccuracyInMetersPerSecond = speedAccuracy
                         )
                         waypointProgressMap[-1] = destinationProgress
-                        Log.d(TAG, "Stored destination progress for single destination route")
+                        Logging.d(TAG, "Stored destination progress for single destination route")
                     }
                 } else {
                     // Multi-waypoint route
-                    Log.d(TAG, "🗺️ MULTI-WAYPOINT ROUTE")
-                    Log.d(TAG, "Current waypoint: ${currentWaypoint?.location?.google_place_name ?: "Origin"}")
-                    Log.d(TAG, "Next waypoint: ${nextWaypoint?.location?.google_place_name ?: "Destination"}")
-                    Log.d(TAG, "Remaining distance to next: ${String.format("%.1f", remainingDistance)}m")
-                    Log.d(TAG, "ETA to next: ${formatDuration(remainingDuration)}")
-                    Log.d(TAG, "Traffic delay: ${formatDuration(trafficDelay)}")
+                    Logging.d(TAG, "🗺️ MULTI-WAYPOINT ROUTE")
+                    Logging.d(TAG, "Current waypoint: ${currentWaypoint?.location?.google_place_name ?: "Origin"}")
+                    Logging.d(TAG, "Next waypoint: ${nextWaypoint?.location?.google_place_name ?: "Destination"}")
+                    Logging.d(TAG, "Remaining distance to next: ${String.format("%.1f", remainingDistance)}m")
+                    Logging.d(TAG, "ETA to next: ${formatDuration(remainingDuration)}")
+                    Logging.d(TAG, "Traffic delay: ${formatDuration(trafficDelay)}")
 
                     // Store progress for the next waypoint
                     nextWaypoint?.let { waypoint ->
@@ -413,7 +413,7 @@ class TripProgressTracker(
                             speedAccuracyInMetersPerSecond = speedAccuracy
                         )
                         waypointProgressMap[waypoint.id] = waypointProgress
-                        Log.d(TAG, "Stored progress for waypoint: ${waypoint.location.google_place_name} (Order: ${waypoint.order})")
+                        Logging.d(TAG, "Stored progress for waypoint: ${waypoint.location.google_place_name} (Order: ${waypoint.order})")
 
                         // Persist remaining progress for resilience
                         coroutineScope.launch {
@@ -436,19 +436,19 @@ class TripProgressTracker(
                                         } else wp
                                     }
                                     currentTrip = trip.copy(waypoints = updatedWaypoints)
-                                    Log.d(TAG, "Updated in-memory currentTrip with fresh remaining data for waypoint ${waypoint.id} (Order: ${waypoint.order})")
+                                    Logging.d(TAG, "Updated in-memory currentTrip with fresh remaining data for waypoint ${waypoint.id} (Order: ${waypoint.order})")
                                 }
                                 
-                                Log.d(TAG, "DB persist success for waypoint ${waypoint.id} (Order: ${waypoint.order}): time=${waypointProgress.remainingTimeInSeconds}, dist=${String.format("%.1f", waypointProgress.remainingDistanceInMeters)}")
+                                Logging.d(TAG, "DB persist success for waypoint ${waypoint.id} (Order: ${waypoint.order}): time=${waypointProgress.remainingTimeInSeconds}, dist=${String.format("%.1f", waypointProgress.remainingDistanceInMeters)}")
                             } catch (e: Exception) {
-                                Log.e(TAG, "Failed to persist waypoint remaining progress: ${e.message}", e)
+                                Logging.e(TAG, "Failed to persist waypoint remaining progress: ${e.message}", e)
                             }
                         }
                     }
 
                     // DISABLED: Let RouteProgressTracker handle waypoint updates with correct section-based logic
                     // updateAllUnpassedWaypoints(remainingDistance, remainingDuration)
-                    Log.d(TAG, "Skipping waypoint updates - RouteProgressTracker handles this with correct section logic")
+                    Logging.d(TAG, "Skipping waypoint updates - RouteProgressTracker handles this with correct section logic")
 
                 // Check all waypoints for passenger notifications (3 minutes away or just passed)
                 checkAllWaypointsForPassengerNotifications()
@@ -472,10 +472,10 @@ class TripProgressTracker(
                     }
                 }
 
-                Log.d(TAG, "=============================")
+                Logging.d(TAG, "=============================")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error in route progress update: ${e.message}", e)
+            Logging.e(TAG, "Error in route progress update: ${e.message}", e)
         }
     }
 
@@ -485,17 +485,17 @@ class TripProgressTracker(
             if (waypointIndex != null && !reachedWaypoints.contains(waypointIndex)) {
                 val waypoint = getWaypointByIndex(waypointIndex)
                 if (waypoint != null) {
-                    Log.d(TAG, "🎉 WAYPOINT REACHED!")
-                    Log.d(TAG, "Waypoint: ${waypoint.location.google_place_name}")
-                    Log.d(TAG, "Order: ${waypoint.order}")
-                    Log.d(TAG, "Index: $waypointIndex")
+                    Logging.d(TAG, "🎉 WAYPOINT REACHED!")
+                    Logging.d(TAG, "Waypoint: ${waypoint.location.google_place_name}")
+                    Logging.d(TAG, "Order: ${waypoint.order}")
+                    Logging.d(TAG, "Index: $waypointIndex")
 
                     val remainingDistance = try {
                         String.format("%.1f", sectionProgress.remainingDistanceInMeters)
                     } catch (e: Exception) {
                         "Unknown"
                     }
-                    Log.d(TAG, "Remaining distance: ${remainingDistance}m")
+                    Logging.d(TAG, "Remaining distance: ${remainingDistance}m")
 
                     reachedWaypoints.add(waypointIndex)
                     
@@ -516,7 +516,7 @@ class TripProgressTracker(
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error handling waypoint reached: ${e.message}", e)
+            Logging.e(TAG, "Error handling waypoint reached: ${e.message}", e)
         }
     }
 
@@ -526,16 +526,16 @@ class TripProgressTracker(
             if (waypointIndex != null) {
                 val waypoint = getWaypointByIndex(waypointIndex)
                 if (waypoint != null) {
-                    Log.d(TAG, "📍 APPROACHING WAYPOINT!")
-                    Log.d(TAG, "Waypoint: ${waypoint.location.google_place_name}")
-                    Log.d(TAG, "Order: ${waypoint.order}")
+                    Logging.d(TAG, "📍 APPROACHING WAYPOINT!")
+                    Logging.d(TAG, "Waypoint: ${waypoint.location.google_place_name}")
+                    Logging.d(TAG, "Order: ${waypoint.order}")
 
                     val remainingDistance = try {
                         String.format("%.1f", sectionProgress.remainingDistanceInMeters)
                     } catch (e: Exception) {
                         "Unknown"
                     }
-                    Log.d(TAG, "Distance remaining: ${remainingDistance}m")
+                    Logging.d(TAG, "Distance remaining: ${remainingDistance}m")
 
                     val remainingTimeSeconds = sectionProgress.remainingDuration.seconds
                     val eta = try {
@@ -543,7 +543,7 @@ class TripProgressTracker(
                     } catch (e: Exception) {
                         "Unknown"
                     }
-                    Log.d(TAG, "ETA: $eta")
+                    Logging.d(TAG, "ETA: $eta")
 
                     // Check if we should show 5-minute notification
                     if (remainingTimeSeconds <= WAYPOINT_APPROACHING_TIME_SECONDS && 
@@ -555,7 +555,7 @@ class TripProgressTracker(
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error handling waypoint approaching: ${e.message}", e)
+            Logging.e(TAG, "Error handling waypoint approaching: ${e.message}", e)
         }
     }
 
@@ -600,14 +600,14 @@ class TripProgressTracker(
                     val lastLogTime = lastLoggedProgress[waypoint.id] ?: 0L
                     val currentTime = System.currentTimeMillis()
                     if (currentTime - lastLogTime > 30000) { // Log every 30 seconds
-                        Log.d(TAG, "📊 TRACKING WAYPOINT: ${waypoint.location.google_place_name}")
+                        Logging.d(TAG, "📊 TRACKING WAYPOINT: ${waypoint.location.google_place_name}")
                         logWaypointProgress(progress)
                         lastLoggedProgress[waypoint.id] = currentTime
                     }
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error handling waypoint progress: ${e.message}", e)
+            Logging.e(TAG, "Error handling waypoint progress: ${e.message}", e)
         }
     }
 
@@ -623,7 +623,7 @@ class TripProgressTracker(
                 reachedWaypoints.size - 1
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error getting current waypoint index: ${e.message}", e)
+            Logging.e(TAG, "Error getting current waypoint index: ${e.message}", e)
             null
         }
     }
@@ -632,7 +632,7 @@ class TripProgressTracker(
         return try {
             reachedWaypoints.size
         } catch (e: Exception) {
-            Log.e(TAG, "Error getting next waypoint index: ${e.message}", e)
+            Logging.e(TAG, "Error getting next waypoint index: ${e.message}", e)
             0
         }
     }
@@ -641,7 +641,7 @@ class TripProgressTracker(
         return try {
             currentTrip?.waypoints?.find { it.order == index + 1 }
         } catch (e: Exception) {
-            Log.e(TAG, "Error getting waypoint by index $index: ${e.message}", e)
+            Logging.e(TAG, "Error getting waypoint by index $index: ${e.message}", e)
             null
         }
     }
@@ -653,7 +653,7 @@ class TripProgressTracker(
         return try {
             currentTrip?.waypoints?.find { it.order == order }
         } catch (e: Exception) {
-            Log.e(TAG, "Error getting waypoint by order $order: ${e.message}", e)
+            Logging.e(TAG, "Error getting waypoint by order $order: ${e.message}", e)
             null
         }
     }
@@ -667,7 +667,7 @@ class TripProgressTracker(
                 ?.filter { !it.is_passed }
                 ?.minByOrNull { it.order }
         } catch (e: Exception) {
-            Log.e(TAG, "Error getting next unpassed waypoint: ${e.message}", e)
+            Logging.e(TAG, "Error getting next unpassed waypoint: ${e.message}", e)
             null
         }
     }
@@ -684,29 +684,29 @@ class TripProgressTracker(
                         // Send MQTT notifications for waypoint events
                         if (reached) {
                             sendWaypointReachedNotification(waypoint)
-                            Log.d(TAG, "✅ MQTT: Waypoint reached notification sent for ${waypoint.location.google_place_name}")
+                            Logging.d(TAG, "✅ MQTT: Waypoint reached notification sent for ${waypoint.location.google_place_name}")
                         } else {
                             sendWaypointMissedNotification(waypoint)
-                            Log.w(TAG, "⚠️ MQTT: Waypoint missed notification sent for ${waypoint.location.google_place_name}")
+                            Logging.w(TAG, "⚠️ MQTT: Waypoint missed notification sent for ${waypoint.location.google_place_name}")
                         }
                         
                         // Always send trip progress update when waypoint status changes
                         sendPeriodicProgressUpdate()
-                        Log.d(TAG, "📊 MQTT: Trip progress update sent after waypoint ${if (reached) "reach" else "miss"}")
+                        Logging.d(TAG, "📊 MQTT: Trip progress update sent after waypoint ${if (reached) "reach" else "miss"}")
 
                         // Check if this was the final waypoint
                         if (reached && waypointIndex == currentTrip?.waypoints?.size) {
                             handleFinalWaypointReached()
                         }
 
-                        Log.d(TAG, "Waypoint ${waypoint.location.google_place_name} status updated: ${if (reached) "REACHED" else "MISSED"}")
+                        Logging.d(TAG, "Waypoint ${waypoint.location.google_place_name} status updated: ${if (reached) "REACHED" else "MISSED"}")
                     } catch (e: Exception) {
-                        Log.e(TAG, "Failed to update waypoint status: ${e.message}", e)
+                        Logging.e(TAG, "Failed to update waypoint status: ${e.message}", e)
                     }
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error updating waypoint status: ${e.message}", e)
+            Logging.e(TAG, "Error updating waypoint status: ${e.message}", e)
         }
     }
 
@@ -715,17 +715,17 @@ class TripProgressTracker(
             try {
                 // Update waypoint status in database
                 databaseManager.updateWaypointStatus(tripId, waypointId, reached)
-                Log.d(TAG, "Database update: Waypoint $waypointId marked as ${if (reached) "reached" else "missed"}")
+                Logging.d(TAG, "Database update: Waypoint $waypointId marked as ${if (reached) "reached" else "missed"}")
             } catch (e: Exception) {
-                Log.e(TAG, "Database update failed: ${e.message}", e)
+                Logging.e(TAG, "Database update failed: ${e.message}", e)
             }
         }
     }
 
     private fun handleFinalWaypointReached() {
         try {
-            Log.d(TAG, "🎯 FINAL WAYPOINT REACHED!")
-            Log.d(TAG, "All waypoints completed for trip $tripId")
+            Logging.d(TAG, "🎯 FINAL WAYPOINT REACHED!")
+            Logging.d(TAG, "All waypoints completed for trip $tripId")
 
             coroutineScope.launch {
                 try {
@@ -735,13 +735,13 @@ class TripProgressTracker(
                     // Send final trip progress update with completion status
                     sendPeriodicProgressUpdate()
                     
-                    Log.d(TAG, "🏁 MQTT: Trip $tripId marked as completed and final status sent")
+                    Logging.d(TAG, "🏁 MQTT: Trip $tripId marked as completed and final status sent")
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed to update trip status: ${e.message}", e)
+                    Logging.e(TAG, "Failed to update trip status: ${e.message}", e)
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error handling final waypoint reached: ${e.message}", e)
+            Logging.e(TAG, "Error handling final waypoint reached: ${e.message}", e)
         }
     }
 
@@ -749,12 +749,12 @@ class TripProgressTracker(
         withContext(Dispatchers.IO) {
             try {
                 databaseManager.updateTripStatus(tripId, newStatus)
-                Log.d(TAG, "Trip $tripId status updated to: $newStatus")
+                Logging.d(TAG, "Trip $tripId status updated to: $newStatus")
 
                 // Send MQTT trip status update
                 sendTripStatusUpdate(newStatus)
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to update trip status: ${e.message}", e)
+                Logging.e(TAG, "Failed to update trip status: ${e.message}", e)
             }
         }
     }
@@ -763,54 +763,54 @@ class TripProgressTracker(
         try {
             val waypoint = getWaypointByIndex(waypointIndex)
             if (waypoint != null) {
-                Log.d(TAG, "=== WAYPOINT REACHED LOG ===")
-                Log.d(TAG, "Waypoint ID: ${waypoint.id}")
-                Log.d(TAG, "Location: ${waypoint.location.google_place_name}")
-                Log.d(TAG, "Order: ${waypoint.order}")
-                Log.d(TAG, "Coordinates: ${waypoint.location.latitude}, ${waypoint.location.longitude}")
+                Logging.d(TAG, "=== WAYPOINT REACHED LOG ===")
+                Logging.d(TAG, "Waypoint ID: ${waypoint.id}")
+                Logging.d(TAG, "Location: ${waypoint.location.google_place_name}")
+                Logging.d(TAG, "Order: ${waypoint.order}")
+                Logging.d(TAG, "Coordinates: ${waypoint.location.latitude}, ${waypoint.location.longitude}")
 
                 val remainingDistance = try {
                     sectionProgress.remainingDistanceInMeters
                 } catch (e: Exception) {
                     0.0
                 }
-                Log.d(TAG, "Remaining distance: ${remainingDistance}m")
+                Logging.d(TAG, "Remaining distance: ${remainingDistance}m")
 
                 val remainingTime = try {
                     sectionProgress.remainingDuration.seconds
                 } catch (e: Exception) {
                     0L
                 }
-                Log.d(TAG, "Remaining time: ${formatDuration(remainingTime)}")
+                Logging.d(TAG, "Remaining time: ${formatDuration(remainingTime)}")
 
                 val trafficDelay = try {
                     sectionProgress.trafficDelay.seconds
                 } catch (e: Exception) {
                     0L
                 }
-                Log.d(TAG, "Traffic delay: ${formatDuration(trafficDelay)}")
-                Log.d(TAG, "=============================")
+                Logging.d(TAG, "Traffic delay: ${formatDuration(trafficDelay)}")
+                Logging.d(TAG, "=============================")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error logging waypoint reached: ${e.message}", e)
+            Logging.e(TAG, "Error logging waypoint reached: ${e.message}", e)
         }
     }
 
     private fun logWaypointProgress(progress: WaypointProgress) {
         try {
-            Log.d(TAG, "=== WAYPOINT PROGRESS UPDATE ===")
-            Log.d(TAG, "Waypoint: ${progress.locationName}")
-            Log.d(TAG, "Order: ${progress.order}")
-            Log.d(TAG, "Remaining distance: ${String.format("%.1f", progress.remainingDistanceInMeters)}m")
-            Log.d(TAG, "Remaining time: ${formatDuration(progress.remainingTimeInSeconds)}")
-            Log.d(TAG, "Traffic delay: ${formatDuration(progress.trafficDelayInSeconds)}")
-            Log.d(TAG, "Is next: ${progress.isNext}")
-            Log.d(TAG, "Current position: ${progress.currentLatitude?.let { String.format("%.6f", it) } ?: "Unknown"}, ${progress.currentLongitude?.let { String.format("%.6f", it) } ?: "Unknown"}")
-            Log.d(TAG, "Current speed: ${progress.currentSpeedInMetersPerSecond?.let { String.format("%.2f", it) } ?: "Unknown"} m/s")
-            Log.d(TAG, "Speed accuracy: ${progress.speedAccuracyInMetersPerSecond?.let { String.format("%.2f", it) } ?: "Unknown"} m/s")
-            Log.d(TAG, "===============================")
+            Logging.d(TAG, "=== WAYPOINT PROGRESS UPDATE ===")
+            Logging.d(TAG, "Waypoint: ${progress.locationName}")
+            Logging.d(TAG, "Order: ${progress.order}")
+            Logging.d(TAG, "Remaining distance: ${String.format("%.1f", progress.remainingDistanceInMeters)}m")
+            Logging.d(TAG, "Remaining time: ${formatDuration(progress.remainingTimeInSeconds)}")
+            Logging.d(TAG, "Traffic delay: ${formatDuration(progress.trafficDelayInSeconds)}")
+            Logging.d(TAG, "Is next: ${progress.isNext}")
+            Logging.d(TAG, "Current position: ${progress.currentLatitude?.let { String.format("%.6f", it) } ?: "Unknown"}, ${progress.currentLongitude?.let { String.format("%.6f", it) } ?: "Unknown"}")
+            Logging.d(TAG, "Current speed: ${progress.currentSpeedInMetersPerSecond?.let { String.format("%.2f", it) } ?: "Unknown"} m/s")
+            Logging.d(TAG, "Speed accuracy: ${progress.speedAccuracyInMetersPerSecond?.let { String.format("%.2f", it) } ?: "Unknown"} m/s")
+            Logging.d(TAG, "===============================")
         } catch (e: Exception) {
-            Log.e(TAG, "Error logging waypoint progress: ${e.message}", e)
+            Logging.e(TAG, "Error logging waypoint progress: ${e.message}", e)
         }
     }
 
@@ -823,25 +823,25 @@ class TripProgressTracker(
                 val unpassedWaypoints = trip.waypoints.filter { !it.is_passed }
 
                 if (unpassedWaypoints.isNotEmpty()) {
-                    Log.d(TAG, "📍 UNPASSED WAYPOINTS PROGRESS:")
+                    Logging.d(TAG, "📍 UNPASSED WAYPOINTS PROGRESS:")
                     unpassedWaypoints.forEach { waypoint ->
                         val progress = waypointProgressMap[waypoint.id]
                         if (progress != null) {
-                            Log.d(TAG, "  • ${waypoint.location.google_place_name}")
-                            Log.d(TAG, "    - Order: ${waypoint.order}")
-                            Log.d(TAG, "    - Distance: ${String.format("%.1f", progress.remainingDistanceInMeters)}m")
-                            Log.d(TAG, "    - ETA: ${formatDuration(progress.remainingTimeInSeconds)}")
-                            Log.d(TAG, "    - Traffic delay: ${formatDuration(progress.trafficDelayInSeconds)}")
+                            Logging.d(TAG, "  • ${waypoint.location.google_place_name}")
+                            Logging.d(TAG, "    - Order: ${waypoint.order}")
+                            Logging.d(TAG, "    - Distance: ${String.format("%.1f", progress.remainingDistanceInMeters)}m")
+                            Logging.d(TAG, "    - ETA: ${formatDuration(progress.remainingTimeInSeconds)}")
+                            Logging.d(TAG, "    - Traffic delay: ${formatDuration(progress.trafficDelayInSeconds)}")
                         } else {
-                            Log.d(TAG, "  • ${waypoint.location.google_place_name} (Order: ${waypoint.order}) - No progress data yet")
+                            Logging.d(TAG, "  • ${waypoint.location.google_place_name} (Order: ${waypoint.order}) - No progress data yet")
                         }
                     }
                 } else {
-                    Log.d(TAG, "✅ All waypoints have been passed!")
+                    Logging.d(TAG, "✅ All waypoints have been passed!")
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error logging unpassed waypoints progress: ${e.message}", e)
+            Logging.e(TAG, "Error logging unpassed waypoints progress: ${e.message}", e)
         }
     }
 
@@ -860,7 +860,7 @@ class TripProgressTracker(
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error formatting duration: ${e.message}", e)
+            Logging.e(TAG, "Error formatting duration: ${e.message}", e)
             "Unknown"
         }
     }
@@ -869,7 +869,7 @@ class TripProgressTracker(
         return try {
             waypointProgressMap.toMap()
         } catch (e: Exception) {
-            Log.e(TAG, "Error getting current progress: ${e.message}", e)
+            Logging.e(TAG, "Error getting current progress: ${e.message}", e)
             emptyMap()
         }
     }
@@ -878,7 +878,7 @@ class TripProgressTracker(
         return try {
             reachedWaypoints.toSet()
         } catch (e: Exception) {
-            Log.e(TAG, "Error getting reached waypoints: ${e.message}", e)
+            Logging.e(TAG, "Error getting reached waypoints: ${e.message}", e)
             emptySet()
         }
     }
@@ -894,9 +894,9 @@ class TripProgressTracker(
             waypointPassedTime.clear()
             isInitialized = false
             passengerNotificationDialog.dismissCurrentNotification()
-            Log.d(TAG, "Trip progress tracker reset for trip $tripId")
+            Logging.d(TAG, "Trip progress tracker reset for trip $tripId")
         } catch (e: Exception) {
-            Log.e(TAG, "Error resetting progress tracker: ${e.message}", e)
+            Logging.e(TAG, "Error resetting progress tracker: ${e.message}", e)
         }
     }
 
@@ -908,10 +908,10 @@ class TripProgressTracker(
             val freshTrip = databaseManager.getTripById(tripId)
             if (freshTrip != null) {
                 currentTrip = freshTrip
-                Log.d(TAG, "Refreshed currentTrip data from database")
+                Logging.d(TAG, "Refreshed currentTrip data from database")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error refreshing trip data: ${e.message}", e)
+            Logging.e(TAG, "Error refreshing trip data: ${e.message}", e)
         }
     }
 
@@ -923,17 +923,17 @@ class TripProgressTracker(
     private fun updateAllUnpassedWaypoints(currentRemainingDistance: Double, currentRemainingTime: Long) {
         try {
             currentTrip?.let { trip ->
-                Log.d(TAG, "=== UPDATING ALL UNPASSED WAYPOINTS ===")
-                Log.d(TAG, "Trip is_reversed: ${trip.is_reversed} (handled by backend)")
+                Logging.d(TAG, "=== UPDATING ALL UNPASSED WAYPOINTS ===")
+                Logging.d(TAG, "Trip is_reversed: ${trip.is_reversed} (handled by backend)")
                 
                 // Get all unpassed waypoints sorted by order
                 val unpassedWaypoints = trip.waypoints
                     .filter { !it.is_passed }
                     .sortedBy { it.order }
                 
-                Log.d(TAG, "Found ${unpassedWaypoints.size} unpassed waypoints")
-                Log.d(TAG, "Current remaining distance: ${String.format("%.1f", currentRemainingDistance)}m")
-                Log.d(TAG, "Current remaining time: ${formatDuration(currentRemainingTime)}")
+                Logging.d(TAG, "Found ${unpassedWaypoints.size} unpassed waypoints")
+                Logging.d(TAG, "Current remaining distance: ${String.format("%.1f", currentRemainingDistance)}m")
+                Logging.d(TAG, "Current remaining time: ${formatDuration(currentRemainingTime)}")
                 
                 if (unpassedWaypoints.isNotEmpty()) {
                     // Calculate proper remaining values for each waypoint
@@ -950,10 +950,10 @@ class TripProgressTracker(
                         val calculatedTime = currentRemainingTime + (additionalTimePerWaypoint * (waypointOrder - 1))
                         val calculatedDistance = currentRemainingDistance + (additionalDistancePerWaypoint * (waypointOrder - 1))
                         
-                        Log.d(TAG, "Waypoint ${waypoint.order} (${waypoint.location.google_place_name}):")
-                        Log.d(TAG, "  - Base time: ${formatDuration(currentRemainingTime)}, Base distance: ${String.format("%.1f", currentRemainingDistance)}m")
-                        Log.d(TAG, "  - Additional time: ${formatDuration(additionalTimePerWaypoint * (waypointOrder - 1))}, Additional distance: ${String.format("%.1f", additionalDistancePerWaypoint * (waypointOrder - 1))}m")
-                        Log.d(TAG, "  - Final time: ${formatDuration(calculatedTime)}, Final distance: ${String.format("%.1f", calculatedDistance)}m")
+                        Logging.d(TAG, "Waypoint ${waypoint.order} (${waypoint.location.google_place_name}):")
+                        Logging.d(TAG, "  - Base time: ${formatDuration(currentRemainingTime)}, Base distance: ${String.format("%.1f", currentRemainingDistance)}m")
+                        Logging.d(TAG, "  - Additional time: ${formatDuration(additionalTimePerWaypoint * (waypointOrder - 1))}, Additional distance: ${String.format("%.1f", additionalDistancePerWaypoint * (waypointOrder - 1))}m")
+                        Logging.d(TAG, "  - Final time: ${formatDuration(calculatedTime)}, Final distance: ${String.format("%.1f", calculatedDistance)}m")
                         
                         // Only update if current values are null or incorrect
                         val needsUpdate = waypoint.remaining_time == null || 
@@ -962,7 +962,7 @@ class TripProgressTracker(
                                         (waypoint.remaining_distance != null && waypoint.remaining_distance!! < currentRemainingDistance)
                         
                         if (needsUpdate) {
-                            Log.d(TAG, "  - Current values: time=${waypoint.remaining_time?.let { formatDuration(it) } ?: "null"}, distance=${waypoint.remaining_distance?.let { String.format("%.1f", it) } ?: "null"}m")
+                            Logging.d(TAG, "  - Current values: time=${waypoint.remaining_time?.let { formatDuration(it) } ?: "null"}, distance=${waypoint.remaining_distance?.let { String.format("%.1f", it) } ?: "null"}m")
                             
                             coroutineScope.launch {
                                 try {
@@ -986,23 +986,23 @@ class TripProgressTracker(
                                         currentTrip = trip.copy(waypoints = updatedWaypoints)
                                     }
                                     
-                                    Log.d(TAG, "Successfully updated waypoint ${waypoint.id} with calculated remaining data")
+                                    Logging.d(TAG, "Successfully updated waypoint ${waypoint.id} with calculated remaining data")
                                 } catch (e: Exception) {
-                                    Log.e(TAG, "Failed to update waypoint ${waypoint.id}: ${e.message}", e)
+                                    Logging.e(TAG, "Failed to update waypoint ${waypoint.id}: ${e.message}", e)
                                 }
                             }
                         } else {
-                            Log.d(TAG, "  - Already has correct remaining data: time=${waypoint.remaining_time?.let { formatDuration(it) } ?: "null"}, distance=${waypoint.remaining_distance?.let { String.format("%.1f", it) } ?: "null"}m")
+                            Logging.d(TAG, "  - Already has correct remaining data: time=${waypoint.remaining_time?.let { formatDuration(it) } ?: "null"}, distance=${waypoint.remaining_distance?.let { String.format("%.1f", it) } ?: "null"}m")
                         }
                     }
                 } else {
-                    Log.d(TAG, "No unpassed waypoints to update")
+                    Logging.d(TAG, "No unpassed waypoints to update")
                 }
                 
-                Log.d(TAG, "=====================================")
+                Logging.d(TAG, "=====================================")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error updating all unpassed waypoints: ${e.message}", e)
+            Logging.e(TAG, "Error updating all unpassed waypoints: ${e.message}", e)
         }
     }
 
@@ -1031,20 +1031,20 @@ class TripProgressTracker(
                             tripData = tripData
                         ).whenComplete { result, throwable ->
                             if (throwable != null) {
-                                Log.e(TAG, "Failed to send trip status update via MQTT", throwable)
+                                Logging.e(TAG, "Failed to send trip status update via MQTT", throwable)
                             } else {
-                                Log.d(TAG, "Trip status update sent via MQTT: $status")
+                                Logging.d(TAG, "Trip status update sent via MQTT: $status")
                             }
                         }
                     }
                 } else {
-                    Log.w(TAG, "MQTT not connected, cannot send trip status update")
+                    Logging.w(TAG, "MQTT not connected, cannot send trip status update")
                 }
             } ?: run {
-                Log.w(TAG, "MQTT service not available, cannot send trip status update")
+                Logging.w(TAG, "MQTT service not available, cannot send trip status update")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error sending trip status update via MQTT: ${e.message}", e)
+            Logging.e(TAG, "Error sending trip status update via MQTT: ${e.message}", e)
         }
     }
 
@@ -1066,19 +1066,19 @@ class TripProgressTracker(
                         location = location
                     ).whenComplete { result, throwable ->
                         if (throwable != null) {
-                            Log.e(TAG, "Failed to send waypoint reached notification via MQTT", throwable)
+                            Logging.e(TAG, "Failed to send waypoint reached notification via MQTT", throwable)
                         } else {
-                            Log.d(TAG, "Waypoint reached notification sent via MQTT: ${waypoint.location.google_place_name}")
+                            Logging.d(TAG, "Waypoint reached notification sent via MQTT: ${waypoint.location.google_place_name}")
                         }
                     }
                 } else {
-                    Log.w(TAG, "MQTT not connected, cannot send waypoint reached notification")
+                    Logging.w(TAG, "MQTT not connected, cannot send waypoint reached notification")
                 }
             } ?: run {
-                Log.w(TAG, "MQTT service not available, cannot send waypoint reached notification")
+                Logging.w(TAG, "MQTT service not available, cannot send waypoint reached notification")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error sending waypoint reached notification via MQTT: ${e.message}", e)
+            Logging.e(TAG, "Error sending waypoint reached notification via MQTT: ${e.message}", e)
         }
     }
 
@@ -1112,20 +1112,20 @@ class TripProgressTracker(
                             tripData = tripData
                         ).whenComplete { result, throwable ->
                             if (throwable != null) {
-                                Log.e(TAG, "❌ MQTT: Failed to send waypoint missed notification", throwable)
+                                Logging.e(TAG, "❌ MQTT: Failed to send waypoint missed notification", throwable)
                             } else {
-                                Log.d(TAG, "⚠️ MQTT: Waypoint missed notification sent for ${waypoint.location.google_place_name}")
+                                Logging.d(TAG, "⚠️ MQTT: Waypoint missed notification sent for ${waypoint.location.google_place_name}")
                             }
                         }
                     }
                 } else {
-                    Log.w(TAG, "MQTT not connected, cannot send waypoint missed notification")
+                    Logging.w(TAG, "MQTT not connected, cannot send waypoint missed notification")
                 }
             } ?: run {
-                Log.w(TAG, "MQTT service not available, cannot send waypoint missed notification")
+                Logging.w(TAG, "MQTT service not available, cannot send waypoint missed notification")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error sending waypoint missed notification via MQTT: ${e.message}", e)
+            Logging.e(TAG, "Error sending waypoint missed notification via MQTT: ${e.message}", e)
         }
     }
 
@@ -1155,37 +1155,37 @@ class TripProgressTracker(
                                     speedAccuracy = speedAccuracy
                                 )
 
-                                Log.d(TAG, "=== SENDING TRIP START NOTIFICATION ===")
-                                Log.d(TAG, "Trip ID: ${latestTrip.id}")
-                                Log.d(TAG, "Trip Status: ${latestTrip.status}")
-                                Log.d(TAG, "Event: TRIP_STARTED")
-                                Log.d(TAG, "================================")
+                                Logging.d(TAG, "=== SENDING TRIP START NOTIFICATION ===")
+                                Logging.d(TAG, "Trip ID: ${latestTrip.id}")
+                                Logging.d(TAG, "Trip Status: ${latestTrip.status}")
+                                Logging.d(TAG, "Event: TRIP_STARTED")
+                                Logging.d(TAG, "================================")
 
                                 mqtt.sendTripEventMessage(
                                     event = "TRIP_STARTED",
                                     tripData = tripData
                                 ).whenComplete { result, throwable ->
                                     if (throwable != null) {
-                                        Log.e(TAG, "❌ MQTT: Failed to send trip start notification", throwable)
+                                        Logging.e(TAG, "❌ MQTT: Failed to send trip start notification", throwable)
                                     } else {
-                                        Log.d(TAG, "🚀 MQTT: Trip start notification sent successfully with status: ${latestTrip.status}")
+                                        Logging.d(TAG, "🚀 MQTT: Trip start notification sent successfully with status: ${latestTrip.status}")
                                     }
                                 }
                             } else {
-                                Log.e(TAG, "Failed to reload trip data for MQTT notification")
+                                Logging.e(TAG, "Failed to reload trip data for MQTT notification")
                             }
                         } catch (e: Exception) {
-                            Log.e(TAG, "Error reloading trip data for MQTT notification: ${e.message}", e)
+                            Logging.e(TAG, "Error reloading trip data for MQTT notification: ${e.message}", e)
                         }
                     }
                 } else {
-                    Log.w(TAG, "MQTT not connected, cannot send trip start notification")
+                    Logging.w(TAG, "MQTT not connected, cannot send trip start notification")
                 }
             } ?: run {
-                Log.w(TAG, "MQTT service not available, cannot send trip start notification")
+                Logging.w(TAG, "MQTT service not available, cannot send trip start notification")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error sending trip start notification via MQTT: ${e.message}", e)
+            Logging.e(TAG, "Error sending trip start notification via MQTT: ${e.message}", e)
         }
     }
 
@@ -1195,7 +1195,7 @@ class TripProgressTracker(
      */
     fun sendPeriodicProgressUpdate() {
         // DISABLED: Let RouteProgressTracker handle MQTT updates with correct calculations
-        Log.d(TAG, "Skipping TripProgressTracker MQTT update - RouteProgressTracker handles this with correct section-based logic")
+        Logging.d(TAG, "Skipping TripProgressTracker MQTT update - RouteProgressTracker handles this with correct section-based logic")
         return
         
         /* ORIGINAL CODE DISABLED
@@ -1208,10 +1208,10 @@ class TripProgressTracker(
                             longitude = currentLocation?.coordinates?.longitude ?: 0.0
                         )
 
-                        Log.d(TAG, "=== RECALCULATING ALL WAYPOINT DATA BEFORE PUBLISH ===")
-                        Log.d(TAG, "Trip is_reversed: ${trip.is_reversed}")
-                        Log.d(TAG, "Current location: ${location.latitude}, ${location.longitude}")
-                        Log.d(TAG, "Current speed: ${currentSpeed?.let { String.format("%.2f", it) } ?: "Unknown"} m/s")
+                        Logging.d(TAG, "=== RECALCULATING ALL WAYPOINT DATA BEFORE PUBLISH ===")
+                        Logging.d(TAG, "Trip is_reversed: ${trip.is_reversed}")
+                        Logging.d(TAG, "Current location: ${location.latitude}, ${location.longitude}")
+                        Logging.d(TAG, "Current speed: ${currentSpeed?.let { String.format("%.2f", it) } ?: "Unknown"} m/s")
                         
                         // Recalculate all waypoint data before publishing
                         recalculateAllWaypointData()
@@ -1220,17 +1220,17 @@ class TripProgressTracker(
                         val remainingTime = calculateRemainingTimeToDestination()
                         val remainingDistance = calculateRemainingDistanceToDestination()
 
-                        Log.d(TAG, "=== FINAL PUBLISH DATA ===")
-                        Log.d(TAG, "Remaining time to destination: ${remainingTime?.let { formatDuration(it) } ?: "null"}")
-                        Log.d(TAG, "Remaining distance to destination: ${remainingDistance?.let { String.format("%.1f", it) } ?: "null"}m")
-                        Log.d(TAG, "Waypoint progress map size: ${waypointProgressMap.size}")
-                        Log.d(TAG, "Current trip waypoints: ${trip.waypoints.size}")
+                        Logging.d(TAG, "=== FINAL PUBLISH DATA ===")
+                        Logging.d(TAG, "Remaining time to destination: ${remainingTime?.let { formatDuration(it) } ?: "null"}")
+                        Logging.d(TAG, "Remaining distance to destination: ${remainingDistance?.let { String.format("%.1f", it) } ?: "null"}m")
+                        Logging.d(TAG, "Waypoint progress map size: ${waypointProgressMap.size}")
+                        Logging.d(TAG, "Current trip waypoints: ${trip.waypoints.size}")
                         
                         // Log all waypoint progress entries for debugging
                         waypointProgressMap.forEach { (waypointId, progress) ->
-                            Log.d(TAG, "Waypoint $waypointId (Order: ${progress.order}): ${progress.locationName} - ${String.format("%.1f", progress.remainingDistanceInMeters)}m, ${formatDuration(progress.remainingTimeInSeconds)}")
+                            Logging.d(TAG, "Waypoint $waypointId (Order: ${progress.order}): ${progress.locationName} - ${String.format("%.1f", progress.remainingDistanceInMeters)}m, ${formatDuration(progress.remainingTimeInSeconds)}")
                         }
-                        Log.d(TAG, "=============================================")
+                        Logging.d(TAG, "=============================================")
 
                         // Get fresh waypoint data for the next waypoint
                         val nextWaypointData = getNextWaypointWithFreshData()
@@ -1250,20 +1250,20 @@ class TripProgressTracker(
                             tripData = tripData
                         ).whenComplete { result, throwable ->
                             if (throwable != null) {
-                                Log.e(TAG, "❌ MQTT: Failed to send periodic progress update", throwable)
+                                Logging.e(TAG, "❌ MQTT: Failed to send periodic progress update", throwable)
                             } else {
-                                Log.d(TAG, "📡 MQTT: Periodic progress update sent successfully")
+                                Logging.d(TAG, "📡 MQTT: Periodic progress update sent successfully")
                             }
                         }
                     }
                 } else {
-                    Log.w(TAG, "MQTT not connected, cannot send periodic progress update")
+                    Logging.w(TAG, "MQTT not connected, cannot send periodic progress update")
                 }
             } ?: run {
-                Log.w(TAG, "MQTT service not available, cannot send periodic progress update")
+                Logging.w(TAG, "MQTT service not available, cannot send periodic progress update")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error sending periodic progress update via MQTT: ${e.message}", e)
+            Logging.e(TAG, "Error sending periodic progress update via MQTT: ${e.message}", e)
         }
         */
     }
@@ -1275,24 +1275,24 @@ class TripProgressTracker(
     private fun calculateRemainingTimeToDestination(): Long? {
         return try {
             currentTrip?.let { trip ->
-                Log.d(TAG, "=== CALCULATING REMAINING TIME TO DESTINATION ===")
-                Log.d(TAG, "Trip has ${trip.waypoints.size} waypoints")
-                Log.d(TAG, "Waypoint progress map has ${waypointProgressMap.size} entries")
+                Logging.d(TAG, "=== CALCULATING REMAINING TIME TO DESTINATION ===")
+                Logging.d(TAG, "Trip has ${trip.waypoints.size} waypoints")
+                Logging.d(TAG, "Waypoint progress map has ${waypointProgressMap.size} entries")
                 
                 // Log current waypoint remaining_time values for debugging
                 trip.waypoints.forEach { waypoint ->
-                    Log.d(TAG, "Waypoint ${waypoint.id} (${waypoint.location.google_place_name}): remaining_time=${waypoint.remaining_time?.let { formatDuration(it) } ?: "null"}")
+                    Logging.d(TAG, "Waypoint ${waypoint.id} (${waypoint.location.google_place_name}): remaining_time=${waypoint.remaining_time?.let { formatDuration(it) } ?: "null"}")
                 }
                 
                 val result = if (trip.waypoints.isEmpty()) {
                     // Single destination route - get remaining time from destination progress
-                    Log.d(TAG, "Single destination route - looking for destination progress")
+                    Logging.d(TAG, "Single destination route - looking for destination progress")
                     val destinationProgress = waypointProgressMap[-1] // Special ID for destination
-                    Log.d(TAG, "Found destination progress: ${destinationProgress?.remainingTimeInSeconds?.let { formatDuration(it) } ?: "null"}")
+                    Logging.d(TAG, "Found destination progress: ${destinationProgress?.remainingTimeInSeconds?.let { formatDuration(it) } ?: "null"}")
                     destinationProgress?.remainingTimeInSeconds
                 } else {
                     // Multi-waypoint route - calculate destination time as the maximum waypoint time + buffer
-                    Log.d(TAG, "Multi-waypoint route - calculating destination time as max waypoint time + buffer")
+                    Logging.d(TAG, "Multi-waypoint route - calculating destination time as max waypoint time + buffer")
                     
                     // Get the maximum remaining time from all waypoints
                     val maxWaypointTime = trip.waypoints
@@ -1303,17 +1303,17 @@ class TripProgressTracker(
                     // Add buffer to ensure destination has the longest time
                     val destinationTime = maxWaypointTime + 60L // Add 1 minute buffer
                     
-                    Log.d(TAG, "Max waypoint time: ${formatDuration(maxWaypointTime)}")
-                    Log.d(TAG, "Destination time (with buffer): ${formatDuration(destinationTime)}")
+                    Logging.d(TAG, "Max waypoint time: ${formatDuration(maxWaypointTime)}")
+                    Logging.d(TAG, "Destination time (with buffer): ${formatDuration(destinationTime)}")
                     
                     destinationTime
                 }
-                Log.d(TAG, "Final remaining time result: ${result?.let { formatDuration(it) } ?: "null"}")
-                Log.d(TAG, "=================================================")
+                Logging.d(TAG, "Final remaining time result: ${result?.let { formatDuration(it) } ?: "null"}")
+                Logging.d(TAG, "=================================================")
                 result
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error calculating remaining time to destination: ${e.message}", e)
+            Logging.e(TAG, "Error calculating remaining time to destination: ${e.message}", e)
             null
         }
     }
@@ -1327,7 +1327,7 @@ class TripProgressTracker(
                 if (trip.waypoints.isNotEmpty()) {
                     // Use fresh route progress data if available
                     lastRouteProgressData?.let { (freshDistance, freshTime) ->
-                        Log.d(TAG, "Using fresh waypoint data: ${String.format("%.1f", freshDistance)}m, ${formatDuration(freshTime)}")
+                        Logging.d(TAG, "Using fresh waypoint data: ${String.format("%.1f", freshDistance)}m, ${formatDuration(freshTime)}")
                         Pair(freshTime, freshDistance)
                     } ?: run {
                         // Fallback to cached waypoint progress
@@ -1335,7 +1335,7 @@ class TripProgressTracker(
                             .filter { it.isNext }
                             .minByOrNull { it.order }
                         nextWaypointProgress?.let { progress ->
-                            Log.d(TAG, "Using cached waypoint data: ${String.format("%.1f", progress.remainingDistanceInMeters)}m, ${formatDuration(progress.remainingTimeInSeconds)}")
+                            Logging.d(TAG, "Using cached waypoint data: ${String.format("%.1f", progress.remainingDistanceInMeters)}m, ${formatDuration(progress.remainingTimeInSeconds)}")
                             Pair(progress.remainingTimeInSeconds, progress.remainingDistanceInMeters)
                         }
                     }
@@ -1344,7 +1344,7 @@ class TripProgressTracker(
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error getting fresh waypoint data: ${e.message}", e)
+            Logging.e(TAG, "Error getting fresh waypoint data: ${e.message}", e)
             null
         }
     }
@@ -1356,24 +1356,24 @@ class TripProgressTracker(
     private fun calculateRemainingDistanceToDestination(): Double? {
         return try {
             currentTrip?.let { trip ->
-                Log.d(TAG, "=== CALCULATING REMAINING DISTANCE TO DESTINATION ===")
-                Log.d(TAG, "Trip has ${trip.waypoints.size} waypoints")
-                Log.d(TAG, "Waypoint progress map has ${waypointProgressMap.size} entries")
+                Logging.d(TAG, "=== CALCULATING REMAINING DISTANCE TO DESTINATION ===")
+                Logging.d(TAG, "Trip has ${trip.waypoints.size} waypoints")
+                Logging.d(TAG, "Waypoint progress map has ${waypointProgressMap.size} entries")
                 
                 // Log current waypoint remaining_distance values for debugging
                 trip.waypoints.forEach { waypoint ->
-                    Log.d(TAG, "Waypoint ${waypoint.id} (${waypoint.location.google_place_name}): remaining_distance=${waypoint.remaining_distance?.let { String.format("%.1f", it) } ?: "null"}m")
+                    Logging.d(TAG, "Waypoint ${waypoint.id} (${waypoint.location.google_place_name}): remaining_distance=${waypoint.remaining_distance?.let { String.format("%.1f", it) } ?: "null"}m")
                 }
                 
                 val result = if (trip.waypoints.isEmpty()) {
                     // Single destination route - get remaining distance from destination progress
-                    Log.d(TAG, "Single destination route - looking for destination progress")
+                    Logging.d(TAG, "Single destination route - looking for destination progress")
                     val destinationProgress = waypointProgressMap[-1] // Special ID for destination
-                    Log.d(TAG, "Found destination progress: ${destinationProgress?.remainingDistanceInMeters?.let { String.format("%.1f", it) } ?: "null"}m")
+                    Logging.d(TAG, "Found destination progress: ${destinationProgress?.remainingDistanceInMeters?.let { String.format("%.1f", it) } ?: "null"}m")
                     destinationProgress?.remainingDistanceInMeters
                 } else {
                     // Multi-waypoint route - calculate destination distance as the maximum waypoint distance + buffer
-                    Log.d(TAG, "Multi-waypoint route - calculating destination distance as max waypoint distance + buffer")
+                    Logging.d(TAG, "Multi-waypoint route - calculating destination distance as max waypoint distance + buffer")
                     
                     // Get the maximum remaining distance from all waypoints
                     val maxWaypointDistance = trip.waypoints
@@ -1384,17 +1384,17 @@ class TripProgressTracker(
                     // Add buffer to ensure destination has the longest distance
                     val destinationDistance = maxWaypointDistance + 500.0 // Add 500 meters buffer
                     
-                    Log.d(TAG, "Max waypoint distance: ${String.format("%.1f", maxWaypointDistance)}m")
-                    Log.d(TAG, "Destination distance (with buffer): ${String.format("%.1f", destinationDistance)}m")
+                    Logging.d(TAG, "Max waypoint distance: ${String.format("%.1f", maxWaypointDistance)}m")
+                    Logging.d(TAG, "Destination distance (with buffer): ${String.format("%.1f", destinationDistance)}m")
                     
                     destinationDistance
                 }
-                Log.d(TAG, "Final remaining distance result: ${result?.let { String.format("%.1f", it) } ?: "null"}m")
-                Log.d(TAG, "=====================================================")
+                Logging.d(TAG, "Final remaining distance result: ${result?.let { String.format("%.1f", it) } ?: "null"}m")
+                Logging.d(TAG, "=====================================================")
                 result
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error calculating remaining distance to destination: ${e.message}", e)
+            Logging.e(TAG, "Error calculating remaining distance to destination: ${e.message}", e)
             null
         }
     }
@@ -1409,8 +1409,8 @@ class TripProgressTracker(
                 val currentTime = System.currentTimeMillis()
                 val unpassedWaypoints = trip.waypoints.filter { !it.is_passed }.sortedBy { it.order }
                 
-                Log.d(TAG, "=== CHECKING ALL WAYPOINTS FOR PASSENGER NOTIFICATIONS ===")
-                Log.d(TAG, "Found ${unpassedWaypoints.size} unpassed waypoints")
+                Logging.d(TAG, "=== CHECKING ALL WAYPOINTS FOR PASSENGER NOTIFICATIONS ===")
+                Logging.d(TAG, "Found ${unpassedWaypoints.size} unpassed waypoints")
                 
                 unpassedWaypoints.forEach { waypoint ->
                     val waypointId = waypoint.id
@@ -1424,27 +1424,27 @@ class TripProgressTracker(
                         val remainingTime = waypoint.remaining_time ?: Long.MAX_VALUE
                         val remainingDistance = waypoint.remaining_distance ?: Double.MAX_VALUE
                         
-                        Log.d(TAG, "Waypoint ${waypoint.order} (${waypoint.location.google_place_name}):")
-                        Log.d(TAG, "  - Remaining time: ${formatDuration(remainingTime)}")
-                        Log.d(TAG, "  - Remaining distance: ${String.format("%.1f", remainingDistance)}m")
+                        Logging.d(TAG, "Waypoint ${waypoint.order} (${waypoint.location.google_place_name}):")
+                        Logging.d(TAG, "  - Remaining time: ${formatDuration(remainingTime)}")
+                        Logging.d(TAG, "  - Remaining distance: ${String.format("%.1f", remainingDistance)}m")
                         
                         // Show notification if within 3 minutes (180 seconds) and not already shown
                         if (remainingTime <= 180 && !approachingNotificationsShown.contains(waypointId)) {
-                            Log.d(TAG, "  - Within 3 minutes, checking for passengers...")
+                            Logging.d(TAG, "  - Within 3 minutes, checking for passengers...")
                             approachingNotificationsShown.add(waypointId)
                             showPassengerApproachingNotification(waypoint)
                         } else if (remainingTime <= 180) {
-                            Log.d(TAG, "  - Within 3 minutes but notification already shown")
+                            Logging.d(TAG, "  - Within 3 minutes but notification already shown")
                         } else {
-                            Log.d(TAG, "  - More than 3 minutes away")
+                            Logging.d(TAG, "  - More than 3 minutes away")
                         }
                     }
                 }
                 
-                Log.d(TAG, "=========================================================")
+                Logging.d(TAG, "=========================================================")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error checking waypoints for passenger notifications: ${e.message}", e)
+            Logging.e(TAG, "Error checking waypoints for passenger notifications: ${e.message}", e)
         }
     }
 
@@ -1454,27 +1454,27 @@ class TripProgressTracker(
     private fun showPassengerApproachingNotification(waypoint: TripWaypoint) {
         coroutineScope.launch {
             try {
-                Log.d(TAG, "=== PASSENGER APPROACHING NOTIFICATION ===")
-                Log.d(TAG, "Counting passengers for waypoint: ${waypoint.location.google_place_name}")
+                Logging.d(TAG, "=== PASSENGER APPROACHING NOTIFICATION ===")
+                Logging.d(TAG, "Counting passengers for waypoint: ${waypoint.location.google_place_name}")
                 
                 val locationName = getWaypointLocationName(waypoint)
                 val passengerCount = databaseManager.countPaidPassengersForWaypoint(tripId, locationName)
                 
-                Log.d(TAG, "Found $passengerCount paid passengers for '$locationName'")
+                Logging.d(TAG, "Found $passengerCount paid passengers for '$locationName'")
                 
                 if (passengerCount > 0) {
                     passengerNotificationDialog.showApproachingNotification(
                         passengerCount = passengerCount,
                         waypointName = waypoint.location.google_place_name
                     )
-                    Log.d(TAG, "Showed approaching notification for $passengerCount passengers")
+                    Logging.d(TAG, "Showed approaching notification for $passengerCount passengers")
                 } else {
-                    Log.d(TAG, "No passengers to board at this waypoint")
+                    Logging.d(TAG, "No passengers to board at this waypoint")
                 }
                 
-                Log.d(TAG, "==========================================")
+                Logging.d(TAG, "==========================================")
             } catch (e: Exception) {
-                Log.e(TAG, "Error showing passenger approaching notification: ${e.message}", e)
+                Logging.e(TAG, "Error showing passenger approaching notification: ${e.message}", e)
             }
         }
     }
@@ -1488,8 +1488,8 @@ class TripProgressTracker(
                 val currentTime = System.currentTimeMillis()
                 val passedWaypoints = trip.waypoints.filter { it.is_passed }.sortedBy { it.order }
                 
-                Log.d(TAG, "=== CHECKING PASSED WAYPOINTS FOR PASSENGER NOTIFICATIONS ===")
-                Log.d(TAG, "Found ${passedWaypoints.size} passed waypoints")
+                Logging.d(TAG, "=== CHECKING PASSED WAYPOINTS FOR PASSENGER NOTIFICATIONS ===")
+                Logging.d(TAG, "Found ${passedWaypoints.size} passed waypoints")
                 
                 passedWaypoints.forEach { waypoint ->
                     val waypointId = waypoint.id
@@ -1502,26 +1502,26 @@ class TripProgressTracker(
                         // Check if this waypoint has passengers and was just passed (within last 2 minutes)
                         val timeSincePassed = currentTime - (waypointPassedTime[waypointId] ?: 0L)
                         
-                        Log.d(TAG, "Passed waypoint ${waypoint.order} (${waypoint.location.google_place_name}):")
-                        Log.d(TAG, "  - Time since passed: ${timeSincePassed / 1000} seconds")
+                        Logging.d(TAG, "Passed waypoint ${waypoint.order} (${waypoint.location.google_place_name}):")
+                        Logging.d(TAG, "  - Time since passed: ${timeSincePassed / 1000} seconds")
                         
                         // Show notification if passed within last 2 minutes and not already shown
                         if (timeSincePassed <= 120000 && !reachedNotificationsShown.contains(waypointId)) {
-                            Log.d(TAG, "  - Just passed, checking for passengers...")
+                            Logging.d(TAG, "  - Just passed, checking for passengers...")
                             reachedNotificationsShown.add(waypointId)
                             showPassengerReachedNotification(waypoint)
                         } else if (timeSincePassed <= 120000) {
-                            Log.d(TAG, "  - Just passed but notification already shown")
+                            Logging.d(TAG, "  - Just passed but notification already shown")
                         } else {
-                            Log.d(TAG, "  - Passed more than 2 minutes ago")
+                            Logging.d(TAG, "  - Passed more than 2 minutes ago")
                         }
                     }
                 }
                 
-                Log.d(TAG, "=============================================================")
+                Logging.d(TAG, "=============================================================")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error checking passed waypoints for passenger notifications: ${e.message}", e)
+            Logging.e(TAG, "Error checking passed waypoints for passenger notifications: ${e.message}", e)
         }
     }
 
@@ -1531,27 +1531,27 @@ class TripProgressTracker(
     private fun showPassengerReachedNotification(waypoint: TripWaypoint) {
         coroutineScope.launch {
             try {
-                Log.d(TAG, "=== PASSENGER REACHED NOTIFICATION ===")
-                Log.d(TAG, "Counting passengers for waypoint: ${waypoint.location.google_place_name}")
+                Logging.d(TAG, "=== PASSENGER REACHED NOTIFICATION ===")
+                Logging.d(TAG, "Counting passengers for waypoint: ${waypoint.location.google_place_name}")
                 
                 val locationName = getWaypointLocationName(waypoint)
                 val passengerCount = databaseManager.countPaidPassengersForWaypoint(tripId, locationName)
                 
-                Log.d(TAG, "Found $passengerCount paid passengers for '$locationName'")
+                Logging.d(TAG, "Found $passengerCount paid passengers for '$locationName'")
                 
                 if (passengerCount > 0) {
                     passengerNotificationDialog.showWaypointReachedNotification(
                         passengerCount = passengerCount,
                         waypointName = waypoint.location.google_place_name
                     )
-                    Log.d(TAG, "Showed reached notification for $passengerCount passengers")
+                    Logging.d(TAG, "Showed reached notification for $passengerCount passengers")
                 } else {
-                    Log.d(TAG, "No passengers to board at this waypoint")
+                    Logging.d(TAG, "No passengers to board at this waypoint")
                 }
                 
-                Log.d(TAG, "======================================")
+                Logging.d(TAG, "======================================")
             } catch (e: Exception) {
-                Log.e(TAG, "Error showing passenger reached notification: ${e.message}", e)
+                Logging.e(TAG, "Error showing passenger reached notification: ${e.message}", e)
             }
         }
     }
@@ -1574,13 +1574,13 @@ class TripProgressTracker(
                     // Get remaining time to destination
                     val remainingTimeToDestination = calculateRemainingTimeToDestination() ?: Long.MAX_VALUE
                     
-                    Log.d(TAG, "=== CHECKING FINAL DESTINATION FOR PASSENGER NOTIFICATIONS ===")
-                    Log.d(TAG, "Destination: ${destination.google_place_name}")
-                    Log.d(TAG, "Remaining time: ${formatDuration(remainingTimeToDestination)}")
+                    Logging.d(TAG, "=== CHECKING FINAL DESTINATION FOR PASSENGER NOTIFICATIONS ===")
+                    Logging.d(TAG, "Destination: ${destination.google_place_name}")
+                    Logging.d(TAG, "Remaining time: ${formatDuration(remainingTimeToDestination)}")
                     
                     // Show notification if within 3 minutes and not already shown
                     if (remainingTimeToDestination <= 180 && !approachingNotificationsShown.contains(destinationId)) {
-                        Log.d(TAG, "Within 3 minutes of destination, checking for passengers...")
+                        Logging.d(TAG, "Within 3 minutes of destination, checking for passengers...")
                         approachingNotificationsShown.add(destinationId)
                         
                         coroutineScope.launch {
@@ -1589,32 +1589,32 @@ class TripProgressTracker(
                                     ?: destination.google_place_name
                                 val passengerCount = databaseManager.countPaidPassengersForWaypoint(tripId, locationName)
                                 
-                                Log.d(TAG, "Found $passengerCount paid passengers for destination '$locationName'")
+                                Logging.d(TAG, "Found $passengerCount paid passengers for destination '$locationName'")
                                 
                                 if (passengerCount > 0) {
                                     passengerNotificationDialog.showApproachingNotification(
                                         passengerCount = passengerCount,
                                         waypointName = destination.google_place_name
                                     )
-                                    Log.d(TAG, "Showed destination approaching notification for $passengerCount passengers")
+                                    Logging.d(TAG, "Showed destination approaching notification for $passengerCount passengers")
                                 } else {
-                                    Log.d(TAG, "No passengers to board at destination")
+                                    Logging.d(TAG, "No passengers to board at destination")
                                 }
                             } catch (e: Exception) {
-                                Log.e(TAG, "Error checking destination passengers: ${e.message}", e)
+                                Logging.e(TAG, "Error checking destination passengers: ${e.message}", e)
                             }
                         }
                     } else if (remainingTimeToDestination <= 180) {
-                        Log.d(TAG, "Within 3 minutes of destination but notification already shown")
+                        Logging.d(TAG, "Within 3 minutes of destination but notification already shown")
                     } else {
-                        Log.d(TAG, "More than 3 minutes from destination")
+                        Logging.d(TAG, "More than 3 minutes from destination")
                     }
                     
-                    Log.d(TAG, "=============================================================")
+                    Logging.d(TAG, "=============================================================")
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error checking final destination for passenger notifications: ${e.message}", e)
+            Logging.e(TAG, "Error checking final destination for passenger notifications: ${e.message}", e)
         }
     }
 
@@ -1634,8 +1634,8 @@ class TripProgressTracker(
     private fun recalculateAllWaypointData() {
         try {
             currentTrip?.let { trip ->
-                Log.d(TAG, "=== RECALCULATING ALL WAYPOINT DATA ===")
-                Log.d(TAG, "Trip is_reversed: ${trip.is_reversed} (handled by backend)")
+                Logging.d(TAG, "=== RECALCULATING ALL WAYPOINT DATA ===")
+                Logging.d(TAG, "Trip is_reversed: ${trip.is_reversed} (handled by backend)")
                 
                 // Get current route progress data (this is the distance/time to the NEXT waypoint)
                 val (currentRemainingDistance, currentRemainingTime) = lastRouteProgressData ?: Pair(0.0, 0L)
@@ -1645,9 +1645,9 @@ class TripProgressTracker(
                     .filter { !it.is_passed }
                     .sortedBy { it.order }
                 
-                Log.d(TAG, "Found ${unpassedWaypoints.size} unpassed waypoints")
-                Log.d(TAG, "Current remaining distance to next waypoint: ${String.format("%.1f", currentRemainingDistance)}m")
-                Log.d(TAG, "Current remaining time to next waypoint: ${formatDuration(currentRemainingTime)}")
+                Logging.d(TAG, "Found ${unpassedWaypoints.size} unpassed waypoints")
+                Logging.d(TAG, "Current remaining distance to next waypoint: ${String.format("%.1f", currentRemainingDistance)}m")
+                Logging.d(TAG, "Current remaining time to next waypoint: ${formatDuration(currentRemainingTime)}")
                 
                 if (unpassedWaypoints.isNotEmpty()) {
                     // Calculate proper remaining values for each waypoint
@@ -1665,10 +1665,10 @@ class TripProgressTracker(
                         val calculatedTime = currentRemainingTime + (additionalTimePerWaypoint * (waypointOrder - 1))
                         val calculatedDistance = currentRemainingDistance + (additionalDistancePerWaypoint * (waypointOrder - 1))
                         
-                        Log.d(TAG, "Waypoint ${waypoint.order} (${waypoint.location.google_place_name}):")
-                        Log.d(TAG, "  - Base time: ${formatDuration(currentRemainingTime)}, Base distance: ${String.format("%.1f", currentRemainingDistance)}m")
-                        Log.d(TAG, "  - Additional time: ${formatDuration(additionalTimePerWaypoint * (waypointOrder - 1))}, Additional distance: ${String.format("%.1f", additionalDistancePerWaypoint * (waypointOrder - 1))}m")
-                        Log.d(TAG, "  - Final time: ${formatDuration(calculatedTime)}, Final distance: ${String.format("%.1f", calculatedDistance)}m")
+                        Logging.d(TAG, "Waypoint ${waypoint.order} (${waypoint.location.google_place_name}):")
+                        Logging.d(TAG, "  - Base time: ${formatDuration(currentRemainingTime)}, Base distance: ${String.format("%.1f", currentRemainingDistance)}m")
+                        Logging.d(TAG, "  - Additional time: ${formatDuration(additionalTimePerWaypoint * (waypointOrder - 1))}, Additional distance: ${String.format("%.1f", additionalDistancePerWaypoint * (waypointOrder - 1))}m")
+                        Logging.d(TAG, "  - Final time: ${formatDuration(calculatedTime)}, Final distance: ${String.format("%.1f", calculatedDistance)}m")
                         
                         // Update waypoint progress map
                         val waypointProgress = WaypointProgress(
@@ -1710,20 +1710,20 @@ class TripProgressTracker(
                                     remainingTimeSeconds = calculatedTime,
                                     remainingDistanceMeters = calculatedDistance
                                 )
-                                Log.d(TAG, "Updated waypoint ${waypoint.id} (Order: ${waypoint.order}) in database")
+                                Logging.d(TAG, "Updated waypoint ${waypoint.id} (Order: ${waypoint.order}) in database")
                             } catch (e: Exception) {
-                                Log.e(TAG, "Failed to update waypoint ${waypoint.id} in database: ${e.message}", e)
+                                Logging.e(TAG, "Failed to update waypoint ${waypoint.id} in database: ${e.message}", e)
                             }
                         }
                     }
                 } else {
-                    Log.d(TAG, "No unpassed waypoints to recalculate")
+                    Logging.d(TAG, "No unpassed waypoints to recalculate")
                 }
                 
-                Log.d(TAG, "=====================================")
+                Logging.d(TAG, "=====================================")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error recalculating all waypoint data: ${e.message}", e)
+            Logging.e(TAG, "Error recalculating all waypoint data: ${e.message}", e)
         }
     }
 }

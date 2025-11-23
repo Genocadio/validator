@@ -19,7 +19,7 @@
 package com.gocavgo.validator.navigator
 
 import android.content.Context
-import android.util.Log
+import com.gocavgo.validator.util.Logging
 import com.here.sdk.core.GeoCoordinates
 import com.here.sdk.core.Location
 import com.here.sdk.core.engine.SDKNativeEngine
@@ -41,7 +41,6 @@ import com.here.time.Duration
 import com.here.sdk.navigation.Navigator
 import com.gocavgo.validator.network.NetworkMonitor
 import android.widget.Toast
-import com.gocavgo.validator.util.Logging
 
 // Shows how to start and stop turn-by-turn navigation on a car route.
 // By default, tracking mode is enabled. When navigation is stopped, tracking mode is enabled again.
@@ -116,21 +115,21 @@ class NavigationExample(
         // Set navigator as listener to receive locations from HERE Positioning
         // and choose a suitable accuracy for the tbt navigation use case.
         // Start immediately to begin GPS acquisition
-        Log.d(TAG, "=== STARTING LOCATION PROVIDER ===")
-        Log.d(TAG, "Headless mode: $isHeadlessMode")
-        Log.d(TAG, "Location provider already running: ${herePositioningProvider.isLocating()}")
+        Logging.d(TAG, "=== STARTING LOCATION PROVIDER ===")
+        Logging.d(TAG, "Headless mode: $isHeadlessMode")
+        Logging.d(TAG, "Location provider already running: ${herePositioningProvider.isLocating()}")
         
         // Use navigator for headless mode, visualNavigator for visual mode
         if (isHeadlessMode) {
             herePositioningProvider.startLocating(navigator, LocationAccuracy.NAVIGATION)
-            Log.d(TAG, "Location provider started with headless navigator")
+            Logging.d(TAG, "Location provider started with headless navigator")
         } else {
             herePositioningProvider.startLocating(visualNavigator, LocationAccuracy.NAVIGATION)
-            Log.d(TAG, "Location provider started with visual navigator")
+            Logging.d(TAG, "Location provider started with visual navigator")
         }
         
-        Log.d(TAG, "Location provider status after start: ${herePositioningProvider.isLocating()}")
-        Log.d(TAG, "================================")
+        Logging.d(TAG, "Location provider status after start: ${herePositioningProvider.isLocating()}")
+        Logging.d(TAG, "================================")
     }
 
     private fun prefetchMapData(currentGeoCoordinates: GeoCoordinates) {
@@ -174,16 +173,16 @@ class NavigationExample(
     private fun initializeOfflineRoutingEngine() {
         try {
             offlineRoutingEngine = OfflineRoutingEngine()
-            Log.d(TAG, "OfflineRoutingEngine initialized successfully")
+            Logging.d(TAG, "OfflineRoutingEngine initialized successfully")
         } catch (e: InstantiationErrorException) {
-            Log.e(TAG, "Initialization of OfflineRoutingEngine failed: ${e.error.name}")
+            Logging.e(TAG, "Initialization of OfflineRoutingEngine failed: ${e.error.name}")
             // Don't throw exception, offline routing is optional
         }
     }
 
     private fun initializeNetworkMonitoring(context: Context?) {
         if (context == null) {
-            Log.w(TAG, "Context is null, skipping network monitoring initialization")
+            Logging.w(TAG, "Context is null, skipping network monitoring initialization")
             return
         }
 
@@ -192,30 +191,30 @@ class NavigationExample(
                 handleNetworkChange(connected, type, metered)
             }
             networkMonitor?.startMonitoring()
-            Log.d(TAG, "Network monitoring initialized successfully")
+            Logging.d(TAG, "Network monitoring initialized successfully")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to initialize network monitoring: ${e.message}", e)
+            Logging.e(TAG, "Failed to initialize network monitoring: ${e.message}", e)
         }
     }
 
     private fun handleNetworkChange(connected: Boolean, type: String, metered: Boolean) {
-        Log.d(TAG, "=== NETWORK STATE CHANGED ===")
-        Log.d(TAG, "Connected: $connected, Type: $type, Metered: $metered")
-        Log.d(TAG, "Previous mode: $currentRoutingMode")
+        Logging.d(TAG, "=== NETWORK STATE CHANGED ===")
+        Logging.d(TAG, "Connected: $connected, Type: $type, Metered: $metered")
+        Logging.d(TAG, "Previous mode: $currentRoutingMode")
 
         val shouldUseOnline = determineRoutingMode(connected, type, metered)
         val newMode = if (shouldUseOnline) "online" else "offline"
 
         // Only switch if mode actually changed
         if (newMode != currentRoutingMode) {
-            Log.d(TAG, "Switching routing mode: $currentRoutingMode -> $newMode")
+            Logging.d(TAG, "Switching routing mode: $currentRoutingMode -> $newMode")
             switchRoutingMode(shouldUseOnline)
             currentRoutingMode = newMode
         } else {
-            Log.d(TAG, "Routing mode unchanged: $currentRoutingMode")
+            Logging.d(TAG, "Routing mode unchanged: $currentRoutingMode")
         }
 
-        Log.d(TAG, "==============================")
+        Logging.d(TAG, "==============================")
     }
 
     private fun determineRoutingMode(connected: Boolean, type: String, metered: Boolean): Boolean {
@@ -229,17 +228,17 @@ class NavigationExample(
     }
 
     private fun switchRoutingMode(useOnline: Boolean) {
-        Log.d(TAG, "=== SWITCHING ROUTING MODE ===")
-        Log.d(TAG, "New mode: ${if (useOnline) "Online" else "Offline"}")
+        Logging.d(TAG, "=== SWITCHING ROUTING MODE ===")
+        Logging.d(TAG, "New mode: ${if (useOnline) "Online" else "Offline"}")
 
         if (useOnline) {
             // Switching to online - resume DynamicRoutingEngine if we have a route
             visualNavigator.route?.let { route ->
                 try {
                     startDynamicSearchForBetterRoutes(route)
-                    Log.d(TAG, "DynamicRoutingEngine resumed for online mode")
+                    Logging.d(TAG, "DynamicRoutingEngine resumed for online mode")
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed to resume DynamicRoutingEngine: ${e.message}")
+                    Logging.e(TAG, "Failed to resume DynamicRoutingEngine: ${e.message}")
                 }
             }
             showRoutingModeToast(true)
@@ -247,14 +246,14 @@ class NavigationExample(
             // Switching to offline - stop DynamicRoutingEngine polling
             try {
                 dynamicRoutingEngine?.stop()
-                Log.d(TAG, "DynamicRoutingEngine stopped for offline mode")
+                Logging.d(TAG, "DynamicRoutingEngine stopped for offline mode")
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to stop DynamicRoutingEngine: ${e.message}")
+                Logging.e(TAG, "Failed to stop DynamicRoutingEngine: ${e.message}")
             }
             showRoutingModeToast(false)
         }
 
-        Log.d(TAG, "==============================")
+        Logging.d(TAG, "==============================")
     }
 
     private fun showRoutingModeToast(isOnline: Boolean) {
@@ -377,12 +376,12 @@ class NavigationExample(
                     etaDifferenceInSeconds: Int,
                     distanceDifferenceInMeters: Int
                 ) {
-                    Log.d(TAG, "DynamicRoutingEngine: Calculated a new route.")
-                    Log.d(
+                    Logging.d(TAG, "DynamicRoutingEngine: Calculated a new route.")
+                    Logging.d(
                         TAG,
                         "DynamicRoutingEngine: etaDifferenceInSeconds: $etaDifferenceInSeconds."
                     )
-                    Log.d(
+                    Logging.d(
                         TAG,
                         "DynamicRoutingEngine: distanceDifferenceInMeters: $distanceDifferenceInMeters."
                     )
@@ -397,7 +396,7 @@ class NavigationExample(
                 }
 
                 override fun onRoutingError(routingError: RoutingError) {
-                    Log.d(
+                    Logging.d(
                         TAG,
                         "Error while dynamically searching for a better route: " + routingError.name
                     )
@@ -424,7 +423,7 @@ class NavigationExample(
             enableDevicePositioning()
             messageView.updateText("Tracking device's location.")
         } else {
-            Log.d(TAG, "Skipping device positioning enable during shutdown")
+            Logging.d(TAG, "Skipping device positioning enable during shutdown")
             messageView.updateText("Navigation stopped.")
         }
 
@@ -450,7 +449,7 @@ class NavigationExample(
         if (!isShuttingDown) {
             enableDevicePositioning()
         } else {
-            Log.d(TAG, "Skipping device positioning enable during shutdown")
+            Logging.d(TAG, "Skipping device positioning enable during shutdown")
         }
         
         messageView.updateText("Stopped headless navigation.")
@@ -472,9 +471,9 @@ class NavigationExample(
             navigator.routeDeviationListener = null
             navigator.milestoneStatusListener = null
             navigator.destinationReachedListener = null
-            Log.d(TAG, "Navigator listeners cleared")
+            Logging.d(TAG, "Navigator listeners cleared")
         } catch (e: Exception) {
-            Log.e(TAG, "Error clearing Navigator listeners: ${e.message}", e)
+            Logging.e(TAG, "Error clearing Navigator listeners: ${e.message}", e)
         }
     }
 
@@ -501,15 +500,15 @@ class NavigationExample(
 
     // Provides location updates based on the device's GPS sensor.
     private fun enableDevicePositioning() {
-        Log.d(TAG, "=== ENABLING DEVICE POSITIONING ===")
-        Log.d(TAG, "Headless mode: $isHeadlessMode")
-        Log.d(TAG, "Shutting down: $isShuttingDown")
-        Log.d(TAG, "Location provider running: ${herePositioningProvider.isLocating()}")
-        Log.d(TAG, "Has valid location: ${hasValidLocation()}")
+        Logging.d(TAG, "=== ENABLING DEVICE POSITIONING ===")
+        Logging.d(TAG, "Headless mode: $isHeadlessMode")
+        Logging.d(TAG, "Shutting down: $isShuttingDown")
+        Logging.d(TAG, "Location provider running: ${herePositioningProvider.isLocating()}")
+        Logging.d(TAG, "Has valid location: ${hasValidLocation()}")
         
         // Don't start location services if we're shutting down
         if (isShuttingDown) {
-            Log.d(TAG, "Skipping device positioning enable during shutdown")
+            Logging.d(TAG, "Skipping device positioning enable during shutdown")
             return
         }
         
@@ -517,51 +516,51 @@ class NavigationExample(
         // This prevents double starts that cause GPS instability and delays
         if (herePositioningProvider.isLocating()) {
             val lastLocation = getLastKnownLocation()
-            Log.d(TAG, "✅ Location provider already running, skipping restart to prevent GPS instability")
+            Logging.d(TAG, "✅ Location provider already running, skipping restart to prevent GPS instability")
             if (lastLocation != null) {
-                Log.d(TAG, "Current location: lat=${lastLocation.coordinates.latitude}, lng=${lastLocation.coordinates.longitude}, speed=${lastLocation.speedInMetersPerSecond ?: 0.0} m/s")
+                Logging.d(TAG, "Current location: lat=${lastLocation.coordinates.latitude}, lng=${lastLocation.coordinates.longitude}, speed=${lastLocation.speedInMetersPerSecond ?: 0.0} m/s")
             } else {
-                Log.d(TAG, "Location provider running but no location available yet")
+                Logging.d(TAG, "Location provider running but no location available yet")
             }
-            Log.d(TAG, "================================")
+            Logging.d(TAG, "================================")
             return
         }
         
         // Stop simulator if running (only if we're actually starting real GPS)
         herePositioningSimulator.stopLocating()
-        Log.d(TAG, "Simulator stopped (if was running)")
+        Logging.d(TAG, "Simulator stopped (if was running)")
         
         // IMPROVE LOCATION PROVIDER CONNECTION: Verify Navigator is properly connected
         // Navigator must be set as listener to receive location updates for RouteProgressListener to fire
         if (isHeadlessMode) {
-            Log.d(TAG, "Starting headless device positioning with Navigator")
-            Log.d(TAG, "Connecting Navigator to location provider...")
+            Logging.d(TAG, "Starting headless device positioning with Navigator")
+            Logging.d(TAG, "Connecting Navigator to location provider...")
             herePositioningProvider.startLocating(navigator, LocationAccuracy.NAVIGATION)
             
             // Verify connection: Navigator should now receive location updates
-            Log.d(TAG, "Navigator connected to location provider")
-            Log.d(TAG, "Navigator will receive location updates → NavigableLocationListener → RouteProgressListener")
+            Logging.d(TAG, "Navigator connected to location provider")
+            Logging.d(TAG, "Navigator will receive location updates → NavigableLocationListener → RouteProgressListener")
         } else {
-            Log.d(TAG, "Starting visual device positioning with VisualNavigator")
-            Log.d(TAG, "Connecting VisualNavigator to location provider...")
+            Logging.d(TAG, "Starting visual device positioning with VisualNavigator")
+            Logging.d(TAG, "Connecting VisualNavigator to location provider...")
             herePositioningProvider.startLocating(visualNavigator, LocationAccuracy.NAVIGATION)
             
             // Verify connection: VisualNavigator should now receive location updates
-            Log.d(TAG, "VisualNavigator connected to location provider")
+            Logging.d(TAG, "VisualNavigator connected to location provider")
         }
         
         // Verify location provider is actually running
         val isProviderActive = herePositioningProvider.isLocating()
-        Log.d(TAG, "Device positioning started - provider active: $isProviderActive")
+        Logging.d(TAG, "Device positioning started - provider active: $isProviderActive")
         
         if (!isProviderActive) {
-            Log.e(TAG, "❌ CRITICAL: Location provider failed to start!")
-            Log.e(TAG, "RouteProgressListener will NOT fire until location provider is active")
+            Logging.e(TAG, "❌ CRITICAL: Location provider failed to start!")
+            Logging.e(TAG, "RouteProgressListener will NOT fire until location provider is active")
         } else {
-            Log.d(TAG, "✅ Location provider active - Navigator should receive updates")
+            Logging.d(TAG, "✅ Location provider active - Navigator should receive updates")
         }
         
-        Log.d(TAG, "================================")
+        Logging.d(TAG, "================================")
     }
 
     fun startCameraTracking() {
@@ -604,7 +603,7 @@ class NavigationExample(
      */
     fun setShuttingDown(shuttingDown: Boolean) {
         isShuttingDown = shuttingDown
-        Log.d(TAG, "Shutdown flag set to: $shuttingDown")
+        Logging.d(TAG, "Shutdown flag set to: $shuttingDown")
     }
     
     /**
@@ -619,9 +618,9 @@ class NavigationExample(
         try {
             networkMonitor?.stopMonitoring()
             networkMonitor = null
-            Log.d(TAG, "Network monitoring cleaned up successfully")
+            Logging.d(TAG, "Network monitoring cleaned up successfully")
         } catch (e: Exception) {
-            Log.e(TAG, "Error cleaning up network monitoring: ${e.message}", e)
+            Logging.e(TAG, "Error cleaning up network monitoring: ${e.message}", e)
         }
     }
     

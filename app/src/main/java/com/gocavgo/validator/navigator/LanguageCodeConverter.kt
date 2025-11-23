@@ -19,7 +19,7 @@
 
 package com.gocavgo.validator.navigator
 
-import android.util.Log
+import com.gocavgo.validator.util.Logging
 import com.here.sdk.core.LanguageCode
 import java.util.Locale
 import kotlin.collections.iterator
@@ -42,7 +42,7 @@ object LanguageCodeConverter {
 
         // Should never happen, unless the languageCodeMap was not updated
         // to support the latest LanguageCodes from HERE SDK.
-        Log.e(TAG, "LanguageCode not found. Falling Back to en-US.")
+        Logging.e(TAG, "LanguageCode not found. Falling Back to en-US.")
         return Locale("en", "US")
     }
 
@@ -65,7 +65,7 @@ object LanguageCodeConverter {
             }
         }
 
-        Log.e(TAG, "LanguageCode not found. Falling back to EN_US.")
+        Logging.e(TAG, "LanguageCode not found. Falling back to EN_US.")
         return LanguageCode.EN_US
     }
 
