@@ -114,10 +114,23 @@ class AutoModeHeadlessForegroundService : Service() {
         return Triple(lastKnownDistance, lastKnownTime, lastKnownWaypointName)
     }
     
-    // Service state (separate from Activity state)
-    private var currentTrip: TripResponse? = null
-    private val isNavigating = AtomicBoolean(false)
-    private var countdownText = ""
+    // Trip state manager (shared singleton with Activity)
+    private val tripStateManager = com.gocavgo.validator.navigator.TripStateManager.getInstance()
+    
+    // Legacy accessors for backward compatibility (delegate to tripStateManager)
+    private var currentTrip: TripResponse?
+        get() = tripStateManager.getState().currentTrip
+        set(value) = tripStateManager.updateTrip(value)
+    
+    // Wrapper for isNavigating to maintain AtomicBoolean-like API
+    private val isNavigating = object {
+        fun get(): Boolean = tripStateManager.getState().isNavigating
+        fun set(value: Boolean) = tripStateManager.setNavigating(value)
+    }
+    
+    private var countdownText: String
+        get() = tripStateManager.getState().countdownText
+        set(value) = tripStateManager.updateCountdown(value)
     
     // Route calculation state (track if route is calculated)
     private var isRouteCalculated = false

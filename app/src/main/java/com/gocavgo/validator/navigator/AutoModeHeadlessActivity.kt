@@ -16,6 +16,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.lifecycleScope
 import com.gocavgo.validator.dataclass.TripResponse
@@ -69,22 +70,48 @@ class AutoModeHeadlessActivity : ComponentActivity() {
     private lateinit var databaseManager: DatabaseManager
     private lateinit var vehicleSecurityManager: VehicleSecurityManager
     private lateinit var settingsManager: VehicleSettingsManager
-    private var tripResponse: TripResponse? = null
-    // isSimulated removed - now uses settings.simulate
-    private var currentSettings by mutableStateOf<VehicleSettings?>(null)
+    
+    // Settings coordinator
+    private var settingsCoordinator: SettingsCoordinator? = null
+    
+    // Legacy accessor for backward compatibility
+    private var currentSettings: VehicleSettings?
+        get() = settingsCoordinator?.getState()?.currentSettings
+        set(value) {
+            settingsCoordinator?.updateSettings(value)
+        }
     private var messageViewText by mutableStateOf("Auto Mode: Waiting for trip...")
 
-    // Auto mode state
-    private var currentTrip: TripResponse? = null
-    private val isNavigating = AtomicBoolean(false)
-    private var countdownText by mutableStateOf("")
+    // Trip state manager (single source of truth)
+    private lateinit var tripStateManager: TripStateManager
+    
+    // Legacy accessors for backward compatibility (delegate to tripStateManager)
+    private var currentTrip: TripResponse?
+        get() = tripStateManager.getState().currentTrip
+        set(value) = tripStateManager.updateTrip(value)
+    
+    // Wrapper for isNavigating to maintain AtomicBoolean-like API
+    private val isNavigating = object {
+        fun get(): Boolean = tripStateManager.getState().isNavigating
+        fun set(value: Boolean) = tripStateManager.setNavigating(value)
+    }
+    
+    private var countdownText: String
+        get() = tripStateManager.getState().countdownText
+        set(value) = tripStateManager.updateCountdown(value)
+    
+    private var tripResponse: TripResponse?
+        get() = tripStateManager.getState().tripResponse
+        set(value) = tripStateManager.updateTripResponse(value)
 
     // Waypoint overlay state
     private var showWaypointOverlay by mutableStateOf(false)
     private var waypointProgressData by mutableStateOf<List<TripSectionValidator.WaypointProgressInfo>>(emptyList())
 
-    // Route calculation state
-    private var isRouteCalculated by mutableStateOf(false)
+    // Route calculation state (delegated to coordinator)
+    private var isRouteCalculated: Boolean
+        get() = navigationCoordinator?.isRouteCalculated() ?: false
+        set(value) = navigationCoordinator?.setRouteCalculated(value) ?: Unit
     
     // Cache for notification persistence (prevent flickering when data is temporarily null)
     private var lastKnownDistance: Double? = null
@@ -94,14 +121,21 @@ class AutoModeHeadlessActivity : ComponentActivity() {
     // Active trip listener
     private var activeTripListener: ActiveTripListener? = null
 
-    // HERE SDK components - using App class like HeadlessNavigActivity
-    private var app: App? = null
-    private var messageViewUpdater: MessageViewUpdater? = null
+    // Navigation coordinator
+    private var navigationCoordinator: NavigationCoordinator? = null
+    
+    // HERE SDK components - using App class like HeadlessNavigActivity (delegated to coordinator)
+    private var app: App?
+        get() = navigationCoordinator?.getApp()
+        set(_) {} // Read-only, managed by coordinator
+    
+    private var messageViewUpdater: MessageViewUpdater?
+        get() = navigationCoordinator?.getMessageViewUpdater()
+        set(_) {} // Read-only, managed by coordinator
 
     // MQTT service
     private var mqttService: MqttService? = null
     private var confirmationReceiver: BroadcastReceiver? = null
-    private var settingsChangeReceiver: BroadcastReceiver? = null
     private val handler = Handler(Looper.getMainLooper())
     private var isDestroyed = false
 
@@ -124,28 +158,66 @@ class AutoModeHeadlessActivity : ComponentActivity() {
         }
     }
 
-    // Network monitoring
-    private var networkMonitor: NetworkMonitor? = null
-    private var isConnected by mutableStateOf(true)
-    private var connectionType by mutableStateOf("UNKNOWN")
-    private var isMetered by mutableStateOf(true)
-    private var networkOfflineTime = AtomicLong(0)
-    private var wasOfflineForExtendedPeriod = AtomicBoolean(false)
+    // Network state manager
+    private var networkStateManager: NetworkStateManager? = null
+    
+    // Legacy accessors for backward compatibility
+    private var isConnected: Boolean
+        get() = networkStateManager?.getState()?.isConnected ?: true
+        set(_) {} // Read-only
+    
+    private var connectionType: String
+        get() = networkStateManager?.getState()?.connectionType ?: "UNKNOWN"
+        set(_) {} // Read-only
+    
+    private var isMetered: Boolean
+        get() = networkStateManager?.getState()?.isMetered ?: true
+        set(_) {} // Read-only
+    
+    private val networkOfflineTime: Long
+        get() = networkStateManager?.getState()?.offlineTime ?: 0L
 
-    // HERE SDK offline mode state
-    private var pendingOfflineMode: Boolean? = null
+    // Map download coordinator
+    private var mapDownloadCoordinator: MapDownloadCoordinator? = null
+    
+    // Legacy accessors for backward compatibility
+    private var mapDownloadProgress: Int
+        get() = mapDownloadCoordinator?.getState()?.progress ?: 0
+        set(_) {} // Read-only
+    
+    private var mapDownloadTotalSize: Int
+        get() = mapDownloadCoordinator?.getState()?.totalSize ?: 0
+        set(_) {} // Read-only
+    
+    private var mapDownloadMessage: String
+        get() = mapDownloadCoordinator?.getState()?.message ?: ""
+        set(_) {} // Read-only
+    
+    private var mapDownloadStatus: String
+        get() = mapDownloadCoordinator?.getState()?.status ?: ""
+        set(_) {} // Read-only
+    
+    private var showMapDownloadDialog: Boolean
+        get() = mapDownloadCoordinator?.getState()?.showDialog ?: false
+        set(value) {
+            // Can only be set via coordinator callbacks
+            if (!value) {
+                mapDownloadCoordinator?.cancelDownloads()
+            }
+        }
+    
+    private var isMapDataReady: Boolean
+        get() = mapDownloadCoordinator?.getState()?.isReady ?: false
+        set(_) {} // Read-only
 
-    // Map downloader
-    private var mapDownloaderManager: MapDownloaderManager? = null
-    private var mapDownloadProgress by mutableStateOf(0)
-    private var mapDownloadTotalSize by mutableStateOf(0)
-    private var mapDownloadMessage by mutableStateOf("")
-    private var mapDownloadStatus by mutableStateOf("")
-    private var showMapDownloadDialog by mutableStateOf(false)
-    private var isMapDataReady by mutableStateOf(false)
-
+    // Service sync manager
+    private var serviceSyncManager: ServiceSyncManager? = null
+    
     // Periodic navigation state sync from Service (when Service is navigating and Activity is active)
-    private var serviceNavigationSyncJob: Job? = null
+    // Now managed by ServiceSyncManager
+    private var serviceNavigationSyncJob: Job?
+        get() = serviceSyncManager?.let { null } // Job is internal to manager
+        set(_) {} // Read-only
     
 
     // Trip data refresh for passenger counts
@@ -160,13 +232,12 @@ class AutoModeHeadlessActivity : ComponentActivity() {
 
 
     private fun handleNetworkLost() {
-        val offlineTime = System.currentTimeMillis()
-        networkOfflineTime.set(offlineTime)
-        Logging.d(TAG, "Network lost at: $offlineTime")
+        // NetworkStateManager handles this internally
+        Logging.d(TAG, "Network lost - handled by NetworkStateManager")
     }
 
     private fun handleNetworkRestored() {
-        val offlineTime = networkOfflineTime.get()
+        val offlineTime = networkOfflineTime
         if (offlineTime == 0L) return
 
         val offlineDurationMs = System.currentTimeMillis() - offlineTime
@@ -178,7 +249,6 @@ class AutoModeHeadlessActivity : ComponentActivity() {
 
         // Delegate to ActiveTripListener
         activeTripListener?.handleNetworkRestored(isNavigating.get(), currentTrip)
-        networkOfflineTime.set(0)
     }
     
     /**
@@ -200,7 +270,7 @@ class AutoModeHeadlessActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Enable showing on lock screen for Android O and above
+        // Enable showing on lock screen and keep screen on for all Android versions
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
             setTurnScreenOn(true)
@@ -213,6 +283,9 @@ class AutoModeHeadlessActivity : ComponentActivity() {
                 android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
             )
         }
+        
+        // Keep screen on for all Android versions
+        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         enableEdgeToEdge()
 
@@ -225,6 +298,75 @@ class AutoModeHeadlessActivity : ComponentActivity() {
         databaseManager = DatabaseManager.getInstance(this)
         vehicleSecurityManager = VehicleSecurityManager(this)
         settingsManager = VehicleSettingsManager.getInstance(this)
+        
+        // Initialize trip state manager (singleton shared with Service)
+        tripStateManager = TripStateManager.getInstance()
+        
+        // Initialize network state manager
+        networkStateManager = NetworkStateManager(this).apply {
+            onNetworkLost = {
+                handleNetworkLost()
+            }
+            onNetworkRestored = { isConnected, trip ->
+                handleNetworkRestored()
+                // Pass trip to ActiveTripListener if needed
+                if (trip != null) {
+                    activeTripListener?.handleNetworkRestored(isNavigating.get(), trip)
+                }
+            }
+            onMapDownloaderNetworkAvailable = {
+                mapDownloadCoordinator?.onNetworkAvailable()
+            }
+        }
+        
+        // Initialize service sync manager
+        serviceSyncManager = ServiceSyncManager(
+            tripStateManager = tripStateManager,
+            databaseManager = databaseManager,
+            lifecycleScope = lifecycleScope
+        ).apply {
+            onStateUpdate = { trip, countdownText ->
+                if (trip != null) {
+                    currentTrip = trip
+                    tripResponse = trip
+                }
+                this@AutoModeHeadlessActivity.countdownText = countdownText
+            }
+            onNavigationTextUpdate = { text ->
+                messageViewText = text
+                foregroundService?.updateNotification(text)
+            }
+        }
+        
+        // Initialize navigation coordinator
+        navigationCoordinator = NavigationCoordinator(
+            context = this,
+            tripStateManager = tripStateManager,
+            databaseManager = databaseManager,
+            settingsManager = settingsManager,
+            vehicleSecurityManager = vehicleSecurityManager,
+            lifecycleScope = lifecycleScope
+        ).apply {
+            // Set up callbacks
+            onMessageUpdate = { messageViewText = it }
+            onNotificationUpdate = { foregroundService?.updateNotification(it) }
+            onRouteCalculated = {
+                updateRouteCalculationStatus(true)
+                updateWaypointProgressData()
+                if (isNavigating.get()) {
+                    startNavigationProgressUpdates()
+                }
+            }
+            onNavigationComplete = { 
+                // Handle navigation completion (read settings, etc.)
+                handleNavigationCompleteInternal()
+            }
+            onTripStatusUpdate = { trip ->
+                // Update local trip references if needed
+                currentTrip = trip
+                tripResponse = trip
+            }
+        }
 
         // Initialize booking and NFC manager
         bookingNfcManager = BookingNfcManager(
@@ -234,31 +376,59 @@ class AutoModeHeadlessActivity : ComponentActivity() {
             handler = handler
         )
 
-        // Fetch settings on create
-        lifecycleScope.launch {
-            val vehicleId = vehicleSecurityManager.getVehicleId()
-            try {
-                val result = settingsManager.fetchSettingsFromApi(vehicleId.toInt())
-                result.onSuccess { settings ->
-                    currentSettings = settings
-                    // Apply settings (check logout/deactivate)
-                    settingsManager.applySettings(this@AutoModeHeadlessActivity, settings)
-                }.onFailure { error ->
-                    Logging.e(TAG, "Failed to fetch settings: ${error.message}")
-                    // Use saved settings if available
-                    val savedSettings = settingsManager.getSettings(vehicleId.toInt())
-                    savedSettings?.let {
-                        currentSettings = it
+        // Initialize settings coordinator
+        settingsCoordinator = SettingsCoordinator(
+            context = this,
+            settingsManager = settingsManager,
+            vehicleSecurityManager = vehicleSecurityManager,
+            lifecycleScope = lifecycleScope
+        ).apply {
+            onLogout = {
+                stopNavigationAndCleanup()
+                exitToLauncherActivity()
+            }
+            onDeactivate = {
+                stopNavigationAndCleanup()
+                exitToLauncherActivity()
+            }
+            onSettingsChanged = { settings, _ ->
+                val wasNavigating = isNavigating.get()
+                val simulateChanged = currentSettings?.simulate != settings.simulate
+                val devmodeChanged = currentSettings?.devmode != settings.devmode
+                
+                // PRIORITY 1: If logout OR deactivate = true, immediately exit (even if navigating)
+                if (settings.logout || settings.deactivate) {
+                    Logging.d(TAG, "Logout or deactivate detected from broadcast - immediately exiting to LauncherActivity")
+                    if (wasNavigating) {
+                        stopNavigationAndCleanup()
                     }
+                    exitToLauncherActivity()
                 }
-            } catch (e: Exception) {
-                Logging.e(TAG, "Exception fetching settings: ${e.message}", e)
-                // Use saved settings if available
-                val savedSettings = settingsManager.getSettings(vehicleId.toInt())
-                savedSettings?.let {
-                    currentSettings = it
+                // PRIORITY 2: If simulate or devmode changed during navigation, continue navigation
+                else if (wasNavigating && (simulateChanged || devmodeChanged)) {
+                    Logging.d(TAG, "Settings changed during navigation (simulate=$simulateChanged, devmode=$devmodeChanged) - continuing navigation")
+                }
+                // PRIORITY 3: For other settings changes, only go back if NOT navigating
+                else if (!wasNavigating) {
+                    Logging.d(TAG, "Settings changed and not navigating - checking if should exit to LauncherActivity")
+                    if (settingsManager.areAllSettingsFalse(settings) || !settings.devmode) {
+                        Logging.d(TAG, "Settings require routing - exiting to LauncherActivity")
+                        exitToLauncherActivity()
+                    }
+                } else {
+                    Logging.d(TAG, "Settings changed but navigating - will check after navigation completes")
                 }
             }
+        }
+        
+        // Fetch settings on create
+        settingsCoordinator?.fetchSettings()
+        
+        // Apply settings after fetch completes
+        lifecycleScope.launch {
+            // Wait a bit for settings to be fetched
+            kotlinx.coroutines.delay(100)
+            settingsCoordinator?.applySettings(this@AutoModeHeadlessActivity)
         }
 
         // Handle back press - minimize to background or exit app when all settings are false
@@ -325,6 +495,9 @@ class AutoModeHeadlessActivity : ComponentActivity() {
         // Initialize UI first
         setContent {
             ValidatorTheme {
+                // Observe trip state from TripStateManager
+                val tripState by tripStateManager.state.collectAsState()
+                
                 // Access state from booking manager (mutableStateOf can be used directly in Compose)
                 val currentInput by bookingNfcManager.currentInput
                 val isValidationInProgress by bookingNfcManager.isValidationInProgress
@@ -350,7 +523,7 @@ class AutoModeHeadlessActivity : ComponentActivity() {
 
                 AutoModeHeadlessScreen(
                     messageText = messageViewText,
-                    countdownText = countdownText,
+                    countdownText = tripState.countdownText,
                     currentInput = currentInput,
                     isValidationInProgress = isValidationInProgress,
                     nextWaypointName = nextWaypointName,
@@ -395,8 +568,7 @@ class AutoModeHeadlessActivity : ComponentActivity() {
                     mapDownloadMessage = mapDownloadMessage,
                     mapDownloadStatus = mapDownloadStatus,
                     onMapDownloadCancel = {
-                        mapDownloaderManager?.cancelDownloads()
-                        showMapDownloadDialog = false
+                        mapDownloadCoordinator?.cancelDownloads()
                     },
                     showConfirmationDialog = false,
                     confirmationTripData = null,
@@ -427,7 +599,7 @@ class AutoModeHeadlessActivity : ComponentActivity() {
                 }
 
                 // Initialize HERE SDK first
-                initializeHERESDK()
+                navigationCoordinator?.initializeSDK()
 
                 // Verify SDK is initialized before proceeding
                 val sdkNativeEngine = SDKNativeEngine.getSharedInstance()
@@ -444,7 +616,7 @@ class AutoModeHeadlessActivity : ComponentActivity() {
 
                 // Initialize map downloader after HERE SDK is ready
                 withContext(Dispatchers.Main) {
-                    initializeMapDownloader()
+                    mapDownloadCoordinator?.initialize()
                 }
 
                 // Get MQTT service instance (Service should have initialized it)
@@ -479,7 +651,8 @@ class AutoModeHeadlessActivity : ComponentActivity() {
                     }
 
                     // Initialize network monitoring
-                    initializeNetworkMonitoring()
+                    networkStateManager?.initialize()
+                    networkStateManager?.applyPendingOfflineMode()
 
                     // Initialize booking and NFC manager with trip data
                     bookingNfcManager.initialize(currentTrip)
@@ -598,7 +771,7 @@ class AutoModeHeadlessActivity : ComponentActivity() {
                                     Logging.d(TAG, "Active trip changed after recovery: ${trip.id}")
                                     handleTripReceived(trip)
                                 }
-                                wasOfflineForExtendedPeriod.set(false)
+                                // Extended offline period flag removed - handled by NetworkStateManager
                             }
                             
                             override fun onSilentBackendFetchFoundTrip(trip: TripResponse) {
@@ -615,10 +788,19 @@ class AutoModeHeadlessActivity : ComponentActivity() {
                     registerConfirmationReceiver()
 
                     // Register settings change receiver
-                    registerSettingsChangeReceiver()
+                    settingsCoordinator?.registerReceiver()
 
                     // Initialize navigation components (requires SDK)
-                    initializeNavigationComponents()
+                    navigationCoordinator?.initializeComponents(
+                        onTripDeleted = { deletedTripId ->
+                            lifecycleScope.launch {
+                                handleTripDeletedDuringNavigation(deletedTripId)
+                            }
+                        },
+                        onBookingNfcManagerReady = { validator ->
+                            bookingNfcManager.setTripSectionValidator(validator)
+                        }
+                    )
 
                     // After initialization, check if we need to resume navigation for restored trip
                     currentTrip?.let { trip ->
@@ -751,102 +933,21 @@ class AutoModeHeadlessActivity : ComponentActivity() {
     }
 
     private fun startNavigationInternal(trip: TripResponse, allowResume: Boolean = false) {
-        // Check if navigation is already active - but allow resume if explicitly requested
-        if (isNavigating.get() && !allowResume) {
-            Logging.w(TAG, "Navigation already active, ignoring start request")
-            return
-        }
-
-        Logging.d(TAG, "=== STARTING NAVIGATION INTERNALLY ===")
-        Logging.d(TAG, "Trip ID: ${trip.id}")
-        Logging.d(TAG, "Allow resume: $allowResume")
-        Logging.d(TAG, "IsNavigating: ${isNavigating.get()}")
-        // App handles navigation state internally
-
-        // Reset navigation started flag to allow route calculation
-        if (allowResume) {
-            Logging.d(TAG, "Resuming navigation - resetting navigation flags")
-            // App handles navigation state internally
-        }
-
-        isNavigating.set(true)
-        tripResponse = trip
-        currentTrip = trip
-        
-        // Fetch existing bookings from API when starting/resuming navigation
-        Logging.d(TAG, "Starting/resuming navigation - fetching existing bookings from API")
-        bookingNfcManager.fetchAndSyncBookings(trip.id)
-        
-        // Don't stop Service navigation sync here - let it continue until Activity's Navigator has an active route
-        // The sync will automatically stop when Activity's RouteProgressListener becomes active
-        // This prevents a gap in updates during route calculation
-        
-        // Update trip status to IN_PROGRESS when navigation starts or resumes
-        // This ensures database always has correct status when navigation is active
-        lifecycleScope.launch(Dispatchers.IO) {
-            try {
-                val currentStatus = trip.status
-                if (!currentStatus.equals("IN_PROGRESS", ignoreCase = true)) {
-                    databaseManager.updateTripStatus(trip.id, "IN_PROGRESS")
-                    Logging.d(TAG, "Trip ${trip.id} status updated from $currentStatus to IN_PROGRESS (navigation ${if (allowResume) "resumed" else "started"})")
-                    
-                    // Update local trip status
-                    withContext(Dispatchers.Main) {
-                        currentTrip = trip.copy(status = "IN_PROGRESS")
-                        tripResponse = tripResponse?.copy(status = "IN_PROGRESS")
-                    }
-                } else {
-                    Logging.d(TAG, "Trip ${trip.id} already IN_PROGRESS (navigation ${if (allowResume) "resumed" else "started"})")
-                }
-            } catch (e: Exception) {
-                Logging.e(TAG, "Failed to update trip status to IN_PROGRESS: ${e.message}", e)
+        navigationCoordinator?.startNavigation(
+            trip = trip,
+            allowResume = allowResume,
+            onBookingFetch = {
+                bookingNfcManager.fetchAndSyncBookings(trip.id)
+            },
+            onPassengerCountUpdate = {
+                bookingNfcManager.updatePassengerCounts()
             }
-        }
+        )
         
         // Sync with service (Activity takes precedence when active, but keep service in sync)
         syncActivityStateToService()
-
-        // Immediately update notification to reflect navigation starting
-        val origin = trip.route.origin.custom_name ?: trip.route.origin.google_place_name
-        messageViewText = "Starting navigation: $origin"
-        foregroundService?.updateNotification("Starting navigation...")
-        Logging.d(TAG, "Navigation state set, notification updated")
-
-        // Update passenger counts
-        bookingNfcManager.updatePassengerCounts()
-
-        // Read settings from DB before starting navigation (not from memory)
-        // This ensures we use the latest simulate value even if settings changed while Activity was paused
-        lifecycleScope.launch(Dispatchers.IO) {
-            try {
-                val vehicleId = vehicleSecurityManager.getVehicleId()
-                val dbSettings = settingsManager.getSettings(vehicleId.toInt())
-                if (dbSettings != null) {
-                    withContext(Dispatchers.Main) {
-                        currentSettings = dbSettings
-                        Logging.d(TAG, "Settings read from DB before navigation start: simulate=${dbSettings.simulate}, devmode=${dbSettings.devmode}")
-                    }
-                } else {
-                    Logging.w(TAG, "No settings found in DB before navigation start, using current settings")
-                }
-                
-                // Start navigation after settings are read
-                withContext(Dispatchers.Main) {
-        Logging.d(TAG, "Calling startNavigation()...")
-        startNavigation()
-                }
-            } catch (e: Exception) {
-                Logging.e(TAG, "Failed to read settings from DB before navigation start: ${e.message}", e)
-                // Still start navigation even if settings read fails
-                withContext(Dispatchers.Main) {
-                    Logging.d(TAG, "Calling startNavigation()... (settings read failed)")
-                    startNavigation()
-                }
-            }
-        }
-
+        
         // Don't overwrite messageViewText here - RouteProgressListener will update it immediately
-        // with navigation info (distance, speed, waypoint name) as soon as route progress starts
         foregroundService?.updateNotification("Navigating...")
     }
 
@@ -946,11 +1047,8 @@ class AutoModeHeadlessActivity : ComponentActivity() {
             lastKnownTime = null
             lastKnownWaypointName = null
             
-            // Reset route calculation status
-            isRouteCalculated = false
-            
-            // Stop navigation using App (same as HeadlessNavigActivity)
-            app?.getNavigationExample()?.stopHeadlessNavigation()
+            // Stop navigation using coordinator
+            navigationCoordinator?.stopNavigation()
             
             // Stop progress updates
             serviceNavigationSyncJob?.cancel()
@@ -963,6 +1061,10 @@ class AutoModeHeadlessActivity : ComponentActivity() {
     }
 
     private fun onNavigationComplete() {
+        handleNavigationCompleteInternal()
+    }
+    
+    private fun handleNavigationCompleteInternal() {
         Logging.d(TAG, "=== NAVIGATION COMPLETE ===")
 
         // Clear all cache when navigation completes (including speed cache)
@@ -970,18 +1072,11 @@ class AutoModeHeadlessActivity : ComponentActivity() {
         lastKnownTime = null
         lastKnownWaypointName = null
         
-        // Reset route calculation status
-        isRouteCalculated = false
-
-        isNavigating.set(false)
-        currentTrip = null
-        tripResponse = null
-        
         // Clear waypoint progress data
         waypointProgressData = emptyList()
         
-        // Clear countdown
-        countdownText = ""
+        // Delegate state clearing to coordinator
+        navigationCoordinator?.handleNavigationComplete()
 
         // Read settings from DB on navigation completion (not from API)
         // Check devmode/deactivate/logout and route accordingly
@@ -1040,11 +1135,6 @@ class AutoModeHeadlessActivity : ComponentActivity() {
             }
         }
 
-        // Reset to listening state
-        messageViewText = "Auto Mode: Waiting for trip..."
-        countdownText = ""
-        foregroundService?.updateNotification("Auto Mode: Waiting for trip...")
-
         // Silent fetch after navigation completes
         // Wait a bit for trip status update to complete before fetching
         lifecycleScope.launch(Dispatchers.IO) {
@@ -1057,35 +1147,23 @@ class AutoModeHeadlessActivity : ComponentActivity() {
     }
 
     private fun initializeNavigationComponents() {
-        try {
-            Logging.d(TAG, "Initializing navigation components...")
-
-            // Initialize App (same as HeadlessNavigActivity)
-            // App creates its own TripSectionValidator internally
-            initializeApp()
-
-            // Set up MQTT service and callbacks on App's TripSectionValidator
-            app?.getTripSectionValidator()?.let { validator ->
-            // Initialize MQTT service in trip section validator
-            mqttService?.let {
-                    validator.initializeMqttService(it)
-                    Logging.d(TAG, "MQTT service initialized in App's trip section validator")
-            }
-            
-            // Set callback for trip deletion - when trip is not found in DB, transition to waiting state
-                validator.setTripDeletedCallback { deletedTripId ->
-                Logging.w(TAG, "ACTIVITY: Trip $deletedTripId deleted during navigation - transitioning to waiting state")
+        // Now handled by NavigationCoordinator.initializeComponents()
+        // This method is kept for backward compatibility but delegates to coordinator
+        navigationCoordinator?.initializeComponents(
+            onTripDeleted = { deletedTripId ->
                 lifecycleScope.launch {
                     handleTripDeletedDuringNavigation(deletedTripId)
-                    }
+                }
+            },
+            onBookingNfcManagerReady = { validator ->
+                bookingNfcManager.setTripSectionValidator(validator)
+                // Initialize MQTT service in trip section validator
+                mqttService?.let {
+                    validator.initializeMqttService(it)
+                    Logging.d(TAG, "MQTT service initialized in App's trip section validator")
                 }
             }
-
-            Logging.d(TAG, "Navigation components initialized successfully")
-        } catch (e: Exception) {
-            Logging.e(TAG, "Failed to initialize navigation components: ${e.message}", e)
-            messageViewText = "Error initializing navigation: ${e.message}"
-        }
+        )
     }
 
     // [REST OF THE FILE CONTINUES WITH SAME LOGIC AS HeadlessNavigActivity]
@@ -1097,234 +1175,63 @@ class AutoModeHeadlessActivity : ComponentActivity() {
     // - All UI helper methods and state management
 
     private fun initializeHERESDK(lowMem: Boolean = false) {
-        // Check if activity is still valid before initializing
-        if (isDestroyed) {
-            Logging.w(TAG, "Activity is being destroyed, cannot initialize HERE SDK")
-            return
-        }
-
-        // Synchronize to prevent concurrent initialization attempts
-        synchronized(sdkInitLock) {
-            try {
-                // Check if activity is still valid inside synchronized block
-                if (isDestroyed) {
-                    Logging.w(TAG, "Activity was destroyed during SDK initialization check")
-                    return
-                }
-
-                // Double-check pattern: Check again inside synchronized block
-                if (SDKNativeEngine.getSharedInstance() != null) {
-                    Logging.d(TAG, "HERE SDK already initialized, skipping")
-                    return
-                }
-
-                Logging.d(TAG, "Initializing HERE SDK...")
-                val accessKeyID = com.gocavgo.validator.BuildConfig.HERE_ACCESS_KEY_ID
-                val accessKeySecret = com.gocavgo.validator.BuildConfig.HERE_ACCESS_KEY_SECRET
-                val authenticationMode = AuthenticationMode.withKeySecret(accessKeyID, accessKeySecret)
-                val options = SDKOptions(authenticationMode)
-                if(lowMem) {
-                    options.lowMemoryMode = true
-                    Logging.d(TAG, "Initialised in Low memory mode")
-                }
-
-                // Initialize SDK - this is the critical section that must not run concurrently
-                SDKNativeEngine.makeSharedInstance(this, options)
-                Logging.d(TAG, "HERE SDK initialized successfully")
-
-                // Apply pending offline mode if any
-                pendingOfflineMode?.let { offlineMode ->
-                    try {
-                        SDKNativeEngine.getSharedInstance()?.setOfflineMode(offlineMode)
-                        Logging.d(TAG, "Applied pending HERE SDK offline mode: $offlineMode")
-                        pendingOfflineMode = null
-                    } catch (e: Exception) {
-                        Logging.e(TAG, "Failed to apply pending offline mode: ${e.message}", e)
-                    }
-                }
-            } catch (e: InstantiationErrorException) {
-                Logging.e(TAG, "Initialization of HERE SDK failed: ${e.error.name}", e)
-                throw RuntimeException("Initialization of HERE SDK failed: " + e.error.name)
-            } catch (e: Exception) {
-                Logging.e(TAG, "Unexpected error during HERE SDK initialization: ${e.message}", e)
-                throw RuntimeException("Unexpected error during HERE SDK initialization: ${e.message}")
-            }
-        }
+        // Delegate to NavigationCoordinator
+        navigationCoordinator?.initializeSDK(lowMem)
     }
 
     private fun initializeMapDownloader() {
-        Logging.d(TAG, "=== INITIALIZING MAP DOWNLOADER ===")
-
-        // Check if HERE SDK is initialized
-        val sdkNativeEngine = SDKNativeEngine.getSharedInstance()
-        if (sdkNativeEngine == null) {
-            Logging.e(TAG, "HERE SDK not initialized! Cannot initialize map downloader.")
-            isMapDataReady = true // Proceed without offline maps
-            return
-        }
-
-        Logging.d(TAG, "HERE SDK is initialized, proceeding with map downloader")
-
-        mapDownloaderManager = MapDownloaderManager(
-            context = this,
-            onProgressUpdate = { message, progress, totalSizeMB ->
-                mapDownloadMessage = message
-                mapDownloadProgress = progress
-                mapDownloadTotalSize = totalSizeMB
-                Logging.d(TAG, "Map download progress: $message - $progress% (${totalSizeMB}MB)")
-            },
-            onStatusUpdate = { status ->
-                mapDownloadStatus = status
-                Logging.d(TAG, "Map download status: $status")
-            },
-            onDownloadComplete = {
-                isMapDataReady = true
-                showMapDownloadDialog = false
-                Logging.d(TAG, "Map download completed successfully")
-            },
-            onError = { error ->
-                Logging.e(TAG, "Map download error: $error")
-                showMapDownloadDialog = false
-            },
-            onToastMessage = { message ->
-                runOnUiThread {
-                    Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
-                }
-            },
-            onShowProgressDialog = {
-                runOnUiThread {
-                    showMapDownloadDialog = true
-                }
-            }
-        )
-
-        // Initialize the map downloader in background
-        try {
-            mapDownloaderManager?.initialize()
-            Logging.d(TAG, "Map downloader initialized successfully")
-        } catch (e: Exception) {
-            Logging.e(TAG, "Failed to initialize map downloader: ${e.message}", e)
-            isMapDataReady = true // Proceed without offline maps
-        }
-
-        Logging.d(TAG, "================================")
+        // Map download is now handled by MapDownloadCoordinator
+        // This method is kept for backward compatibility
+        mapDownloadCoordinator = MapDownloadCoordinator(this)
+        mapDownloadCoordinator?.initialize()
     }
 
     private fun initializeNetworkMonitoring() {
-        Logging.d(TAG, "Initializing network monitoring...")
-
-        // Check if we have network permissions
-        if (!NetworkUtils.hasNetworkPermissions(this)) {
-            Logging.w(TAG, "Network permissions not available, using basic monitoring")
-            return
-        }
-
-        networkMonitor = NetworkMonitor(this) { connected, type, metered ->
-            Logging.d(TAG, "Network state changed: connected=$connected, type=$type, metered=$metered")
-
-            // Update UI state
-            isConnected = connected
-            connectionType = type
-            isMetered = metered
-
-            // Update HERE SDK offline mode
-            updateHERESDKOfflineMode(connected)
-
-            // App handles network state internally - no need to update RouteCalculator
-
-            // App handles network state internally - no need to update NavigationHandler
-
-            // Notify map downloader of network availability
-            if (connected) {
-                mapDownloaderManager?.onNetworkAvailable()
-            }
-
-            // Handle network recovery for backend sync
-            if (connected) {
-                handleNetworkRestored()
-            } else {
-                handleNetworkLost()
-            }
-        }
-
-        networkMonitor?.startMonitoring()
-
-        // App handles network state internally - no need to update RouteCalculator
-
-        Logging.d(TAG, "Network monitoring started")
+        // Network monitoring is now handled by NetworkStateManager
+        // This method is kept for backward compatibility but does nothing
+        // NetworkStateManager is initialized in onCreate()
+        Logging.d(TAG, "Network monitoring initialized via NetworkStateManager")
+        networkStateManager?.initialize()
     }
 
     private fun initializeApp() {
-        try {
-            // Ensure HERE SDK is initialized before creating App
-            if (SDKNativeEngine.getSharedInstance() == null) {
-                Logging.e(TAG, "HERE SDK not initialized, initializing now...")
-                initializeHERESDK()
-            }
-
-            // Create MessageViewUpdater for navigation updates
-            messageViewUpdater = MessageViewUpdater()
-
-            // Create App with null mapView for headless mode (same as HeadlessNavigActivity)
-            app = App(applicationContext, null, messageViewUpdater!!, tripResponse)
-            Logging.d(TAG, "App instance created (headless mode): $app")
-
-            // Set up route calculation callback
-            app?.setOnRouteCalculatedCallback {
-                updateRouteCalculationStatus(true)
-                // Update waypoint progress data when route is calculated
-                updateWaypointProgressData()
-                // Start progress updates only after route is calculated
-                if (isNavigating.get()) {
-                    startNavigationProgressUpdates()
-        }
-    }
-
-            // Set TripSectionValidator in BookingNfcManager for waypoint name updates
-            app?.getTripSectionValidator()?.let { validator ->
-                bookingNfcManager.setTripSectionValidator(validator)
-            }
-
-            // Now that App is created, update it with trip data if available
-            updateTripDataWhenReady()
-        } catch (e: Exception) {
-            Logging.e(TAG, "Error initializing App: ${e.message}", e)
-            messageViewUpdater?.updateText("Error initializing navigation: ${e.message}")
-            }
+        // Now handled by NavigationCoordinator.initializeComponents()
+        // This method is kept for backward compatibility
+        initializeNavigationComponents()
     }
     
     private fun updateTripDataWhenReady() {
-        if (tripResponse != null && app != null) {
+        val trip = tripResponse
+        val appInstance = app
+        if (trip != null && appInstance != null) {
             Logging.d(TAG, "Updating App with trip data after both are ready")
             val simulate = currentSettings?.simulate ?: false
-            app?.updateTripData(tripResponse, simulate)
+            appInstance.updateTripData(trip, simulate)
         }
     }
 
     private fun startNavigation() {
-        tripResponse?.let { trip ->
-            // Clear cache when navigation starts
-            lastKnownDistance = null
-            lastKnownTime = null
-            lastKnownWaypointName = null
-            
-            // Reset route calculation status
-            isRouteCalculated = false
-            
-            // Get simulate value from settings
-            val simulate = currentSettings?.simulate ?: false
+        val trip = tripResponse ?: return
+        
+        // Clear cache when navigation starts
+        lastKnownDistance = null
+        lastKnownTime = null
+        lastKnownWaypointName = null
+        
+        // Get simulate value from settings
+        val simulate = currentSettings?.simulate ?: false
 
-            // Use App.updateTripData() to start navigation (same as HeadlessNavigActivity)
-            // App handles route calculation and navigation start internally
-            if (app != null) {
-                Logging.d(TAG, "Starting navigation via App.updateTripData()")
-                app?.updateTripData(trip, simulate)
+        // Use App.updateTripData() to start navigation (same as HeadlessNavigActivity)
+        // App handles route calculation and navigation start internally
+        val appInstance = app
+        if (appInstance != null) {
+            Logging.d(TAG, "Starting navigation via App.updateTripData()")
+            appInstance.updateTripData(trip, simulate)
 
-                // Progress updates will start automatically when route calculation callback is invoked
-                // (see initializeApp() route calculation callback)
-                } else {
-                Logging.e(TAG, "App not initialized, cannot start navigation")
-            }
+            // Progress updates will start automatically when route calculation callback is invoked
+            // (see NavigationCoordinator route calculation callback)
+        } else {
+            Logging.e(TAG, "App not initialized, cannot start navigation")
         }
     }
     
@@ -1513,6 +1420,7 @@ class AutoModeHeadlessActivity : ComponentActivity() {
                 lastKnownWaypointName = name
                 
                 // Sync cache to Service so Service can use it when Activity goes to background
+                serviceSyncManager?.updateCache(distance, time, name)
                 foregroundService?.syncCacheFromActivity(distance, time, name)
             } else if (lastKnownWaypointName == name && lastKnownDistance != null) {
                 // Use cached values if waypoint hasn't changed
@@ -1955,105 +1863,9 @@ class AutoModeHeadlessActivity : ComponentActivity() {
     }
 
     private fun registerSettingsChangeReceiver() {
-        try {
-            settingsChangeReceiver = object : BroadcastReceiver() {
-                override fun onReceive(context: Context?, intent: Intent?) {
-                    if (context == null || intent == null) return
-
-                    when (intent.action) {
-                        ACTION_SETTINGS_LOGOUT -> {
-                            Logging.d(TAG, "Received logout broadcast - immediately exiting to LauncherActivity")
-                            // Immediately exit to LauncherActivity (even if navigating)
-                            stopNavigationAndCleanup()
-                            exitToLauncherActivity()
-                        }
-                        ACTION_SETTINGS_DEACTIVATE -> {
-                            val isDeactivated = intent.getBooleanExtra("is_deactivated", false)
-                            Logging.d(TAG, "Received deactivate broadcast - isDeactivated: $isDeactivated")
-                            if (isDeactivated) {
-                                // Immediately exit to LauncherActivity (even if navigating)
-                                Logging.d(TAG, "Deactivate=true - immediately exiting to LauncherActivity")
-                                stopNavigationAndCleanup()
-                                exitToLauncherActivity()
-                            }
-                        }
-                        ACTION_SETTINGS_CHANGED -> {
-                            Logging.d(TAG, "Received settings changed broadcast - refreshing settings")
-                            // Settings are already saved to DB by MQTT service
-                            // Refresh settings from database and handle based on priority
-                            lifecycleScope.launch {
-                                val vehicleId = vehicleSecurityManager.getVehicleId()
-                                val savedSettings = settingsManager.getSettings(vehicleId.toInt())
-                                savedSettings?.let {
-                                    // Only update if different from current
-                                    if (currentSettings == null ||
-                                        currentSettings?.logout != it.logout ||
-                                        currentSettings?.devmode != it.devmode ||
-                                        currentSettings?.deactivate != it.deactivate ||
-                                        currentSettings?.appmode != it.appmode ||
-                                        currentSettings?.simulate != it.simulate) {
-                                        
-                                        val wasNavigating = isNavigating.get()
-                                        val simulateChanged = currentSettings?.simulate != it.simulate
-                                        val devmodeChanged = currentSettings?.devmode != it.devmode
-                                        
-                                        // Update memory with new settings
-                                        currentSettings = it
-                                        Logging.d(TAG, "Settings updated from broadcast: simulate=${it.simulate}, devmode=${it.devmode}, deactivate=${it.deactivate}, logout=${it.logout}")
-
-                                        // PRIORITY 1: If logout OR deactivate = true, immediately exit (even if navigating)
-                                        if (it.logout || it.deactivate) {
-                                            Logging.d(TAG, "Logout or deactivate detected from broadcast - immediately exiting to LauncherActivity")
-                                            if (wasNavigating) {
-                                            stopNavigationAndCleanup()
-                                            }
-                                            exitToLauncherActivity()
-                                        }
-                                        // PRIORITY 2: If simulate or devmode changed during navigation, continue navigation
-                                        // New simulate value will be used on next navigation start
-                                        // devmode will be checked on navigation completion
-                                        else if (wasNavigating && (simulateChanged || devmodeChanged)) {
-                                            Logging.d(TAG, "Settings changed during navigation (simulate=$simulateChanged, devmode=$devmodeChanged) - continuing navigation, will use new values on next start/completion")
-                                            // Settings are already saved to DB by MQTT service
-                                            // Just update memory and continue navigation
-                                        }
-                                        // PRIORITY 3: For other settings changes, only go back if NOT navigating
-                                        else if (!wasNavigating) {
-                                            Logging.d(TAG, "Settings changed and not navigating - checking if should exit to LauncherActivity")
-                                            // Check if settings require routing to LauncherActivity
-                                            if (settingsManager.areAllSettingsFalse(it) || !it.devmode) {
-                                                Logging.d(TAG, "Settings require routing - exiting to LauncherActivity")
-                                                exitToLauncherActivity()
-                                            }
-                                        } else {
-                                            Logging.d(TAG, "Settings changed but navigating - will check after navigation completes")
-                                        }
-                                    } else {
-                                        Logging.d(TAG, "Settings unchanged, skipping update")
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            val filter = IntentFilter().apply {
-                addAction(ACTION_SETTINGS_LOGOUT)
-                addAction(ACTION_SETTINGS_DEACTIVATE)
-                addAction(ACTION_SETTINGS_CHANGED)
-            }
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                registerReceiver(settingsChangeReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
-            } else {
-                @Suppress("UnspecifiedRegisterReceiverFlag")
-                registerReceiver(settingsChangeReceiver, filter)
-            }
-            Logging.d(TAG, "Settings change receiver registered")
-        } catch (e: Exception) {
-            Logging.e(TAG, "Failed to register settings change receiver: ${e.message}", e)
-        }
+        // Settings change receiver is now handled by SettingsCoordinator
+        // This method is kept for backward compatibility
+        settingsCoordinator?.registerReceiver()
     }
 
     /**
@@ -2065,11 +1877,8 @@ class AutoModeHeadlessActivity : ComponentActivity() {
      * Activity state is authoritative when Activity is active
      */
     private fun syncActivityStateToService() {
-        // When Activity is active, Activity state is authoritative
-        // Service should sync from Activity, but we don't need to do anything here
-        // Service will defer to Activity when Activity is active
-        // This method is a placeholder for future bidirectional sync if needed
-        Logging.d(TAG, "Activity state sync to service - Activity is authoritative when active")
+        // Delegate to ServiceSyncManager
+        serviceSyncManager?.syncToService(foregroundService)
     }
     
     /**
@@ -2181,6 +1990,19 @@ class AutoModeHeadlessActivity : ComponentActivity() {
      * This ensures Activity's UI and notification stay updated with Service's navigation progress
      */
     private fun startServiceNavigationSync() {
+        // Delegate to ServiceSyncManager
+        serviceSyncManager?.startSync(
+            service = foregroundService,
+            app = app,
+            onNavigationProgressUpdate = {
+                startNavigationProgressUpdates()
+            }
+        )
+        return
+    }
+    
+    @Suppress("UNUSED")
+    private fun startServiceNavigationSyncOld() {
         // Stop any existing sync job
         stopServiceNavigationSync()
         
@@ -2326,9 +2148,7 @@ class AutoModeHeadlessActivity : ComponentActivity() {
      * Stop periodic sync of navigation state from Service
      */
     private fun stopServiceNavigationSync() {
-        serviceNavigationSyncJob?.cancel()
-        serviceNavigationSyncJob = null
-        Logging.d(TAG, "Stopped periodic Service navigation sync")
+        serviceSyncManager?.stopSync()
     }
     
     /**
@@ -2336,6 +2156,12 @@ class AutoModeHeadlessActivity : ComponentActivity() {
      * This runs FIRST in onResume() before any Service sync
      */
     private fun verifyStateFromDatabase(dbTrip: TripResponse?) {
+        serviceSyncManager?.verifyState(dbTrip)
+        return
+    }
+    
+    @Suppress("UNUSED")
+    private fun verifyStateFromDatabaseOld(dbTrip: TripResponse?) {
         try {
             Logging.d(TAG, "=== VERIFYING STATE FROM DATABASE ===")
             Logging.d(TAG, "Database trip: ${dbTrip?.id} (status: ${dbTrip?.status})")
@@ -2472,6 +2298,12 @@ class AutoModeHeadlessActivity : ComponentActivity() {
      * @param dbTrip The trip from database (authoritative source)
      */
     private fun syncStateFromService(dbTrip: TripResponse?) {
+        serviceSyncManager?.syncFromService(foregroundService, dbTrip)
+        return
+    }
+    
+    @Suppress("UNUSED")
+    private fun syncStateFromServiceOld(dbTrip: TripResponse?) {
         try {
             // Use existing service connection (serviceConnection is already bound)
             val service = foregroundService
@@ -2649,17 +2481,8 @@ class AutoModeHeadlessActivity : ComponentActivity() {
     }
     
     private fun updateHERESDKOfflineMode(isConnected: Boolean) {
-        try {
-            val sdkNativeEngine = SDKNativeEngine.getSharedInstance()
-            if (sdkNativeEngine != null) {
-                sdkNativeEngine.setOfflineMode(!isConnected)
-                Logging.d(TAG, "HERE SDK offline mode set to: ${!isConnected}")
-            } else {
-                pendingOfflineMode = !isConnected
-            }
-        } catch (e: Exception) {
-            Logging.e(TAG, "Failed to update HERE SDK offline mode: ${e.message}", e)
-        }
+        // Offline mode is now handled by NetworkStateManager
+        networkStateManager?.updateOfflineMode(isConnected)
     }
 
     override fun onResume() {
@@ -3017,18 +2840,18 @@ class AutoModeHeadlessActivity : ComponentActivity() {
         activeTripListener?.stop()
         activeTripListener = null
         
-        // Stop Service navigation sync
-        stopServiceNavigationSync()
+            // Stop Service navigation sync
+        serviceSyncManager?.stopSync()
 
         // Stop network monitoring
-        networkMonitor?.stopMonitoring()
-        networkMonitor = null
+        networkStateManager?.stopMonitoring()
+        networkStateManager = null
 
         // CRITICAL: Stop navigation and location services FIRST before disposing SDK
         // This prevents service connection leaks from HERE SDK's internal services
-        // Use App.detach() to clean up (same as HeadlessNavigActivity)
-        app?.detach()
-        app = null
+        // Use coordinator to detach
+        navigationCoordinator?.detach()
+        navigationCoordinator = null
 
         // Clean up booking and NFC manager
         bookingNfcManager.cleanup()
@@ -3042,12 +2865,7 @@ class AutoModeHeadlessActivity : ComponentActivity() {
         }
 
         // Unregister settings change receiver
-        try {
-            settingsChangeReceiver?.let { unregisterReceiver(it) }
-            settingsChangeReceiver = null
-        } catch (e: Exception) {
-            Logging.w(TAG, "Error unregistering settings change receiver: ${e.message}")
-        }
+        settingsCoordinator?.unregisterReceiver()
 
         // MQTT trip callbacks are now handled by ActiveTripListener
         // Booking bundle callback is handled by BookingNfcManager.cleanup()
@@ -3059,7 +2877,8 @@ class AutoModeHeadlessActivity : ComponentActivity() {
         handler.removeCallbacksAndMessages(null)
 
         // Clean up map downloader
-        mapDownloaderManager?.cleanup()
+        mapDownloadCoordinator?.cleanup()
+        mapDownloadCoordinator = null
 
         // CRITICAL: Wait for HERE SDK service connections to unbind before disposing SDK
         // This prevents ServiceConnectionLeaked errors
@@ -3107,44 +2926,14 @@ class AutoModeHeadlessActivity : ComponentActivity() {
 
         // Dispose HERE SDK only after all services are stopped and connections are unbound
         // NOTE: Service will re-initialize SDK if needed (it's START_STICKY and may restart)
-        disposeHERESDK()
+        navigationCoordinator?.disposeSDK()
         
         Logging.d(TAG, "=== AutoModeHeadlessActivity DESTROY COMPLETE ===")
     }
 
     private fun disposeHERESDK() {
-        // Free HERE SDK resources before the application shuts down.
-        // Usually, this should be called only on application termination.
-        // Afterwards, the HERE SDK is no longer usable unless it is initialized again.
-        try {
-            val sdkNativeEngine = SDKNativeEngine.getSharedInstance()
-            if (sdkNativeEngine != null) {
-                Logging.d(TAG, "Disposing HERE SDK...")
-                
-                // Additional cleanup to ensure all service connections are released
-                // NOTE: LocationEngine should already be stopped by NavigationExample cleanup
-                try {
-                    // Verify no LocationEngine instances are running
-                    // (This is defensive - should already be handled by NavigationExample)
-                    Logging.d(TAG, "Verifying location services are stopped before SDK disposal")
-                } catch (e: Exception) {
-                    Logging.w(TAG, "Error verifying location services: ${e.message}")
-                }
-                
-                // Dispose the SDK
-                sdkNativeEngine.dispose()
-                Logging.d(TAG, "HERE SDK disposed successfully")
-                
-                // For safety reasons, we explicitly set the shared instance to null to avoid situations,
-                // where a disposed instance is accidentally reused.
-                SDKNativeEngine.setSharedInstance(null)
-                Logging.d(TAG, "HERE SDK shared instance cleared")
-            } else {
-                Logging.d(TAG, "HERE SDK not initialized, nothing to dispose")
-            }
-        } catch (e: Exception) {
-            Logging.e(TAG, "Error disposing HERE SDK: ${e.message}", e)
-        }
+        // Delegate to NavigationCoordinator
+        navigationCoordinator?.disposeSDK()
     }
 }
 
